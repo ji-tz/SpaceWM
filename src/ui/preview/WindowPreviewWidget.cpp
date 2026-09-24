@@ -129,6 +129,20 @@ void WindowPreviewWidget::mouseMoveEvent(QMouseEvent *event)
     QFrame::mouseMoveEvent(event);
 }
 
+void WindowPreviewWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        const bool wasDrag = m_dragging
+            || (event->pos() - m_pressPos).manhattanLength()
+                >= QApplication::startDragDistance();
+        setCursor(Qt::OpenHandCursor);
+        m_dragging = false;
+        if (!wasDrag && m_hwnd)
+            emit activated(reinterpret_cast<quint64>(m_hwnd));
+    }
+    QFrame::mouseReleaseEvent(event);
+}
+
 void WindowPreviewWidget::startDrag()
 {
     if (!m_hwnd)

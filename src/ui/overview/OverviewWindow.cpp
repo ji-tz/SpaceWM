@@ -244,6 +244,24 @@ bool OverviewWindow::previewSpace(int spaceIndex)
     return true;
 }
 
+bool OverviewWindow::activateWindowPreview(HWND hwnd)
+{
+    if (!m_manager || !hwnd || !::IsWindow(hwnd) || !m_open)
+        return false;
+    const int sp = m_manager->spaceOfWindow(hwnd);
+    if (sp < 0)
+        return false;
+    // Only act for windows owned by this monitor's overview.
+    if (m_manager->ownerMonitorOf(hwnd) && m_manager->ownerMonitorOf(hwnd) != m_hmon)
+        return false;
+
+    m_selected = qBound(0, sp, qMax(0, m_cards.size() - 1));
+    m_frontHwnd = hwnd;
+    emit windowActivated(reinterpret_cast<quint64>(hwnd));
+    closeOverview(true);
+    return true;
+}
+
 void OverviewWindow::pinToMonitorPhysically()
 {
     if (!m_hmon)
@@ -278,8 +296,9 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
 
     if (m_manager) {
         if (!m_hostManaged) {
-            m_manager->buildAllSpacePreviews();
+            // Fresh window shots before composites so reopen never shows stale tiles.
             m_manager->warmWindowShots();
+            m_manager->buildAllSpacePreviews();
             m_manager->setOverviewOpen(true);
         }
         // Host path: batch caches already built in OverviewHost::openAll.
@@ -336,6 +355,22 @@ void OverviewWindow::closeOverview(bool commit)
     cancelSoftPreviewHold();
 
     emit closed(m_pendingCommit);
+
+    // After commit + host switchSpace (200ms hold), raise/focus the clicked window.
+    if (commit && m_frontHwnd) {
+        HWND front = m_frontHwnd;
+        m_frontHwnd = nullptr;
+        QTimer::singleShot(250, this, [front]() {
+            if (!::IsWindow(front))
+                return;
+            // Only raise — never ShowWindow(SW_SHOW) for windows we did not hide.
+            ::SetWindowPos(front, HWND_TOP, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            ::SetForegroundWindow(front);
+        });
+    } else {
+        m_frontHwnd = nullptr;
+    }
 
     if (!m_hostManaged) {
         if (commit)
@@ -618,18 +653,14 @@ void OverviewWindow::rebuildWindowPreviews()
             availH = m->geometry.height() > 0 ? std::max(240, m->geometry.height() / 3) : 320;
     }
     const int gap = 14;
+    // Tile chrome beyond the image box (must match WindowPreviewWidget::setImageBoxSize).
+    constexpr int kChromeW = 20;
+    constexpr int kChromeH = 40;
 
     // Larger tiles first → less waste on the last row (排满).
     std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
         return qint64(a.pw) * a.ph > qint64(b.pw) * b.ph;
     });
-
-    int maxPw = 1;
-    int maxPh = 1;
-    for (const Item &it : items) {
-        maxPw = std::max(maxPw, it.pw);
-        maxPh = std::max(maxPh, it.ph);
-    }
 
     // Uniform scale ≤ 1.0 so a tile is never larger than the real window
     // (pw/ph are already Qt logical — same units as availW/H and QWidget).
@@ -647,14 +678,16 @@ void OverviewWindow::rebuildWindowPreviews()
         return QSize(w, h);
     };
 
+    // Pack by FULL widget size (image box + chrome), not the bare image box —
+    // otherwise tiles overflow into each other and look borderless/cramped.
     auto shelfFits = [&](double scale) -> bool {
         int x = 0;
         int rowH = 0;
         int total = 0;
         for (const Item &it : items) {
             const QSize ts = tileSize(it, scale);
-            const int cellW = ts.width() + gap;
-            const int cellH = ts.height() + gap;
+            const int cellW = ts.width() + kChromeW + gap;
+            const int cellH = ts.height() + kChromeH + gap;
             if (x > 0 && x + cellW > availW) {
                 total += rowH;
                 x = 0;
@@ -667,7 +700,8 @@ void OverviewWindow::rebuildWindowPreviews()
         return total <= availH;
     };
 
-    // Never upscale: upper bound is 1.0 (and at most one widest tile per row).
+    // Never upscale: upper bound is 1.0. Shrink until multi-row shelf fits
+    // (including vertical gaps between rows).
     double lo = 0.02;
     double hi = 1.0;
     double best = lo;
@@ -708,7 +742,7 @@ void OverviewWindow::rebuildWindowPreviews()
         const QSize ts = tileSize(it, scale);
         const int bw = ts.width();
         const int bh = ts.height();
-        const int cellW = bw + gap;
+        const int cellW = bw + kChromeW + gap;
 
         if (x > 0 && x + cellW > availW) {
             commitRow(row);
@@ -724,6 +758,9 @@ void OverviewWindow::rebuildWindowPreviews()
         // Full-resolution cached shot — tile scales once to physical pixels (DPR).
         QImage shot = thumbs::windowShot(it.hwnd);
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
+        connect(tile, &WindowPreviewWidget::activated, this, [this](quint64 h) {
+            activateWindowPreview(reinterpret_cast<HWND>(h));
+        });
         row->addWidget(tile, 0, Qt::AlignTop);
         m_windowPreviews.push_back(tile);
         x += cellW;

@@ -35,10 +35,13 @@ public:
 
 signals:
     void dragStarted(quint64 hwnd);
+    // Click without drag — enter this window's space and focus it.
+    void activated(quint64 hwnd);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:

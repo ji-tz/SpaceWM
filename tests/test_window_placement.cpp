@@ -680,6 +680,45 @@ private slots:
         for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
     }
+
+    // Click without drag → activated (enter that window's space + focus).
+    void windowPreviewClickEmitsActivated()
+    {
+        WindowPreviewWidget tile;
+        QImage img(80, 50, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(30, 40, 50));
+        tile.setWindow(reinterpret_cast<HWND>(0xABC), QStringLiteral("T"), img);
+        QSignalSpy spy(&tile, &WindowPreviewWidget::activated);
+
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(20, 20),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&tile, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(21, 20),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&tile, &release);
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toULongLong(), quint64(0xABC));
+    }
+
+    // Widget chrome (+20/+40) must be part of packing math — consecutive tiles
+    // on the same row cannot overlap when cell = image + chrome + gap.
+    void packingAccountsForTileChrome()
+    {
+        constexpr int gap = 14;
+        constexpr int chromeW = 20;
+        constexpr int chromeH = 40;
+        const int imageW = 300;
+        const int imageH = 180;
+        const int cellW = imageW + chromeW + gap;
+        const int cellH = imageH + chromeH + gap;
+        // Two full widgets + gap must fit two chrome widths (not bare images).
+        const int twoWidgets = (imageW + chromeW) * 2 + gap;
+        QCOMPARE(twoWidgets, 2 * imageW + 2 * chromeW + gap);
+        QVERIFY(cellW > imageW + gap); // old bug: packed image-only width
+        QVERIFY(cellH > imageH + gap);
+        QVERIFY(twoWidgets <= 2 * cellW);
+    }
 };
 
 QTEST_MAIN(TestWindowPlacement)

@@ -66,7 +66,7 @@ public:
     // Fill null screenshots only (cheap). Prefer buildAllSpacePreviews on open.
     void seedScreenshots();
 
-    // Ensure every managed window has a cached windowShot (overview entry).
+    // Overview entry: clear windowShot cache, then recapture every managed window.
     void warmWindowShots();
 
     // Drop cached shot for hwnd and re-render its owner space (SHOW/resize).

@@ -8,9 +8,11 @@
 
 // Capture / render helpers for overview previews.
 //
-// Window previews: ONE PrintWindow per HWND is cached (windowShot); callers
-// scale the shared image. Space previews: rendered composites stored on
-// Space::screenshot — rebuilt only when that space's membership changes.
+// Window previews: one cached PrintWindow per HWND (windowShot) until the
+// cache is cleared. Overview open calls clearWindowCache + warmWindowShots so
+// every reopen recaptures live content instead of stale tiles.
+// Space previews: rendered composites on Space::screenshot — rebuilt when
+// membership changes or on overview open (after window shots are refreshed).
 namespace thumbs {
 
 // Uncached full-window capture (PrintWindow at full size, then scale to maxSize).

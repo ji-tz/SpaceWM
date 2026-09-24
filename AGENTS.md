@@ -15,18 +15,18 @@
 
 | 缩写 | 含义 | 文件 | 级别 | 库 |
 |------|------|------|------|-----|
-| **TR** | Trace：软件**运行时**日志 | `<logDir>/trace.log` | info+ | [spdlog](https://github.com/gabime/spdlog) |
-| **EH** | Error：软件**错误 / 崩溃**日志 | `<logDir>/error.log` | warn+（含 critical/crash） | 同上 |
+| **TR** | Trace：软件**运行时**日志 | `<projectRoot>/TR/trace.log` | info+ | [spdlog](https://github.com/gabime/spdlog) |
+| **EH** | Error：软件**错误 / 崩溃**日志 | `<projectRoot>/EH/error.log` | warn+（含 critical/crash） | 同上 |
 
-- **logDir** 默认 `%AppData%\SpaceWM\logs`（`QStandardPaths::AppDataLocation/logs`），可用 `spacelog::init(dir)` 覆盖。
+- **默认根目录 = 仓库根**（从 exe 上溯找 `AGENTS.md` + `CMakeLists.txt` + `src/`）；`spacelog::init(dir)` 覆盖时在 `dir` 下建 `TR/`、`EH/`。
 - **禁止**再维护 `docs/EH.md` / `docs/TR.md` 这类手工问题流水；排障时读上述两个 log。
 - 代码入口：`src/core/log/Log.h`（`spacelog::init/info/trace/warn/error/critical/installCrashHandlers`）。
 - `main` 启动：`spacelog::init()` + `installCrashHandlers()`；正常退出 `shutdown()`。
-- **日志不入库**（`.gitignore` 忽略 `*.log` / `logs/`）。
+- **日志不入库**（`.gitignore` 忽略 `/TR/`、`/EH/`、`*.log`、`logs/`）。
 
 ### 0.1 排障时的固定流程
 
-1. **先读** 最近的 `error.log`（EH），再读 `trace.log`（TR）对应时间窗。
+1. **先读** 最近的 `EH/error.log`，再读 `TR/trace.log` 对应时间窗。
 2. 对照代码与既有架构不变量，判断是已知模式还是新问题。
 3. 修复后在 commit 中写明根因；**不要**再往 markdown 里写 EH/TR 条目。
 
@@ -76,7 +76,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 
 | 能力（本会话 + 近期 commit） | 测试 | 状态 |
 |------------------------------|------|------|
-| spdlog TR/EH（trace.log / error.log） | `test_log` | 有 |
+| spdlog TR/EH（`TR/trace.log` / `EH/error.log`） | `test_log` | 有 |
 | space add/remove/move（+ / × / 拖动排序） | `test_window_placement` | 有 |
 | × 悬停 2s 显示、点击删除、不误触 activated | `test_space_card` | 有 |
 | **+ 按钮点击** `addRequested` | `test_window_placement` | 有 |
@@ -84,9 +84,9 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | 软预览 / 外缘 leave 才回 current | `test_window_placement` | 有 |
 | 预览缓存 / 打开全量 space 图 | `test_window_placement` · `test_thumbnail` | 有 |
 | work area / logical DPI / DWM 可见框 | `test_monitors` | 有 |
-| System 热键解析 / 自启 | `test_settings` | 有 |
+| System 热键解析 / 自启 / Win 键策略 | `test_settings` · `test_hotkeys` | 有 |
 | showAllHidden 退出恢复 | `test_cloak` | 有 |
-| 拖拽热点 mapPressToHotSpot | `test_window_placement` | 有 |
+| 拖拽热点 mapPressToHotSpot；点击 tile → activated | `test_window_placement` | 有 |
 | 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
 | 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
 
@@ -111,7 +111,7 @@ Cloak          → hide 只记录自己藏过的；show 只恢复自己
 OverviewHost   → 每屏一个 OverviewWindow，同时开关
 OverviewWindow → 工作区卡片条（逻辑坐标 + 物理 SetWindowPos）；+ / × / 拖动排序
 HotkeyManager  → WH_KEYBOARD_LL（匹配绑定 down+up 吞掉）
-spacelog       → spdlog → trace.log / error.log
+spacelog       → spdlog → TR/trace.log + EH/error.log
 ```
 
 ### 关键不变量
@@ -134,10 +134,10 @@ spacelog       → spdlog → trace.log / error.log
 
 ## 5. 手动冒烟（发布前）
 
-1. 双屏（含不同 DPI）启动 `build\SpaceWM.exe`；确认 `trace.log` 有启动行。
+1. 双屏（含不同 DPI）启动 `build\SpaceWM.exe`；确认 `TR/trace.log` 有启动行。
 2. `Ctrl+Alt+Space` → 所有屏 overview；**任务栏仍可见**。
 3. 悬停 space → 底部为该 space 窗口；移到面板外缘 → 回 current。
 4. 点卡片 / Enter 切换；**+** 加 space；有窗口卡片 **×** 删除；拖卡片排序。
 5. `Ctrl+Alt+←/→`；System 预设吞 `Win+Tab` / `Ctrl+Win+←/→`。
 6. overview 开时点任务栏程序 → 关总览、窗口落当前 space。
-7. 托盘 Quit → 本进程 hide 过的窗口全部恢复；`error.log` 无意外 critical。
+7. 托盘 Quit → 本进程 hide 过的窗口全部恢复；`EH/error.log` 无意外 critical。

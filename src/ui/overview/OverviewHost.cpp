@@ -91,9 +91,10 @@ void OverviewHost::openAll()
     m_switching = false;
     m_active = nullptr;
 
-    // One-shot entry cache: every space composite + every window shot, once.
-    m_manager->buildAllSpacePreviews();
+    // Refresh window shots FIRST (clear+recapture), then rebuild space
+    // composites from those fresh shots — reopening must not reuse stale tiles.
     m_manager->warmWindowShots();
+    m_manager->buildAllSpacePreviews();
     m_manager->setOverviewOpen(true);
 
     const HMONITOR cursor = monitors::fromCursor();

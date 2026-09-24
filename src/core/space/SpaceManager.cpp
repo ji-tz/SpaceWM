@@ -172,12 +172,15 @@ void SpaceManager::buildAllSpacePreviews()
 
 void SpaceManager::warmWindowShots()
 {
+    // Overview entry: drop every cached shot so reopening recaptures live pixels
+    // (stale PrintWindow from last open looked “not a real screenshot”).
+    thumbs::clearWindowCache();
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
         const MonitorSpaces &m = it.value();
         for (const Space &sp : m.spaces) {
             for (HWND hwnd : sp.windows) {
                 if (::IsWindow(hwnd) && !::IsIconic(hwnd))
-                    thumbs::windowShot(hwnd); // capture once into cache
+                    thumbs::windowShot(hwnd); // fresh capture into cache
             }
         }
     }

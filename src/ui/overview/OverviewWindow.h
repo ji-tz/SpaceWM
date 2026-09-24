@@ -71,6 +71,8 @@ signals:
     void windowPlaced(quint64 hwnd, int spaceIndex);
     // Live preview moved to another space (desktop already synced).
     void spacePreviewed(int spaceIndex);
+    // Clicked a bottom tile: will switch to that window's space and focus it.
+    void windowActivated(quint64 hwnd);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -98,6 +100,8 @@ private:
     void cancelSoftPreviewHold();
     bool addSpaceFromStrip();
     bool addSpaceAndPlaceWindow(quint64 hwnd);
+    // Click tile → commit that window's space, then focus/raise the HWND.
+    bool activateWindowPreview(HWND hwnd);
 
     SpaceManager *m_manager = nullptr;
     HMONITOR m_hmon = nullptr;
@@ -110,6 +114,7 @@ private:
     int m_originSpace = 0;
     int m_pendingCommit = -1;
     int m_holdMs = 1000;
+    HWND m_frontHwnd = nullptr; // focus after commit close
     QTimer *m_holdTimer = nullptr;
 
     QWidget *m_root = nullptr;

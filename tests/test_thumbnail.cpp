@@ -122,6 +122,35 @@ private slots:
         ::DestroyWindow(hwnd);
         thumbs::clearWindowCache();
     }
+
+    // Overview re-entry must not keep stale tiles: warmWindowShots clears the
+    // cache first, then recaptures every managed window.
+    void warmWindowShotsClearsThenRecaptures()
+    {
+        thumbs::clearWindowCache();
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"warm target",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        ::ShowWindow(hwnd, SW_SHOW);
+        ::UpdateWindow(hwnd);
+        ::Sleep(30);
+
+        // Prime a cache entry that would go stale if not cleared on open.
+        QVERIFY(!thumbs::windowShot(hwnd).isNull());
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+
+        thumbs::clearWindowCache();
+        QCOMPARE(thumbs::windowCacheCount(), 0);
+
+        const QImage fresh = thumbs::windowShot(hwnd);
+        QVERIFY(!fresh.isNull());
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+
+        ::DestroyWindow(hwnd);
+        thumbs::clearWindowCache();
+    }
 };
 
 QTEST_MAIN(TestThumbnail)
