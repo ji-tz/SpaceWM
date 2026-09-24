@@ -1,8 +1,6 @@
 #include "OverviewWindow.h"
 
 #include "SpaceCardWidget.h"
-#include "../core/ThumbnailCapture.h"
-#include "../core/WindowTracker.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
@@ -10,59 +8,74 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPropertyAnimation>
+#include <QScreen>
 #include <QTimer>
 
 OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
-    // No WindowDoesNotAcceptFocus — we need reliable focus for Esc/arrows
-    // and so Ctrl+Alt+Space can toggle without a desktop click first.
     : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
     , m_manager(manager)
 {
     setAttribute(Qt::WA_DeleteOnClose, false);
     setObjectName(QStringLiteral("OverviewRoot"));
-    setStyleSheet(QStringLiteral(
-        "#OverviewRoot { background: rgba(8, 8, 12, 210); }"));
+    setAttribute(Qt::WA_TranslucentBackground, false);
 
     m_root = new QWidget(this);
     m_root->setObjectName(QStringLiteral("OverviewPanel"));
-    m_root->setStyleSheet(QStringLiteral(
-        "#OverviewPanel { background: transparent; }"));
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->addWidget(m_root);
 
     auto *v = new QVBoxLayout(m_root);
-    v->setContentsMargins(48, 40, 48, 48);
-    v->setSpacing(24);
+    v->setContentsMargins(40, 32, 40, 40);
+    v->setSpacing(20);
 
     m_header = new QLabel(m_root);
     m_header->setStyleSheet(QStringLiteral(
-        "QLabel { color: #ffffff; font-size: 28px; font-weight: 700; "
+        "QLabel { color: #ffffff; font-size: 24px; font-weight: 700; "
         "background: transparent; border: none; }"));
     v->addWidget(m_header);
 
     auto *hint = new QLabel(
-        tr("←/→ or 1–N select · Enter switch · Esc close · click card"), m_root);
+        tr("←/→ select · Enter switch · Esc cancel · click card"), m_root);
     hint->setStyleSheet(QStringLiteral(
-        "QLabel { color: rgba(255,255,255,140); font-size: 14px; "
+        "QLabel { color: rgba(255,255,255,140); font-size: 13px; "
         "background: transparent; border: none; }"));
     v->addWidget(hint);
 
     auto *scrollHost = new QWidget(m_root);
     m_cardRow = new QHBoxLayout(scrollHost);
     m_cardRow->setContentsMargins(0, 8, 0, 0);
-    m_cardRow->setSpacing(20);
+    m_cardRow->setSpacing(16);
     m_cardRow->addStretch(1);
     v->addWidget(scrollHost, 1);
 
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
+    setStyleSheet(QStringLiteral(
+        "#OverviewRoot { background: rgba(8, 8, 12, 215); }"
+        "#OverviewPanel { background: transparent; }"));
+}
+
+void OverviewWindow::pinToMonitorPhysically()
+{
+    if (!m_hmon)
+        return;
+    RECT phys{};
+    if (!monitors::physRectOf(m_hmon, &phys))
+        return;
+    if (HWND h = reinterpret_cast<HWND>(winId())) {
+        // Physical pixels — exact clip even with mixed DPI (PMv2).
+        ::SetWindowPos(h, HWND_TOP,
+                       phys.left, phys.top,
+                       phys.right - phys.left, phys.bottom - phys.top,
+                       SWP_NOACTIVATE);
+    }
 }
 
 void OverviewWindow::openOnMonitor(HMONITOR hmon)
 {
     if (m_closePending)
-        return; // still tearing down — ignore re-open (prevents animation re-entry crash)
+        return;
 
     auto *m = m_manager ? m_manager->monitorOf(hmon) : nullptr;
     if (!m)
@@ -70,6 +83,12 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon)
 
     cancelAnimations();
     m_hmon = hmon;
+
+    // Refresh the live screenshot for the current space BEFORE covering the screen.
+    if (m_manager)
+        m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
+
+    // Logical geometry from DPI conversion (not raw physical RECT).
     setGeometry(m->geometry);
 
     rebuildCards();
@@ -81,6 +100,7 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon)
     m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
 
     show();
+    pinToMonitorPhysically();
     raise();
     activateWindow();
     setFocus(Qt::ActiveWindowFocusReason);
@@ -101,6 +121,22 @@ void OverviewWindow::closeOverview(bool commit)
     m_open = false;
     m_closePending = true;
     cancelAnimations();
+
+    // Tell the app first so switchSpace / cloak can run while we stay visible.
+    emit closed(m_pendingCommit);
+
+    if (commit) {
+        // Stay on screen; main schedules dismiss() after cloak settles.
+        QTimer::singleShot(450, this, &OverviewWindow::dismiss);
+    } else {
+        dismiss();
+    }
+}
+
+void OverviewWindow::dismiss()
+{
+    if (!m_closePending)
+        return;
     playExitAnimation();
 }
 
@@ -110,11 +146,9 @@ void OverviewWindow::finishClose()
     if (m_manager)
         m_manager->setOverviewOpen(false);
 
-    const int chosen = m_pendingCommit;
     m_pendingCommit = -1;
     m_closePending = false;
     m_animating = false;
-    emit closed(chosen);
 }
 
 void OverviewWindow::cancelAnimations()
@@ -126,11 +160,9 @@ void OverviewWindow::cancelAnimations()
         a->disconnect(this);
         a->deleteLater();
     }
-    // Graphics effect is parented to this widget; clear without double-delete.
     if (graphicsEffect())
         setGraphicsEffect(nullptr);
 
-    // Stop any pending card-move animations by clearing effects on cards.
     for (SpaceCardWidget *card : std::as_const(m_cards)) {
         if (card && card->graphicsEffect())
             card->setGraphicsEffect(nullptr);
@@ -144,7 +176,7 @@ void OverviewWindow::rebuildCards()
     if (!m)
         return;
 
-    m_header->setText(tr("Monitor spaces — %1").arg(m->deviceName));
+    m_header->setText(tr("Spaces — %1").arg(m->deviceName));
 
     while (QLayoutItem *item = m_cardRow->takeAt(0)) {
         if (item->widget())
@@ -160,20 +192,10 @@ void OverviewWindow::rebuildCards()
         auto *card = new SpaceCardWidget(m_root);
         card->setSpace(i, m->spaces[i].name, i == current);
 
-        QVector<QImage> imgs;
-        int captured = 0;
-        for (HWND h : m->spaces[i].windows) {
-            if (captured >= 3)
-                break;
-            if (!::IsWindow(h) || ::IsIconic(h))
-                continue;
-            QImage img = thumbs::capture(h, QSize(240, 135));
-            if (!img.isNull()) {
-                imgs.push_back(img);
-                ++captured;
-            }
-        }
-        card->setThumbnails(imgs);
+        if (!m->spaces[i].screenshot.isNull())
+            card->setScreenshot(m->spaces[i].screenshot);
+        else
+            card->setScreenshot(QImage());
 
         connect(card, &SpaceCardWidget::activated, this, [this](int idx) {
             if (!m_open)
@@ -192,6 +214,12 @@ void OverviewWindow::rebuildCards()
     }
     m_cardRow->addStretch(1);
     setSelected(m_cards.isEmpty() ? -1 : current);
+
+    // Re-scale screenshots now that cards have layout sizes.
+    for (int i = 0; i < m_cards.size() && i < m->spaces.size(); ++i) {
+        if (!m->spaces[i].screenshot.isNull())
+            m_cards[i]->setScreenshot(m->spaces[i].screenshot);
+    }
 }
 
 void OverviewWindow::setSelected(int index)
@@ -213,7 +241,6 @@ void OverviewWindow::keyPressEvent(QKeyEvent *event)
     }
 
     const int n = m_cards.size();
-    // Guard: empty card row must never hit % 0 (was a hard crash).
     if (n <= 0) {
         if (event->key() == Qt::Key_Escape || event->key() == Qt::Key_Return
             || event->key() == Qt::Key_Enter) {
@@ -282,10 +309,8 @@ void OverviewWindow::playEnterAnimation()
 {
     m_animating = true;
 
-    // Fade via a single owned animation. Do NOT double-delete the effect:
-    // setGraphicsEffect(nullptr) already destroys the previous effect.
     auto *eff = new QGraphicsOpacityEffect(this);
-    eff->setOpacity(1.0); // start fully visible; skip flashy fade if anims are flaky
+    eff->setOpacity(1.0);
     setGraphicsEffect(eff);
 
     auto *anim = new QPropertyAnimation(eff, "opacity", this);
@@ -298,26 +323,25 @@ void OverviewWindow::playEnterAnimation()
         if (m_fadeAnim == sender()) {
             m_fadeAnim = nullptr;
             if (graphicsEffect())
-                setGraphicsEffect(nullptr); // deletes effect once
+                setGraphicsEffect(nullptr);
         }
         if (!m_closePending)
             m_animating = false;
     });
     anim->start(QAbstractAnimation::DeleteWhenStopped);
 
-    // Stagger card rise without graphics effects (effects on cards caused paint crashes).
     for (int i = 0; i < m_cards.size(); ++i) {
         auto *card = m_cards[i];
         if (!card)
             continue;
         const QPoint end = card->pos();
-        const QPoint start = end + QPoint(0, 20);
+        const QPoint start = end + QPoint(0, 16);
         card->move(start);
-        QTimer::singleShot(i * 30, this, [card, end]() {
+        QTimer::singleShot(i * 25, this, [card, end]() {
             if (!card)
                 return;
             auto *a = new QPropertyAnimation(card, "pos", card);
-            a->setDuration(200);
+            a->setDuration(180);
             a->setStartValue(card->pos());
             a->setEndValue(end);
             a->setEasingCurve(QEasingCurve::OutCubic);
@@ -328,6 +352,11 @@ void OverviewWindow::playEnterAnimation()
 
 void OverviewWindow::playExitAnimation()
 {
+    if (!m_closePending)
+        return;
+    if (m_fadeAnim)
+        return; // already exiting
+
     m_animating = true;
 
     auto *eff = new QGraphicsOpacityEffect(this);
@@ -336,7 +365,7 @@ void OverviewWindow::playExitAnimation()
 
     auto *anim = new QPropertyAnimation(eff, "opacity", this);
     m_fadeAnim = anim;
-    anim->setDuration(120);
+    anim->setDuration(140);
     anim->setStartValue(1.0);
     anim->setEndValue(0.0);
     anim->setEasingCurve(QEasingCurve::InCubic);
@@ -347,7 +376,6 @@ void OverviewWindow::playExitAnimation()
             setGraphicsEffect(nullptr);
         finishClose();
     });
-    // Safety: if animation is destroyed without finished (rare), still close.
     connect(anim, &QObject::destroyed, this, [this]() {
         if (m_closePending && isVisible())
             finishClose();

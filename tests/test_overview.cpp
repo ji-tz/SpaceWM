@@ -38,10 +38,13 @@ private slots:
 
         if (w.isOpen()) {
             w.closeOverview(false);
-            // Exit animation runs asynchronously — wait for closed(-1).
-            QVERIFY(closedSpy.wait(2000));
+            // closed() is emitted synchronously inside closeOverview();
+            // wait() would block for a *second* signal. Poll count instead.
+            QTRY_VERIFY_WITH_TIMEOUT(closedSpy.count() >= 1, 2000);
             QCOMPARE(closedSpy.first().at(0).toInt(), -1);
             QVERIFY(!w.isOpen());
+            // dismiss animation should finish
+            QTRY_VERIFY_WITH_TIMEOUT(!w.isVisible() || !w.isDismissing(), 3000);
         }
     }
 

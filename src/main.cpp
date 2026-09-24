@@ -117,10 +117,14 @@ int main(int argc, char *argv[])
     };
 
     QObject::connect(overview, &OverviewWindow::closed, &manager, [&](int chosen) {
-        if (chosen < 0)
+        if (chosen < 0) {
+            // Cancel: hide overlay immediately (Esc already schedules dismiss).
             return;
+        }
         HMONITOR h = overview->targetMonitor();
-        manager.switchSpace(h, chosen, /*animateHint=*/true);
+        // Switch + cloak while the overview stays visible (user sees the change).
+        manager.switchSpace(h, chosen, /*animateHint=*/false);
+        // Overview auto-dismisses via its own 450ms timer after closed().
     });
 
     // --- hotkeys ---

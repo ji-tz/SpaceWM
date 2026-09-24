@@ -8,14 +8,36 @@
 #define PW_RENDERFULLCONTENT 0x00000002
 #endif
 
+namespace {
+
+QImage gdiToImage(HDC hdc, HBITMAP bmp, int w, int h)
+{
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    QVector<uchar> pixels(size_t(w) * size_t(h) * 4);
+    const int lines = ::GetDIBits(hdc, bmp, 0, UINT(h), pixels.data(), &bi, DIB_RGB_COLORS);
+    if (lines <= 0)
+        return {};
+
+    QImage img(w, h, QImage::Format_ARGB32);
+    memcpy(img.bits(), pixels.data(), size_t(w) * size_t(h) * 4);
+    return img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+} // namespace
+
 namespace thumbs {
 
 QImage capture(HWND hwnd, const QSize &maxSize)
 {
     if (!hwnd || !::IsWindow(hwnd))
         return {};
-    // Minimized windows: PrintWindow can show stale/fullscreen restore artifacts
-    // and is useless for space cards — skip.
     if (::IsIconic(hwnd))
         return {};
 
@@ -27,7 +49,6 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     if (w <= 0 || h <= 0)
         return {};
 
-    // Cap source size to keep capture cheap.
     const int capW = 960;
     const int capH = 540;
     if (w > capW || h > capH) {
@@ -55,32 +76,56 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     if (!ok)
         ::BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY);
 
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = w;
-    bi.bmiHeader.biHeight = -h; // top-down
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    QVector<uchar> pixels(size_t(w) * size_t(h) * 4);
-    const int lines = ::GetDIBits(mem, bmp, 0, UINT(h), pixels.data(), &bi, DIB_RGB_COLORS);
+    QImage img = gdiToImage(mem, bmp, w, h);
 
     ::SelectObject(mem, old);
     ::DeleteObject(bmp);
     ::DeleteDC(mem);
     ::ReleaseDC(nullptr, screen);
 
-    if (lines <= 0)
+    if (img.isNull())
         return {};
-
-    QImage img(w, h, QImage::Format_ARGB32);
-    memcpy(img.bits(), pixels.data(), size_t(w) * size_t(h) * 4);
-    img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-
     if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
         img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    return img;
+}
 
+QImage captureMonitor(const RECT &physRect, const QSize &maxSize)
+{
+    const int w = physRect.right - physRect.left;
+    const int h = physRect.bottom - physRect.top;
+    if (w <= 0 || h <= 0)
+        return {};
+
+    HDC screen = ::GetDC(nullptr);
+    if (!screen)
+        return {};
+    HDC mem = ::CreateCompatibleDC(screen);
+    HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+    if (!mem || !bmp) {
+        if (bmp) ::DeleteObject(bmp);
+        if (mem) ::DeleteDC(mem);
+        ::ReleaseDC(nullptr, screen);
+        return {};
+    }
+    HGDIOBJ old = ::SelectObject(mem, bmp);
+
+    // CAPTUREBLT includes layered windows.
+    const BOOL ok = ::BitBlt(mem, 0, 0, w, h, screen,
+                             physRect.left, physRect.top, SRCCOPY | CAPTUREBLT);
+    QImage img;
+    if (ok)
+        img = gdiToImage(mem, bmp, w, h);
+
+    ::SelectObject(mem, old);
+    ::DeleteObject(bmp);
+    ::DeleteDC(mem);
+    ::ReleaseDC(nullptr, screen);
+
+    if (img.isNull())
+        return {};
+    if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
+        img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     return img;
 }
 

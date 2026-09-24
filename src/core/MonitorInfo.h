@@ -6,22 +6,27 @@
 
 struct MonitorEntry {
     HMONITOR handle = nullptr;
-    QRect geometry;       // virtual-desktop coordinates
+    RECT physRect{};        // physical pixels (GetMonitorInfo)
+    QRect geometry;         // Qt logical pixels (safe for QWidget::setGeometry)
     bool primary = false;
-    QString deviceName;   // e.g. \\.\DISPLAY1
+    QString deviceName;     // e.g. \\.\DISPLAY1
 };
 
-// Enumerates physical monitors via EnumDisplayMonitors.
+// Enumerates monitors; geometry is converted to Qt logical DPI coords.
 namespace monitors {
 
 QVector<MonitorEntry> enumerate();
 
-// Monitor that contains the majority of the window (or the cursor's monitor).
 HMONITOR fromWindow(HWND hwnd);
 HMONITOR fromPoint(POINT pt);
 HMONITOR fromCursor();
 
-// True if pt lies inside mon's geometry.
 bool contains(const MonitorEntry &mon, POINT pt);
+
+// Physical monitor RECT for capture / native SetWindowPos.
+bool physRectOf(HMONITOR hmon, RECT *out);
+
+// Qt logical geometry for a monitor (PMv2-safe).
+QRect logicalGeometry(HMONITOR hmon);
 
 } // namespace monitors

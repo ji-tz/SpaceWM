@@ -49,6 +49,7 @@ target_link_libraries(spacewm_core PUBLIC
   gdi32
   shell32
   ole32
+  shcore
 )
 
 target_compile_definitions(spacewm_core PUBLIC

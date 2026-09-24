@@ -1,6 +1,7 @@
 #include "SpaceManager.h"
 
 #include "CloakController.h"
+#include "ThumbnailCapture.h"
 #include "WindowTracker.h"
 
 #include <QCoreApplication>
@@ -39,6 +40,7 @@ void SpaceManager::refreshMonitors()
             ms.currentIndex = 0;
         }
         ms.hmon = m.handle;
+        ms.physRect = m.physRect;
         ms.geometry = m.geometry;
         ms.deviceName = m.deviceName;
         if (ms.currentIndex < 0 || ms.currentIndex >= ms.spaces.size())
@@ -46,7 +48,6 @@ void SpaceManager::refreshMonitors()
         next.insert(key, std::move(ms));
     }
 
-    // Drop owners that refer to vanished monitors.
     m_monitors = std::move(next);
     for (auto it = m_owner.begin(); it != m_owner.end();) {
         if (!m_monitors.contains(it.value().hmon))
@@ -55,7 +56,6 @@ void SpaceManager::refreshMonitors()
             ++it;
     }
 
-    // Re-apply visibility everywhere after topology change.
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
         applyVisibility(it.value().hmon);
 
@@ -127,6 +127,20 @@ QString SpaceManager::spaceName(HMONITOR hmon, int index) const
     return {};
 }
 
+void SpaceManager::captureSpaceScreenshot(HMONITOR hmon, int index)
+{
+    auto *m = monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return;
+    const int w = m->physRect.right - m->physRect.left;
+    const int h = m->physRect.bottom - m->physRect.top;
+    if (w <= 0 || h <= 0)
+        return;
+    QImage shot = thumbs::captureMonitor(m->physRect, QSize(640, 360));
+    if (!shot.isNull())
+        m->spaces[index].screenshot = shot;
+}
+
 bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
 {
     auto *m = monitorOf(hmon);
@@ -134,8 +148,14 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
         return false;
 
     const int from = m->currentIndex;
+    // Snapshot the outgoing space while its windows are still visible.
+    captureSpaceScreenshot(hmon, from);
+
     m->currentIndex = index;
     applyVisibility(hmon);
+
+    // Snapshot the incoming space after cloak settles.
+    captureSpaceScreenshot(hmon, index);
 
     emit spaceChanged(reinterpret_cast<quint64>(hmon), index);
     if (animateHint && m_animationEnabled && !m_overviewOpen)
@@ -149,7 +169,6 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
     if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
         return false;
 
-    // Remove from previous space on any monitor.
     if (m_owner.contains(hwnd)) {
         const auto prev = m_owner.value(hwnd);
         if (auto *pm = monitorOf(reinterpret_cast<HMONITOR>(prev.hmon)); pm && prev.space >= 0 && prev.space < pm->spaces.size())
@@ -183,9 +202,10 @@ void SpaceManager::adoptExistingWindows()
     const auto windows = WindowTracker::snapshotManageableWindows();
     for (HWND hwnd : windows)
         trackWindow(hwnd);
-    // Apply visibility on all monitors after bulk adopt.
-    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
         applyVisibility(it.value().hmon);
+        captureSpaceScreenshot(it.value().hmon, it.value().currentIndex);
+    }
 }
 
 void SpaceManager::applyVisibility(HMONITOR hmon)
@@ -219,39 +239,20 @@ void SpaceManager::applyVisibility(HMONITOR hmon)
         return out;
     };
 
-    // Save Z-order of currently visible windows per space before mutating.
     for (int i = 0; i < m->spaces.size(); ++i) {
         const auto z = collectZ(m->spaces[i].windows);
         if (!z.isEmpty())
             m->spaces[i].zOrder = z;
     }
 
-    // Hide / show
-    for (const Space &sp : m->spaces) {
-        for (HWND hwnd : sp.windows) {
+    for (int i = 0; i < m->spaces.size(); ++i) {
+        for (HWND hwnd : m->spaces[i].windows) {
             if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
                 continue;
-            const bool hide = (sp.windows.contains(hwnd) && !m->spaces[cur].windows.contains(hwnd));
-            // equivalent: hide if not in current space set
-            cloakWindow(hwnd, hide);
+            cloakWindow(hwnd, i != cur);
         }
     }
 
-    // Explicitly hide non-current (in case of empty current set edge cases)
-    for (int i = 0; i < m->spaces.size(); ++i) {
-        if (i == cur)
-            continue;
-        for (HWND hwnd : m->spaces[i].windows) {
-            if (::IsWindow(hwnd) && !::IsIconic(hwnd))
-                cloakWindow(hwnd, true);
-        }
-    }
-    for (HWND hwnd : m->spaces[cur].windows) {
-        if (::IsWindow(hwnd) && !::IsIconic(hwnd))
-            cloakWindow(hwnd, false);
-    }
-
-    // Restore saved Z-order for current space: bottom → top with HWND_TOP.
     const QVector<HWND> &z = m->spaces[cur].zOrder;
     for (int i = z.size() - 1; i >= 0; --i) {
         HWND hwnd = z[i];
@@ -281,18 +282,15 @@ QVector<HWND> SpaceManager::windowsOn(HMONITOR hmon, int spaceIndex) const
         return {};
     QVector<HWND> out;
     out.reserve(int(m->spaces[spaceIndex].windows.size()));
-    // Include windows we hid ourselves (IsWindowVisible is false then).
     for (HWND h : m->spaces[spaceIndex].windows)
         if (::IsWindow(h))
             out.push_back(h);
-    // Prefer Z-order top-to-bottom for overview aesthetics (include windows we hid).
     QVector<HWND> zordered;
     zordered.reserve(out.size());
     for (HWND h : WindowTracker::snapshotManageableWindows()) {
         if (out.contains(h))
             zordered.push_back(h);
     }
-    // snapshot skips own-process and may skip hidden-untracked; append rest.
     for (HWND h : out)
         if (!zordered.contains(h))
             zordered.push_back(h);
@@ -302,7 +300,7 @@ QVector<HWND> SpaceManager::windowsOn(HMONITOR hmon, int spaceIndex) const
 bool SpaceManager::trackWindow(HWND hwnd)
 {
     if (::IsIconic(hwnd))
-        return false; // minimized: not space-managed
+        return false;
     if (!WindowTracker::isManageable(hwnd))
         return false;
     if (m_owner.contains(hwnd))
@@ -314,7 +312,6 @@ bool SpaceManager::trackWindow(HWND hwnd)
     if (!m)
         return false;
 
-    // New windows go to the monitor's current space (like macOS Spaces).
     return assignWindow(hwnd, h, m->currentIndex);
 }
 
@@ -334,7 +331,6 @@ void SpaceManager::setOverviewOpen(bool open)
 {
     m_overviewOpen = open;
     if (!open) {
-        // Re-apply after overview closes so state converges.
         for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
             applyVisibility(it.value().hmon);
     }
@@ -345,7 +341,6 @@ void SpaceManager::ensureMonitor(HMONITOR hmon)
     const auto key = reinterpret_cast<quintptr>(hmon);
     if (m_monitors.contains(key))
         return;
-    // Topology may have changed without a display-change message.
     refreshMonitors();
 }
 

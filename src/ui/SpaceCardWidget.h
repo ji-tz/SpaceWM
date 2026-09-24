@@ -1,22 +1,20 @@
 #pragma once
 
 #include <QFrame>
-#include <QHash>
 #include <QImage>
 #include <QLabel>
 #include <QVector>
-#include <Windows.h>
 
-class QHBoxLayout;
-class QVBoxLayout;
-
-// One space tile inside the overview: title, window count, stacked thumbnails.
+// One space tile: title + full-monitor screenshot preview.
 class SpaceCardWidget : public QFrame {
     Q_OBJECT
 public:
     explicit SpaceCardWidget(QWidget *parent = nullptr);
 
     void setSpace(int index, const QString &name, bool current);
+    // Primary: a single full-screen shot of that space.
+    void setScreenshot(const QImage &image);
+    // Fallback tiled window thumbs (if no screenshot yet).
     void setThumbnails(const QVector<QImage> &images);
     void setHighlighted(bool on);
 
@@ -29,15 +27,16 @@ signals:
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void enterEvent(QEnterEvent *event) override;
-    void paintEvent(QPaintEvent *event) override;
 
 private:
+    void clearPreview();
+    void showPlaceholder();
+
     int m_index = -1;
     bool m_current = false;
     bool m_highlight = false;
     QLabel *m_title = nullptr;
     QLabel *m_badge = nullptr;
+    QLabel *m_preview = nullptr;
     QWidget *m_thumbRow = nullptr;
-    QHBoxLayout *m_thumbLayout = nullptr;
-    QVector<QLabel *> m_thumbs;
 };

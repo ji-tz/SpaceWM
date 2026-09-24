@@ -29,7 +29,18 @@ private slots:
         SpaceCardWidget card;
         card.setSpace(0, QStringLiteral("Empty"), false);
         card.setThumbnails({});
-        card.setThumbnails({ QImage() }); // null images skipped
+        card.setThumbnails({ QImage() });
+        card.setScreenshot(QImage()); // null → placeholder
+        QVERIFY(true);
+    }
+
+    void screenshotAcceptsImage()
+    {
+        SpaceCardWidget card;
+        QImage img(320, 180, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(20, 40, 80));
+        card.setSpace(1, QStringLiteral("Shot"), false);
+        card.setScreenshot(img);
         QVERIFY(true);
     }
 
@@ -38,7 +49,7 @@ private slots:
         SpaceCardWidget card;
         QImage img(64, 32, QImage::Format_ARGB32_Premultiplied);
         img.fill(Qt::blue);
-        card.setThumbnails({ img, img, img, img, img }); // only 3 shown
+        card.setThumbnails({ img, img, img, img, img });
         QVERIFY(true);
     }
 

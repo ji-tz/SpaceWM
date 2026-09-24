@@ -41,13 +41,24 @@ private slots:
     {
         const auto list = monitors::enumerate();
         QVERIFY(!list.isEmpty());
-        POINT pt{ list.first().geometry.center().x(), list.first().geometry.center().y() };
+        // contains() works in physical coordinates (physRect).
+        const RECT &pr = list.first().physRect;
+        POINT pt{ (pr.left + pr.right) / 2, (pr.top + pr.bottom) / 2 };
         QVERIFY(monitors::contains(list.first(), pt));
 
-        // A point far outside every monitor should not be contained in the first
-        // (unless virtual desktop is huge — use a corner just outside its rect).
-        POINT outside{ list.first().geometry.x() - 10000, list.first().geometry.y() - 10000 };
+        POINT outside{ pr.left - 10000, pr.top - 10000 };
         QVERIFY(!monitors::contains(list.first(), outside));
+    }
+
+    void logicalGeometryPositive()
+    {
+        const auto list = monitors::enumerate();
+        QVERIFY(!list.isEmpty());
+        for (const auto &m : list) {
+            QVERIFY(m.geometry.width() > 0);
+            QVERIFY(m.geometry.height() > 0);
+            QVERIFY(m.physRect.right > m.physRect.left);
+        }
     }
 };
 

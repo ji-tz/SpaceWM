@@ -6,12 +6,14 @@
 #include <QVector>
 #include <Windows.h>
 
-// Captures a static thumbnail of a window for overview cards.
-// Uses PrintWindow(PW_RENDERFULLCONTENT) with a GDI DIB — no DirectComposition
-// dependency, fast enough for opening the overview.
+// Capture helpers for overview cards.
 namespace thumbs {
 
-// Returns null image on failure.
+// Window thumbnail via PrintWindow (null if minimized/unavailable).
 QImage capture(HWND hwnd, const QSize &maxSize = QSize(480, 270));
+
+// Full monitor screenshot in physical pixels (BitBlt from the screen).
+// physRect is the monitor RECT from GetMonitorInfo (physical coords).
+QImage captureMonitor(const RECT &physRect, const QSize &maxSize = QSize(640, 360));
 
 } // namespace thumbs

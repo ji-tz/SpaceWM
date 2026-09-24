@@ -3,6 +3,7 @@
 #include "MonitorInfo.h"
 
 #include <QHash>
+#include <QImage>
 #include <QObject>
 #include <QSet>
 #include <QVector>
@@ -12,7 +13,7 @@
 //
 // State model (kept entirely in this process — Windows has no native API for it):
 //   monitor -> currentSpaceIndex
-//   monitor -> spaces[i] -> set of HWND
+//   monitor -> spaces[i] -> set of HWND + last screenshot
 //
 // Display model: windows not in the current space of their monitor are cloaked.
 // Switching a space on monitor M only cloaks/uncloaks windows on M.
@@ -21,11 +22,14 @@ struct Space {
     QSet<HWND> windows;
     // Top → bottom HWND order captured when this space was last visible.
     QVector<HWND> zOrder;
+    // Last full-monitor screenshot while this space was visible.
+    QImage screenshot;
 };
 
 struct MonitorSpaces {
     HMONITOR hmon = nullptr;
-    QRect geometry;
+    RECT physRect{};
+    QRect geometry;       // Qt logical
     QString deviceName;
     int currentIndex = 0;
     QVector<Space> spaces;
@@ -36,7 +40,6 @@ class SpaceManager : public QObject {
 public:
     explicit SpaceManager(QObject *parent = nullptr);
 
-    // Rebuild monitor list (display change). Keeps window assignments best-effort.
     void refreshMonitors();
 
     QVector<MonitorSpaces *> monitors();
@@ -49,46 +52,34 @@ public:
     int currentSpaceIndex(HMONITOR hmon) const;
     QString spaceName(HMONITOR hmon, int index) const;
 
-    // Switch current space on one monitor and apply cloak deltas there only.
     bool switchSpace(HMONITOR hmon, int index, bool animateHint = true);
 
-    // Move a window into a space (and cloak/uncloak as needed).
     bool assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex);
 
-    // Which space currently owns this window (on its monitor), or -1.
     int spaceOfWindow(HWND hwnd) const;
-
-    // Which monitor currently owns this window, or nullptr.
     HMONITOR ownerMonitorOf(HWND hwnd) const;
 
-    // Initial adoption of existing windows onto space 0 of their monitor.
     void adoptExistingWindows();
-
-    // Direct cloak application for the whole monitor (used after switches).
     void applyVisibility(HMONITOR hmon);
 
-    // All windows the manager believes belong to a space (for overview).
     QVector<HWND> windowsOn(HMONITOR hmon, int spaceIndex) const;
 
-    // Ensure this hwnd is tracked; returns false if not manageable.
     bool trackWindow(HWND hwnd);
-
     void untrackWindow(HWND hwnd);
 
-    // When overview is open we suppress cloak writes to avoid fighting the UI.
     void setOverviewOpen(bool open);
     bool overviewOpen() const { return m_overviewOpen; }
 
-    // Disable our flash overlay for a moment (used when overview handles UX).
     void setAnimationEnabled(bool on) { m_animationEnabled = on; }
 
+    // Snapshot the monitor into space[index].screenshot (call while space is visible).
+    void captureSpaceScreenshot(HMONITOR hmon, int index);
+
 signals:
-    // Fired after cloak state has been updated for a monitor.
     void spaceChanged(quint64 hmon, int index);
     void monitorLayoutChanged();
     void windowTracked(quint64 hwnd);
     void windowUntracked(quint64 hwnd);
-    // UI should play a short switch flash on this monitor.
     void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex);
 
 private:
@@ -96,8 +87,7 @@ private:
     void cloakWindow(HWND hwnd, bool hide);
     void placeNewWindow(HWND hwnd);
 
-    QHash<quintptr, MonitorSpaces> m_monitors; // key: HMONITOR as pointer
-    // Reverse map: window -> (monitor key, space index) for O(1) lookup.
+    QHash<quintptr, MonitorSpaces> m_monitors;
     struct Owner { quintptr hmon = 0; int space = -1; };
     QHash<HWND, Owner> m_owner;
 
