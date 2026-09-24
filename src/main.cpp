@@ -124,7 +124,7 @@ int main(int argc, char *argv[])
         HMONITOR h = overview->targetMonitor();
         // Switch + cloak while the overview stays visible (user sees the change).
         manager.switchSpace(h, chosen, /*animateHint=*/false);
-        // Overview auto-dismisses via its own 450ms timer after closed().
+        // Overview dismisses itself ~200ms after closed() so cloak can settle.
     });
 
     // --- hotkeys ---

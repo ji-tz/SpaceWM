@@ -46,7 +46,6 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
         " border-radius: 14px; }"
         "#SpaceCard[current=\"true\"] { border: 2px solid #7aa2ff; }"
         "#SpaceCard[highlight=\"true\"] { background: rgba(40, 44, 56, 235); border: 2px solid #9ec1ff; }"));
-    showPlaceholder();
 }
 
 void SpaceCardWidget::setSpace(int index, const QString &name, bool current)
@@ -69,25 +68,14 @@ void SpaceCardWidget::clearPreview()
     m_preview->setText({});
 }
 
-void SpaceCardWidget::showPlaceholder()
-{
-    clearPreview();
-    m_preview->setText(tr("No preview"));
-    m_preview->setStyleSheet(QStringLiteral(
-        "QLabel { color: rgba(255,255,255,80); font-size: 13px; border-radius: 8px;"
-        " border: 1px solid rgba(255,255,255,40); background: #0c0c10; }"));
-}
-
 void SpaceCardWidget::setScreenshot(const QImage &image)
 {
-    if (image.isNull()) {
-        showPlaceholder();
+    // Never show "No preview" text — ignore null and keep the last real image.
+    if (image.isNull())
         return;
-    }
     m_preview->setText({});
     m_preview->setStyleSheet(QStringLiteral(
         "QLabel { border-radius: 8px; border: 1px solid rgba(255,255,255,40); background: #0c0c10; }"));
-    // Scale on paint via pixmap; use KeepAspectRatio so mixed DPI shots fit.
     const QPixmap pm = QPixmap::fromImage(image);
     const QSize target = (m_preview->width() > 0 && m_preview->height() > 0)
         ? m_preview->size()
@@ -97,14 +85,12 @@ void SpaceCardWidget::setScreenshot(const QImage &image)
 
 void SpaceCardWidget::setThumbnails(const QVector<QImage> &images)
 {
-    // Prefer a full screenshot API; keep this as fallback only.
     for (const QImage &img : images) {
         if (!img.isNull()) {
             setScreenshot(img);
             return;
         }
     }
-    showPlaceholder();
 }
 
 void SpaceCardWidget::setHighlighted(bool on)

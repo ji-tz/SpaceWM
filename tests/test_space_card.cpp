@@ -24,13 +24,17 @@ private slots:
         QVERIFY(true);
     }
 
-    void emptyThumbnailsShowPlaceholder()
+    void emptyThumbnailsKeepLastImage()
     {
         SpaceCardWidget card;
         card.setSpace(0, QStringLiteral("Empty"), false);
+        QImage img(64, 40, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(10, 20, 30));
+        card.setScreenshot(img);
+        // Null must not wipe the image / show "No preview".
+        card.setScreenshot(QImage());
         card.setThumbnails({});
         card.setThumbnails({ QImage() });
-        card.setScreenshot(QImage()); // null → placeholder
         QVERIFY(true);
     }
 

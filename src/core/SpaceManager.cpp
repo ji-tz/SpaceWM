@@ -59,6 +59,8 @@ void SpaceManager::refreshMonitors()
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
         applyVisibility(it.value().hmon);
 
+    seedScreenshots();
+
     emit monitorLayoutChanged();
 }
 
@@ -136,9 +138,51 @@ void SpaceManager::captureSpaceScreenshot(HMONITOR hmon, int index)
     const int h = m->physRect.bottom - m->physRect.top;
     if (w <= 0 || h <= 0)
         return;
+    // While overview is open, BitBlt would capture our own overlay — skip.
+    if (m_overviewOpen)
+        return;
     QImage shot = thumbs::captureMonitor(m->physRect, QSize(640, 360));
+    if (shot.isNull())
+        shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
     if (!shot.isNull())
         m->spaces[index].screenshot = shot;
+}
+
+void SpaceManager::seedScreenshots()
+{
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+        MonitorSpaces &m = it.value();
+        const int w = m.physRect.right - m.physRect.left;
+        const int h = m.physRect.bottom - m.physRect.top;
+        if (w <= 0 || h <= 0)
+            continue;
+
+        // One desktop-level shot for every empty space (cold boot).
+        QImage seed;
+        for (const Space &sp : m.spaces) {
+            if (!sp.screenshot.isNull()) {
+                seed = sp.screenshot;
+                break;
+            }
+        }
+        if (seed.isNull()) {
+            seed = thumbs::desktopWallpaper(m.physRect, QSize(640, 360));
+            if (seed.isNull() && !m_overviewOpen)
+                seed = thumbs::captureMonitor(m.physRect, QSize(640, 360));
+        }
+
+        // Current space: live shot if possible (desktop / windows).
+        if (!m_overviewOpen) {
+            QImage live = thumbs::captureMonitor(m.physRect, QSize(640, 360));
+            if (!live.isNull() && m.currentIndex >= 0 && m.currentIndex < m.spaces.size())
+                m.spaces[m.currentIndex].screenshot = live;
+        }
+
+        for (Space &sp : m.spaces) {
+            if (sp.screenshot.isNull() && !seed.isNull())
+                sp.screenshot = seed;
+        }
+    }
 }
 
 bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
@@ -148,14 +192,14 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
         return false;
 
     const int from = m->currentIndex;
-    // Snapshot the outgoing space while its windows are still visible.
-    captureSpaceScreenshot(hmon, from);
+    if (!m_overviewOpen)
+        captureSpaceScreenshot(hmon, from);
 
     m->currentIndex = index;
     applyVisibility(hmon);
 
-    // Snapshot the incoming space after cloak settles.
-    captureSpaceScreenshot(hmon, index);
+    if (!m_overviewOpen)
+        captureSpaceScreenshot(hmon, index);
 
     emit spaceChanged(reinterpret_cast<quint64>(hmon), index);
     if (animateHint && m_animationEnabled && !m_overviewOpen)
@@ -202,10 +246,9 @@ void SpaceManager::adoptExistingWindows()
     const auto windows = WindowTracker::snapshotManageableWindows();
     for (HWND hwnd : windows)
         trackWindow(hwnd);
-    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
         applyVisibility(it.value().hmon);
-        captureSpaceScreenshot(it.value().hmon, it.value().currentIndex);
-    }
+    seedScreenshots();
 }
 
 void SpaceManager::applyVisibility(HMONITOR hmon)
@@ -329,10 +372,13 @@ void SpaceManager::untrackWindow(HWND hwnd)
 
 void SpaceManager::setOverviewOpen(bool open)
 {
+    const bool was = m_overviewOpen;
     m_overviewOpen = open;
-    if (!open) {
+    if (was && !open) {
         for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
             applyVisibility(it.value().hmon);
+        // Overview is gone — refresh current-space previews from the real desktop.
+        seedScreenshots();
     }
 }
 

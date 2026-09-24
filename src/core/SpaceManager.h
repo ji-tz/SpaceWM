@@ -75,6 +75,9 @@ public:
     // Snapshot the monitor into space[index].screenshot (call while space is visible).
     void captureSpaceScreenshot(HMONITOR hmon, int index);
 
+    // Fill empty space previews with desktop wallpaper / live shot (cold start).
+    void seedScreenshots();
+
 signals:
     void spaceChanged(quint64 hmon, int index);
     void monitorLayoutChanged();

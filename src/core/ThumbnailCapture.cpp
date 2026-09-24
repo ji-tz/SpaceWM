@@ -1,11 +1,16 @@
 #include "ThumbnailCapture.h"
 
 #include <QPainter>
+#include <QFileInfo>
 
 #include <algorithm>
 
 #ifndef PW_RENDERFULLCONTENT
 #define PW_RENDERFULLCONTENT 0x00000002
+#endif
+
+#ifndef SPI_GETDESKWALLPAPER
+#define SPI_GETDESKWALLPAPER 0x0073
 #endif
 
 namespace {
@@ -127,6 +132,37 @@ QImage captureMonitor(const RECT &physRect, const QSize &maxSize)
     if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
         img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     return img;
+}
+
+QImage desktopWallpaper(const RECT &physRect, const QSize &maxSize)
+{
+    wchar_t path[MAX_PATH]{};
+    if (::SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) && path[0]) {
+        QImage img(QString::fromWCharArray(path));
+        if (!img.isNull()) {
+            const int w = physRect.right - physRect.left;
+            const int h = physRect.bottom - physRect.top;
+            if (w > 0 && h > 0)
+                img = img.scaled(w, h, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+            if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
+                img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            return img;
+        }
+    }
+    // Fallback: solid desktop-like fill so cards never show "No preview".
+    const int w = maxSize.width() > 0 ? maxSize.width() : 640;
+    const int h = maxSize.height() > 0 ? maxSize.height() : 360;
+    QImage flat(w, h, QImage::Format_ARGB32_Premultiplied);
+    flat.fill(QColor(32, 36, 48));
+    return flat;
+}
+
+QImage spacePreview(const RECT &physRect, const QSize &maxSize)
+{
+    QImage shot = captureMonitor(physRect, maxSize);
+    if (!shot.isNull())
+        return shot;
+    return desktopWallpaper(physRect, maxSize);
 }
 
 } // namespace thumbs

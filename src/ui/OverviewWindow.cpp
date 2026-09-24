@@ -1,6 +1,7 @@
 #include "OverviewWindow.h"
 
 #include "SpaceCardWidget.h"
+#include "../core/ThumbnailCapture.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
@@ -84,9 +85,12 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon)
     cancelAnimations();
     m_hmon = hmon;
 
-    // Refresh the live screenshot for the current space BEFORE covering the screen.
-    if (m_manager)
+    // Fill any empty previews (cold start → wallpaper / desktop) and refresh
+    // the live current-space shot BEFORE covering the screen.
+    if (m_manager) {
+        m_manager->seedScreenshots();
         m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
+    }
 
     // Logical geometry from DPI conversion (not raw physical RECT).
     setGeometry(m->geometry);
@@ -126,8 +130,8 @@ void OverviewWindow::closeOverview(bool commit)
     emit closed(m_pendingCommit);
 
     if (commit) {
-        // Stay on screen; main schedules dismiss() after cloak settles.
-        QTimer::singleShot(450, this, &OverviewWindow::dismiss);
+        // Brief hold so cloak can settle under the overlay, then fade out.
+        QTimer::singleShot(200, this, &OverviewWindow::dismiss);
     } else {
         dismiss();
     }
@@ -192,10 +196,11 @@ void OverviewWindow::rebuildCards()
         auto *card = new SpaceCardWidget(m_root);
         card->setSpace(i, m->spaces[i].name, i == current);
 
-        if (!m->spaces[i].screenshot.isNull())
-            card->setScreenshot(m->spaces[i].screenshot);
-        else
-            card->setScreenshot(QImage());
+        // Always a real image: cached shot, else wallpaper/desktop, never "No preview".
+        QImage shot = m->spaces[i].screenshot;
+        if (shot.isNull())
+            shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+        card->setScreenshot(shot);
 
         connect(card, &SpaceCardWidget::activated, this, [this](int idx) {
             if (!m_open)
@@ -217,8 +222,10 @@ void OverviewWindow::rebuildCards()
 
     // Re-scale screenshots now that cards have layout sizes.
     for (int i = 0; i < m_cards.size() && i < m->spaces.size(); ++i) {
-        if (!m->spaces[i].screenshot.isNull())
-            m_cards[i]->setScreenshot(m->spaces[i].screenshot);
+        QImage shot = m->spaces[i].screenshot;
+        if (shot.isNull())
+            shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+        m_cards[i]->setScreenshot(shot);
     }
 }
 

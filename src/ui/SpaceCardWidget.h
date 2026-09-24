@@ -30,7 +30,6 @@ protected:
 
 private:
     void clearPreview();
-    void showPlaceholder();
 
     int m_index = -1;
     bool m_current = false;
