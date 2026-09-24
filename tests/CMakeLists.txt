@@ -9,6 +9,7 @@ set(SPACEWM_TEST_NAMES
   test_hotkeys
   test_space_card
   test_overview
+  test_overview_host
   test_flash_overlay
 )
 

@@ -73,7 +73,7 @@ void OverviewWindow::pinToMonitorPhysically()
     }
 }
 
-void OverviewWindow::openOnMonitor(HMONITOR hmon)
+void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
 {
     if (m_closePending)
         return;
@@ -84,33 +84,37 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon)
 
     cancelAnimations();
     m_hmon = hmon;
+    m_exitStarted = false;
 
-    // Fill any empty previews (cold start → wallpaper / desktop) and refresh
-    // the live current-space shot BEFORE covering the screen.
     if (m_manager) {
-        m_manager->seedScreenshots();
-        m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
+        if (!m_hostManaged) {
+            m_manager->seedScreenshots();
+            m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
+            m_manager->setOverviewOpen(true);
+        } else {
+            m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
+        }
     }
 
-    // Logical geometry from DPI conversion (not raw physical RECT).
     setGeometry(m->geometry);
-
     rebuildCards();
 
-    if (m_manager)
-        m_manager->setOverviewOpen(true);
     m_open = true;
+    m_closePending = false;
     m_pendingCommit = -1;
     m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
 
     show();
+    setWindowOpacity(1.0);
     pinToMonitorPhysically();
     raise();
-    activateWindow();
-    setFocus(Qt::ActiveWindowFocusReason);
-    if (HWND h = reinterpret_cast<HWND>(winId())) {
-        ::SetForegroundWindow(h);
-        ::SetFocus(h);
+    if (takeFocus) {
+        activateWindow();
+        setFocus(Qt::ActiveWindowFocusReason);
+        if (HWND h = reinterpret_cast<HWND>(winId())) {
+            ::SetForegroundWindow(h);
+            ::SetFocus(h);
+        }
     }
 
     playEnterAnimation();
@@ -122,32 +126,76 @@ void OverviewWindow::closeOverview(bool commit)
         return;
 
     m_pendingCommit = commit ? m_selected : -1;
+    // Mark closing on this panel; host will sync siblings.
     m_open = false;
     m_closePending = true;
     cancelAnimations();
 
-    // Tell the app first so switchSpace / cloak can run while we stay visible.
     emit closed(m_pendingCommit);
 
-    if (commit) {
-        // Brief hold so cloak can settle under the overlay, then fade out.
-        QTimer::singleShot(200, this, &OverviewWindow::dismiss);
-    } else {
-        dismiss();
+    if (!m_hostManaged) {
+        // Standalone panel (unit tests / single-monitor fallback).
+        if (commit)
+            QTimer::singleShot(200, this, &OverviewWindow::startExit);
+        else
+            startExit();
     }
+    // Host-managed: OverviewHost::onPanelClosed drives prepare/start/force on ALL panels.
+}
+
+void OverviewWindow::prepareClose()
+{
+    m_open = false;
+    m_closePending = true;
+    m_exitStarted = false;
+    m_pendingCommit = -1;
+    cancelAnimations();
+}
+
+void OverviewWindow::startExit()
+{
+    if (!m_closePending)
+        return;
+    if (m_exitStarted)
+        return;
+    m_exitStarted = true;
+    cancelAnimations();
+    playExitAnimation();
+}
+
+void OverviewWindow::forceHide()
+{
+    cancelAnimations();
+    m_open = false;
+    m_closePending = false;
+    m_exitStarted = false;
+    m_animating = false;
+    m_pendingCommit = -1;
+    hide();
+    if (m_manager && !m_hostManaged)
+        m_manager->setOverviewOpen(false);
+}
+
+void OverviewWindow::closeQuietly()
+{
+    if (!m_open && !isVisible() && !m_closePending)
+        return;
+    prepareClose();
+    startExit();
 }
 
 void OverviewWindow::dismiss()
 {
     if (!m_closePending)
         return;
-    playExitAnimation();
+    startExit();
 }
 
 void OverviewWindow::finishClose()
 {
     hide();
-    if (m_manager)
+    m_exitStarted = false;
+    if (m_manager && !m_hostManaged)
         m_manager->setOverviewOpen(false);
 
     m_pendingCommit = -1;
@@ -366,16 +414,17 @@ void OverviewWindow::playExitAnimation()
 {
     if (!m_closePending)
         return;
-    if (m_fadeAnim)
-        return; // already exiting
+    if (m_exitStarted && m_fadeAnim)
+        return; // already fading out
 
     m_animating = true;
+    m_exitStarted = true;
 
-    auto *eff = new QGraphicsOpacityEffect(this);
-    eff->setOpacity(1.0);
-    setGraphicsEffect(eff);
+    // Use window-level opacity: more reliable across monitors than QGraphicsEffect.
+    cancelAnimations();
+    setWindowOpacity(1.0);
 
-    auto *anim = new QPropertyAnimation(eff, "opacity", this);
+    auto *anim = new QPropertyAnimation(this, "windowOpacity", this);
     m_fadeAnim = anim;
     anim->setDuration(140);
     anim->setStartValue(1.0);
@@ -384,13 +433,13 @@ void OverviewWindow::playExitAnimation()
     connect(anim, &QPropertyAnimation::finished, this, [this]() {
         if (m_fadeAnim == sender())
             m_fadeAnim = nullptr;
-        if (graphicsEffect())
-            setGraphicsEffect(nullptr);
         finishClose();
     });
-    connect(anim, &QObject::destroyed, this, [this]() {
-        if (m_closePending && isVisible())
-            finishClose();
-    });
     anim->start(QAbstractAnimation::DeleteWhenStopped);
+
+    // Absolute fallback if finished never fires.
+    QTimer::singleShot(250, this, [this]() {
+        if (m_closePending && isVisible())
+            forceHide();
+    });
 }

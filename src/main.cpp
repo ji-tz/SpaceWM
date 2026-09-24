@@ -7,6 +7,7 @@
 #include "core/SpaceManager.h"
 #include "core/WindowTracker.h"
 #include "hotkeys/HotkeyManager.h"
+#include "ui/OverviewHost.h"
 #include "ui/OverviewWindow.h"
 #include "ui/SwitchFlashOverlay.h"
 #include "ui/TrayIcon.h"
@@ -52,7 +53,7 @@ int main(int argc, char *argv[])
     HotkeyManager hotkeys;
     TrayIcon tray;
     SwitchFlashOverlay flash;
-    auto *overview = new OverviewWindow(&manager);
+    OverviewHost overview(&manager);
 
     // --- wire tracker -> manager ---
     QObject::connect(&tracker, &WindowTracker::windowCreated, &manager, [&](quint64 h) {
@@ -70,9 +71,6 @@ int main(int argc, char *argv[])
         auto *m = manager.monitorOf(target);
         if (!m)
             return;
-        // Only re-home when the window actually changed monitors.
-        // Re-assigning on every location-change event fought cloak state
-        // and could yank windows between spaces while the user dragged.
         const int owned = manager.spaceOfWindow(hwnd);
         if (owned < 0) {
             manager.trackWindow(hwnd);
@@ -108,23 +106,20 @@ int main(int argc, char *argv[])
         tray.setSpaceLabel(m->deviceName, index, int(m->spaces.size()));
     });
 
-    // --- overview ---
+    // --- overview: every monitor at once (Mission Control style) ---
     auto openOverview = [&]() {
-        if (overview->isOpen())
-            return;
-        HMONITOR h = monitors::fromCursor();
-        overview->openOnMonitor(h);
+        overview.openAll();
+    };
+    auto toggleOverview = [&]() {
+        if (overview.isOpen())
+            overview.closeAll(false);
+        else
+            overview.openAll();
     };
 
-    QObject::connect(overview, &OverviewWindow::closed, &manager, [&](int chosen) {
-        if (chosen < 0) {
-            // Cancel: hide overlay immediately (Esc already schedules dismiss).
-            return;
-        }
-        HMONITOR h = overview->targetMonitor();
-        // Switch + cloak while the overview stays visible (user sees the change).
-        manager.switchSpace(h, chosen, /*animateHint=*/false);
-        // Overview dismisses itself ~200ms after closed() so cloak can settle.
+    QObject::connect(&overview, &OverviewHost::spaceChosen, &manager,
+                     [&](quint64 hmon, int space) {
+        manager.switchSpace(reinterpret_cast<HMONITOR>(hmon), space, /*animateHint=*/false);
     });
 
     // --- hotkeys ---
@@ -152,10 +147,7 @@ int main(int argc, char *argv[])
             break;
         }
         case A::ToggleOverview:
-            if (overview->isOpen())
-                overview->closeOverview(false);
-            else
-                openOverview();
+            toggleOverview();
             break;
         case A::JumpSpace1:
         case A::JumpSpace2:

@@ -2,38 +2,50 @@
 
 #include "../core/SpaceManager.h"
 
-#include <QHash>
 #include <QWidget>
 #include <Windows.h>
-#include <functional>
 
 class QHBoxLayout;
 class QLabel;
 class QPropertyAnimation;
 class SpaceCardWidget;
 
-// Fullscreen, per-monitor overview of that monitor's spaces.
+// Fullscreen overview for ONE monitor.
 class OverviewWindow : public QWidget {
     Q_OBJECT
 public:
     explicit OverviewWindow(SpaceManager *manager, QWidget *parent = nullptr);
 
-    void openOnMonitor(HMONITOR hmon);
-    // Begin close: emits closed(chosen) so the app can switch spaces first.
-    // Visual dismiss happens in dismiss() after cloak has been applied.
+    void assignMonitor(HMONITOR hmon) { m_hmon = hmon; }
+    void openOnMonitor(HMONITOR hmon, bool takeFocus = true);
+
+    // User commit/cancel on this panel: emits closed() once.
     void closeOverview(bool commit);
-    // Hide the overlay (call after switchSpace / short delay).
+
+    // Host-sync lifecycle:
+    // 1) prepareClose — mark closing (isOpen→false), no anim yet
+    // 2) startExit    — begin fade-out together with sibling panels
+    // 3) forceHide    — belt-and-suspenders hide()
+    void prepareClose();
+    void startExit();
+    void forceHide();
+
+    // Back-compat helpers used by tests / single-panel path.
+    void closeQuietly();
     void dismiss();
+
+    void setHostManaged(bool on) { m_hostManaged = on; }
 
     bool isOpen() const { return m_open; }
     bool isDismissing() const { return m_closePending && !m_open; }
     bool isAnimating() const { return m_animating; }
+    bool isExitStarted() const { return m_exitStarted; }
     HMONITOR targetMonitor() const { return m_hmon; }
     int selectedIndex() const { return m_selected; }
     int cardCount() const { return m_cards.size(); }
 
 signals:
-    void closed(int chosenSpace); // -1 if cancelled
+    void closed(int chosenSpace);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -53,6 +65,8 @@ private:
     bool m_open = false;
     bool m_animating = false;
     bool m_closePending = false;
+    bool m_hostManaged = false;
+    bool m_exitStarted = false;
     int m_selected = 0;
     int m_pendingCommit = -1;
 
