@@ -70,9 +70,16 @@ int main(int argc, char *argv[])
         auto *m = manager.monitorOf(target);
         if (!m)
             return;
-        // If not tracked, adopt; if tracked on another monitor, move to current space there.
-        // Simplified: assign to current space of the monitor it now lives on.
-        manager.assignWindow(hwnd, target, m->currentIndex);
+        // Only re-home when the window actually changed monitors.
+        // Re-assigning on every location-change event fought cloak state
+        // and could yank windows between spaces while the user dragged.
+        const int owned = manager.spaceOfWindow(hwnd);
+        if (owned < 0) {
+            manager.trackWindow(hwnd);
+            return;
+        }
+        if (manager.ownerMonitorOf(hwnd) != target)
+            manager.assignWindow(hwnd, target, m->currentIndex);
     });
 
     // Display change

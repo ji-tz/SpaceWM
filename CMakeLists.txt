@@ -7,14 +7,16 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Test)
 
 if(NOT WIN32)
   message(FATAL_ERROR "SpaceWM targets Windows only")
 endif()
 
-add_executable(SpaceWM WIN32
-  src/main.cpp
+# ---------------------------------------------------------------------------
+# Core library (no main) — shared by the app and the test binaries.
+# ---------------------------------------------------------------------------
+add_library(spacewm_core STATIC
   src/core/CloakController.h
   src/core/CloakController.cpp
   src/core/MonitorInfo.h
@@ -37,9 +39,9 @@ add_executable(SpaceWM WIN32
   src/ui/TrayIcon.cpp
 )
 
-target_include_directories(SpaceWM PRIVATE src)
+target_include_directories(spacewm_core PUBLIC src)
 
-target_link_libraries(SpaceWM PRIVATE
+target_link_libraries(spacewm_core PUBLIC
   Qt6::Widgets
   Qt6::Gui
   dwmapi
@@ -49,7 +51,7 @@ target_link_libraries(SpaceWM PRIVATE
   ole32
 )
 
-target_compile_definitions(SpaceWM PRIVATE
+target_compile_definitions(spacewm_core PUBLIC
   UNICODE
   _UNICODE
   NOMINMAX
@@ -57,21 +59,27 @@ target_compile_definitions(SpaceWM PRIVATE
 )
 
 if(MSVC)
-  target_compile_options(SpaceWM PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  target_compile_options(spacewm_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 
 # ---------------------------------------------------------------------------
-# Runtime deployment layout:
-#   SpaceWM/lib/     canonical staging area for Qt DLLs, plugins, MSVC CRT
-#   SpaceWM/build/   SpaceWM.exe + copy of lib/ (runnable directory)
-# After every successful link, refresh lib/ with windeployqt, then mirror it
-# into the output directory next to the executable.
+# Application
+# ---------------------------------------------------------------------------
+add_executable(SpaceWM WIN32
+  src/main.cpp
+)
+
+target_link_libraries(SpaceWM PRIVATE spacewm_core)
+
+# ---------------------------------------------------------------------------
+# Runtime deployment:
+#   SpaceWM/lib/     staging for Qt DLLs, plugins, MSVC CRT
+#   SpaceWM/build/   SpaceWM.exe + copy of lib/
 # ---------------------------------------------------------------------------
 set(SPACEWM_LIB_DIR "${CMAKE_SOURCE_DIR}/lib")
 
 find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${Qt6_DIR}/../../../bin")
 
-# MSVC redistributable CRT folder (optional — skip if not found)
 set(SPACEWM_CRT_DIR "")
 if(MSVC)
   file(GLOB _crt_candidates
@@ -80,7 +88,6 @@ if(MSVC)
     "C:/Program Files (x86)/Microsoft Visual Studio/*/*/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT"
   )
   if(_crt_candidates)
-    # Prefer the newest CRT redist
     list(SORT _crt_candidates)
     list(REVERSE _crt_candidates)
     list(GET _crt_candidates 0 SPACEWM_CRT_DIR)
@@ -89,7 +96,6 @@ endif()
 
 if(WINDEPLOYQT_EXECUTABLE)
   add_custom_command(TARGET SpaceWM POST_BUILD
-    # 1) Stage Qt runtime into lib/
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SPACEWM_LIB_DIR}"
     COMMAND "${WINDEPLOYQT_EXECUTABLE}"
       --release
@@ -98,12 +104,10 @@ if(WINDEPLOYQT_EXECUTABLE)
       --no-system-d3d-compiler
       --no-opengl-sw
       $<TARGET_FILE:SpaceWM>
-    # 2) Stage MSVC CRT into lib/ (if redist present)
     COMMAND "${CMAKE_COMMAND}"
       -DCRT_DIR=${SPACEWM_CRT_DIR}
       -DDEST_DIR=${SPACEWM_LIB_DIR}
       -P "${CMAKE_SOURCE_DIR}/cmake/CopyCrt.cmake"
-    # 3) Mirror lib/ -> build/ (exe directory)
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${SPACEWM_LIB_DIR}"
       "$<TARGET_FILE_DIR:SpaceWM>"
@@ -113,3 +117,9 @@ if(WINDEPLOYQT_EXECUTABLE)
 else()
   message(WARNING "windeployqt not found; runtime libs will not be staged into lib/")
 endif()
+
+# ---------------------------------------------------------------------------
+# Tests (Qt Test)
+# ---------------------------------------------------------------------------
+enable_testing()
+add_subdirectory(tests)

@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <Windows.h>
 
+class QTimer;
+
 // Brief translucent flash on a monitor when a space switches —
 // cheap "slide/fade" cue without capturing the framebuffer every frame.
 class SwitchFlashOverlay : public QWidget {
@@ -24,5 +26,7 @@ private:
 
     bool m_playing = false;
     int m_direction = 0;
+    int m_frame = 0;
     qreal m_progress = 0.0; // 0..1
+    QTimer *m_timer = nullptr;
 };

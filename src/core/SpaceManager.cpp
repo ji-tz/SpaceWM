@@ -170,6 +170,14 @@ int SpaceManager::spaceOfWindow(HWND hwnd) const
     return it == m_owner.constEnd() ? -1 : it.value().space;
 }
 
+HMONITOR SpaceManager::ownerMonitorOf(HWND hwnd) const
+{
+    auto it = m_owner.constFind(hwnd);
+    if (it == m_owner.constEnd())
+        return nullptr;
+    return reinterpret_cast<HMONITOR>(it.value().hmon);
+}
+
 void SpaceManager::adoptExistingWindows()
 {
     const auto windows = WindowTracker::snapshotManageableWindows();

@@ -56,6 +56,9 @@ public:
     // Which space currently owns this window (on its monitor), or -1.
     int spaceOfWindow(HWND hwnd) const;
 
+    // Which monitor currently owns this window, or nullptr.
+    HMONITOR ownerMonitorOf(HWND hwnd) const;
+
     // Initial adoption of existing windows onto space 0 of their monitor.
     void adoptExistingWindows();
 

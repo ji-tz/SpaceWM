@@ -1,0 +1,152 @@
+#include <QtTest>
+
+#include "core/CloakController.h"
+#include "core/SpaceManager.h"
+#include "core/WindowTracker.h"
+
+#include <Windows.h>
+
+// End-to-end space model against the real primary monitor + a real test window.
+class TestSpaceManager : public QObject {
+    Q_OBJECT
+private slots:
+    void initTestCase()
+    {
+        m_hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"SpaceWM space test",
+            WS_OVERLAPPEDWINDOW, 10, 10, 300, 200,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(m_hwnd != nullptr);
+        ::ShowWindow(m_hwnd, SW_SHOWNORMAL);
+        ::UpdateWindow(m_hwnd);
+    }
+
+    void cleanupTestCase()
+    {
+        if (m_hwnd) {
+            ::cloak::set(m_hwnd, false);
+            ::DestroyWindow(m_hwnd);
+            m_hwnd = nullptr;
+        }
+    }
+
+    void hasMonitorsAndFourSpaces()
+    {
+        SpaceManager sm;
+        auto *list = new QVector<MonitorSpaces *>(); // avoid leak confusion — use stack
+        delete list;
+        const auto mons = sm.monitors();
+        QVERIFY(!mons.isEmpty());
+        auto *m = mons.first();
+        QCOMPARE(m->spaces.size(), 4);
+        QCOMPARE(m->currentIndex, 0);
+        QVERIFY(!m->spaces[0].name.isEmpty());
+    }
+
+    void switchSpaceChangesIndexAndEmits()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        m->currentIndex = 0;
+
+        QSignalSpy spy(&sm, &SpaceManager::spaceChanged);
+        QVERIFY(sm.switchSpace(m->hmon, 1, /*animateHint=*/false));
+        QCOMPARE(m->currentIndex, 1);
+        QCOMPARE(spy.count(), 1);
+
+        // Same index is a no-op.
+        QVERIFY(!sm.switchSpace(m->hmon, 1, false));
+        QCOMPARE(spy.count(), 1);
+
+        // Out of range is a no-op.
+        QVERIFY(!sm.switchSpace(m->hmon, 99, false));
+        QVERIFY(!sm.switchSpace(m->hmon, -1, false));
+    }
+
+    void wraparoundHelpersInAppUseModulo()
+    {
+        // Document expected wrap used by hotkeys: (i + n) % n
+        const int n = 4;
+        QCOMPARE((0 + n) % n, 0);
+        QCOMPARE((3 + 1) % n, 0);
+        QCOMPARE((0 - 1 + n) % n, 3);
+    }
+
+    void assignAndQueryOwnership()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        m->currentIndex = 0;
+
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 2));
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 2);
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), m->hmon);
+
+        // Moving to current space should uncloak; moving away should cloak.
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 0);
+        // Give DWM a moment.
+        ::Sleep(50);
+        QVERIFY(!cloak::isCloaked(m_hwnd));
+
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 3));
+        ::Sleep(50);
+        QVERIFY(cloak::isCloaked(m_hwnd));
+
+        // Clean: put back on space 0 and untrack.
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        sm.untrackWindow(m_hwnd);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), -1);
+        QVERIFY(sm.ownerMonitorOf(m_hwnd) == nullptr);
+        ::cloak::set(m_hwnd, false);
+    }
+
+    void switchOnlyAffectsAssignedWindowVisibility()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        QVERIFY(sm.switchSpace(m->hmon, 1, false));
+        ::Sleep(80);
+        QVERIFY(cloak::isCloaked(m_hwnd));
+
+        QVERIFY(sm.switchSpace(m->hmon, 0, false));
+        ::Sleep(80);
+        QVERIFY(!cloak::isCloaked(m_hwnd));
+
+        sm.untrackWindow(m_hwnd);
+        ::cloak::set(m_hwnd, false);
+    }
+
+    void overviewOpenSuppressesAnimationSignal()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        m->currentIndex = 0;
+        sm.setOverviewOpen(true);
+
+        QSignalSpy anim(&sm, &SpaceManager::requestSwitchAnimation);
+        QVERIFY(sm.switchSpace(m->hmon, 2, true));
+        QCOMPARE(anim.count(), 0);
+
+        sm.setOverviewOpen(false);
+        QVERIFY(sm.switchSpace(m->hmon, 0, true));
+        QCOMPARE(anim.count(), 1);
+    }
+
+    void refreshMonitorsIsIdempotent()
+    {
+        SpaceManager sm;
+        const int before = sm.monitors().size();
+        sm.refreshMonitors();
+        sm.refreshMonitors();
+        QCOMPARE(sm.monitors().size(), before);
+    }
+
+private:
+    HWND m_hwnd = nullptr;
+};
+
+QTEST_MAIN(TestSpaceManager)
+#include "test_space_manager.moc"

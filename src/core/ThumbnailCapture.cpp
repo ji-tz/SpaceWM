@@ -2,6 +2,8 @@
 
 #include <QPainter>
 
+#include <algorithm>
+
 #ifndef PW_RENDERFULLCONTENT
 #define PW_RENDERFULLCONTENT 0x00000002
 #endif
@@ -29,18 +31,25 @@ QImage capture(HWND hwnd, const QSize &maxSize)
         w = int(w * s);
         h = int(h * s);
     }
+    if (w <= 0 || h <= 0)
+        return {};
 
     HDC screen = ::GetDC(nullptr);
+    if (!screen)
+        return {};
     HDC mem = ::CreateCompatibleDC(screen);
     HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+    if (!mem || !bmp) {
+        if (bmp) ::DeleteObject(bmp);
+        if (mem) ::DeleteDC(mem);
+        ::ReleaseDC(nullptr, screen);
+        return {};
+    }
     HGDIOBJ old = ::SelectObject(mem, bmp);
 
-    // PW_RENDERFULLCONTENT captures layered/DWM content better than plain PrintWindow.
     const BOOL ok = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT | PW_CLIENTONLY);
-    // Fallback if PrintWindow fails (some protected windows).
-    if (!ok) {
+    if (!ok)
         ::BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY);
-    }
 
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -51,17 +60,18 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     bi.bmiHeader.biCompression = BI_RGB;
 
     QVector<uchar> pixels(size_t(w) * size_t(h) * 4);
-    ::GetDIBits(mem, bmp, 0, UINT(h), pixels.data(), &bi, DIB_RGB_COLORS);
-
-    QImage img(w, h, QImage::Format_ARGB32);
-    memcpy(img.bits(), pixels.data(), size_t(w) * size_t(h) * 4);
+    const int lines = ::GetDIBits(mem, bmp, 0, UINT(h), pixels.data(), &bi, DIB_RGB_COLORS);
 
     ::SelectObject(mem, old);
     ::DeleteObject(bmp);
     ::DeleteDC(mem);
     ::ReleaseDC(nullptr, screen);
 
-    // GDI is BGRA premultiplied-ish; convert to RGBA-safe ARGB32.
+    if (lines <= 0)
+        return {};
+
+    QImage img(w, h, QImage::Format_ARGB32);
+    memcpy(img.bits(), pixels.data(), size_t(w) * size_t(h) * 4);
     img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
     if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))

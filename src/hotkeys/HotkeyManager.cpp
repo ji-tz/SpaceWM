@@ -15,13 +15,15 @@ constexpr int kIdJump4 = 1014;
 HotkeyManager::HotkeyManager(QObject *parent)
     : QObject(parent)
 {
-    qApp->installNativeEventFilter(this);
+    if (qApp)
+        qApp->installNativeEventFilter(this);
 }
 
 HotkeyManager::~HotkeyManager()
 {
     unregisterAll();
-    qApp->removeNativeEventFilter(this);
+    if (qApp)
+        qApp->removeNativeEventFilter(this);
 }
 
 bool HotkeyManager::registerDefaults()
