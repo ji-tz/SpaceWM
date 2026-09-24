@@ -9,8 +9,12 @@ class QHBoxLayout;
 class QLabel;
 class QPropertyAnimation;
 class SpaceCardWidget;
+class WindowPreviewWidget;
+class QScrollArea;
 
-// Fullscreen overview for ONE monitor.
+// Mission Control style overview for ONE monitor:
+//   top    — space strip (click to switch, drop windows to place)
+//   bottom — window previews on this monitor (drag onto a space)
 class OverviewWindow : public QWidget {
     Q_OBJECT
 public:
@@ -19,21 +23,12 @@ public:
     void assignMonitor(HMONITOR hmon) { m_hmon = hmon; }
     void openOnMonitor(HMONITOR hmon, bool takeFocus = true);
 
-    // User commit/cancel on this panel: emits closed() once.
     void closeOverview(bool commit);
-
-    // Host-sync lifecycle:
-    // 1) prepareClose — mark closing (isOpen→false), no anim yet
-    // 2) startExit    — begin fade-out together with sibling panels
-    // 3) forceHide    — belt-and-suspenders hide()
     void prepareClose();
     void startExit();
     void forceHide();
-
-    // Back-compat helpers used by tests / single-panel path.
     void closeQuietly();
     void dismiss();
-
     void setHostManaged(bool on) { m_hostManaged = on; }
 
     bool isOpen() const { return m_open; }
@@ -43,9 +38,15 @@ public:
     HMONITOR targetMonitor() const { return m_hmon; }
     int selectedIndex() const { return m_selected; }
     int cardCount() const { return m_cards.size(); }
+    int windowPreviewCount() const { return m_windowPreviews.size(); }
+
+    // Mission Control: drop hwnd onto space index (public for tests).
+    bool placeWindowInSpace(HWND hwnd, int spaceIndex);
 
 signals:
     void closed(int chosenSpace);
+    // Emitted after a successful drag-place (hwnd may be null in tests via placeWindowInSpace).
+    void windowPlaced(quint64 hwnd, int spaceIndex);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -53,12 +54,14 @@ protected:
 
 private:
     void rebuildCards();
+    void rebuildWindowPreviews();
     void setSelected(int index);
     void cancelAnimations();
     void playEnterAnimation();
     void playExitAnimation();
     void finishClose();
     void pinToMonitorPhysically();
+    QString windowTitle(HWND hwnd) const;
 
     SpaceManager *m_manager = nullptr;
     HMONITOR m_hmon = nullptr;
@@ -72,8 +75,14 @@ private:
 
     QWidget *m_root = nullptr;
     QLabel *m_header = nullptr;
+    QLabel *m_hint = nullptr;
     QHBoxLayout *m_cardRow = nullptr;
+    QWidget *m_spaceStripHost = nullptr;
+    QWidget *m_windowHost = nullptr;
+    QHBoxLayout *m_windowRow = nullptr;
+    QScrollArea *m_windowScroll = nullptr;
     QVector<SpaceCardWidget *> m_cards;
+    QVector<WindowPreviewWidget *> m_windowPreviews;
 
     QPropertyAnimation *m_fadeAnim = nullptr;
 };

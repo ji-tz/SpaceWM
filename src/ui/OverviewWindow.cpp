@@ -1,7 +1,9 @@
 #include "OverviewWindow.h"
 
 #include "SpaceCardWidget.h"
+#include "WindowPreviewWidget.h"
 #include "../core/ThumbnailCapture.h"
+#include "../core/WindowTracker.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
@@ -9,8 +11,10 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPropertyAnimation>
+#include <QScrollArea>
 #include <QScreen>
 #include <QTimer>
+#include <QVBoxLayout>
 
 OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
@@ -28,33 +32,103 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     outer->addWidget(m_root);
 
     auto *v = new QVBoxLayout(m_root);
-    v->setContentsMargins(40, 32, 40, 40);
-    v->setSpacing(20);
+    v->setContentsMargins(36, 28, 36, 36);
+    v->setSpacing(14);
 
     m_header = new QLabel(m_root);
     m_header->setStyleSheet(QStringLiteral(
-        "QLabel { color: #ffffff; font-size: 24px; font-weight: 700; "
+        "QLabel { color: #ffffff; font-size: 22px; font-weight: 700; "
         "background: transparent; border: none; }"));
     v->addWidget(m_header);
 
-    auto *hint = new QLabel(
-        tr("←/→ select · Enter switch · Esc cancel · click card"), m_root);
-    hint->setStyleSheet(QStringLiteral(
+    m_hint = new QLabel(
+        tr("Top: spaces (click / drop windows here) · Bottom: drag windows to a space · "
+           "←/→ select · Enter switch · Esc cancel"),
+        m_root);
+    m_hint->setStyleSheet(QStringLiteral(
         "QLabel { color: rgba(255,255,255,140); font-size: 13px; "
         "background: transparent; border: none; }"));
-    v->addWidget(hint);
+    v->addWidget(m_hint);
 
-    auto *scrollHost = new QWidget(m_root);
-    m_cardRow = new QHBoxLayout(scrollHost);
-    m_cardRow->setContentsMargins(0, 8, 0, 0);
-    m_cardRow->setSpacing(16);
+    // --- Top: space strip ---
+    auto *spaceLabel = new QLabel(tr("Spaces"), m_root);
+    spaceLabel->setStyleSheet(QStringLiteral(
+        "QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
+        "background: transparent; border: none; }"));
+    v->addWidget(spaceLabel);
+
+    m_spaceStripHost = new QWidget(m_root);
+    auto *stripOuter = new QVBoxLayout(m_spaceStripHost);
+    stripOuter->setContentsMargins(0, 0, 0, 0);
+    m_cardRow = new QHBoxLayout;
+    m_cardRow->setContentsMargins(0, 4, 0, 4);
+    m_cardRow->setSpacing(14);
     m_cardRow->addStretch(1);
-    v->addWidget(scrollHost, 1);
+    stripOuter->addLayout(m_cardRow);
+    v->addWidget(m_spaceStripHost);
+
+    // --- Bottom: draggable windows ---
+    auto *winLabel = new QLabel(tr("Windows on this display — drag onto a space"), m_root);
+    winLabel->setStyleSheet(QStringLiteral(
+        "QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
+        "background: transparent; border: none; }"));
+    v->addWidget(winLabel);
+
+    m_windowScroll = new QScrollArea(m_root);
+    m_windowScroll->setWidgetResizable(true);
+    m_windowScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_windowScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_windowScroll->setFrameShape(QFrame::NoFrame);
+    m_windowScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
+
+    m_windowHost = new QWidget;
+    m_windowHost->setStyleSheet(QStringLiteral("background: transparent;"));
+    auto *winOuter = new QVBoxLayout(m_windowHost);
+    winOuter->setContentsMargins(0, 0, 0, 0);
+    m_windowRow = new QHBoxLayout;
+    m_windowRow->setContentsMargins(0, 0, 0, 0);
+    m_windowRow->setSpacing(12);
+    m_windowRow->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_windowRow->addStretch(1);
+    winOuter->addLayout(m_windowRow);
+    m_windowScroll->setWidget(m_windowHost);
+    v->addWidget(m_windowScroll, 1);
 
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
     setStyleSheet(QStringLiteral(
         "#OverviewRoot { background: rgba(8, 8, 12, 215); }"
         "#OverviewPanel { background: transparent; }"));
+}
+
+QString OverviewWindow::windowTitle(HWND hwnd) const
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return {};
+    wchar_t buf[256]{};
+    ::GetWindowTextW(hwnd, buf, 256);
+    QString t = QString::fromWCharArray(buf).trimmed();
+    return t;
+}
+
+bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
+{
+    if (!m_manager || !hwnd || !m_hmon)
+        return false;
+    auto *m = m_manager->monitorOf(m_hmon);
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
+        return false;
+
+    if (!m_manager->trackWindow(hwnd))
+        return false;
+    if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex))
+        return false;
+
+    emit windowPlaced(reinterpret_cast<quint64>(hwnd), spaceIndex);
+    // Stay open so the user can place more windows (macOS behavior).
+    rebuildCards();
+    rebuildWindowPreviews();
+    setSelected(spaceIndex);
+    return true;
 }
 
 void OverviewWindow::pinToMonitorPhysically()
@@ -65,7 +139,6 @@ void OverviewWindow::pinToMonitorPhysically()
     if (!monitors::physRectOf(m_hmon, &phys))
         return;
     if (HWND h = reinterpret_cast<HWND>(winId())) {
-        // Physical pixels — exact clip even with mixed DPI (PMv2).
         ::SetWindowPos(h, HWND_TOP,
                        phys.left, phys.top,
                        phys.right - phys.left, phys.bottom - phys.top,
@@ -98,6 +171,7 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
 
     setGeometry(m->geometry);
     rebuildCards();
+    rebuildWindowPreviews();
 
     m_open = true;
     m_closePending = false;
@@ -126,7 +200,6 @@ void OverviewWindow::closeOverview(bool commit)
         return;
 
     m_pendingCommit = commit ? m_selected : -1;
-    // Mark closing on this panel; host will sync siblings.
     m_open = false;
     m_closePending = true;
     cancelAnimations();
@@ -134,13 +207,11 @@ void OverviewWindow::closeOverview(bool commit)
     emit closed(m_pendingCommit);
 
     if (!m_hostManaged) {
-        // Standalone panel (unit tests / single-monitor fallback).
         if (commit)
             QTimer::singleShot(200, this, &OverviewWindow::startExit);
         else
             startExit();
     }
-    // Host-managed: OverviewHost::onPanelClosed drives prepare/start/force on ALL panels.
 }
 
 void OverviewWindow::prepareClose()
@@ -242,8 +313,8 @@ void OverviewWindow::rebuildCards()
 
     for (int i = 0; i < m->spaces.size(); ++i) {
         auto *card = new SpaceCardWidget(m_root);
+        card->setCompact(true); // top strip
         card->setSpace(i, m->spaces[i].name, i == current);
-        // Strict real monitor aspect (portrait stays tall/narrow).
         card->setMonitorAspect(
             m->physRect.right - m->physRect.left,
             m->physRect.bottom - m->physRect.top);
@@ -264,21 +335,56 @@ void OverviewWindow::rebuildCards()
             if (m_open)
                 setSelected(idx);
         });
+        connect(card, &SpaceCardWidget::windowDropped, this,
+                [this](int spaceIndex, quint64 hwnd) {
+                    if (!m_open)
+                        return;
+                    placeWindowInSpace(reinterpret_cast<HWND>(hwnd), spaceIndex);
+                });
 
         m_cardRow->addWidget(card, 0, Qt::AlignVCenter);
         m_cards.push_back(card);
     }
     m_cardRow->addStretch(1);
     setSelected(m_cards.isEmpty() ? -1 : current);
+}
 
-    for (int i = 0; i < m_cards.size() && i < m->spaces.size(); ++i) {
-        m_cards[i]->setMonitorAspect(
-            m->physRect.right - m->physRect.left,
-            m->physRect.bottom - m->physRect.top);
-        QImage shot = m->spaces[i].screenshot;
-        if (shot.isNull())
-            shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
-        m_cards[i]->setScreenshot(shot);
+void OverviewWindow::rebuildWindowPreviews()
+{
+    auto *m = m_manager ? m_manager->monitorOf(m_hmon) : nullptr;
+    if (!m || !m_windowRow)
+        return;
+
+    while (QLayoutItem *item = m_windowRow->takeAt(0)) {
+        if (item->widget())
+            item->widget()->deleteLater();
+        delete item;
+    }
+    m_windowPreviews.clear();
+
+    // All windows assigned to any space on this monitor (all spaces).
+    QVector<HWND> hwnds;
+    for (const Space &sp : m->spaces) {
+        for (HWND h : sp.windows) {
+            if (::IsWindow(h) && !::IsIconic(h))
+                hwnds.push_back(h);
+        }
+    }
+
+    for (HWND h : hwnds) {
+        auto *tile = new WindowPreviewWidget(m_windowHost);
+        QImage shot = thumbs::capture(h, QSize(320, 180));
+        tile->setWindow(h, windowTitle(h), shot);
+        m_windowRow->addWidget(tile, 0, Qt::AlignTop);
+        m_windowPreviews.push_back(tile);
+    }
+    m_windowRow->addStretch(1);
+
+    if (m_windowPreviews.isEmpty()) {
+        auto *empty = new QLabel(tr("No windows on this display"), m_windowHost);
+        empty->setStyleSheet(QStringLiteral(
+            "QLabel { color: rgba(255,255,255,100); font-size: 13px; background: transparent; border: none; }"));
+        m_windowRow->addWidget(empty);
     }
 }
 
@@ -415,12 +521,10 @@ void OverviewWindow::playExitAnimation()
     if (!m_closePending)
         return;
     if (m_exitStarted && m_fadeAnim)
-        return; // already fading out
+        return;
 
     m_animating = true;
     m_exitStarted = true;
-
-    // Use window-level opacity: more reliable across monitors than QGraphicsEffect.
     cancelAnimations();
     setWindowOpacity(1.0);
 
@@ -437,7 +541,6 @@ void OverviewWindow::playExitAnimation()
     });
     anim->start(QAbstractAnimation::DeleteWhenStopped);
 
-    // Absolute fallback if finished never fires.
     QTimer::singleShot(250, this, [this]() {
         if (m_closePending && isVisible())
             forceHide();

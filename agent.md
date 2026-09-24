@@ -60,6 +60,7 @@ cmd /c "`"$vcvars`" && cmake --build D:\workspace\SpaceWM\build --parallel && ct
 | Space 卡片、竖屏真实宽高比、无 “No preview” | `ui/SpaceCardWidget.*` | `tests/test_space_card.cpp` |
 | 单屏 overview 开关 / 空卡片按键 / 快速连开 | `ui/OverviewWindow.*` | `tests/test_overview.cpp` |
 | **多屏同时 overview（Mission Control 式）** | `ui/OverviewHost.*` | `tests/test_overview_host.cpp` |
+| **窗口拖入 space（顶部 space 条 + 底部窗口预览）** | `ui/WindowPreviewWidget.*` + `OverviewWindow` drop | `tests/test_window_placement.cpp` |
 | 切换 flash 动画 | `ui/SwitchFlashOverlay.*` | `tests/test_flash_overlay.cpp` |
 | 托盘 | `ui/TrayIcon.*` | （可选；UI 弱依赖，暂无独立 test） |
 | 主程序装配 `main.cpp` | `src/main.cpp` | （集成路径靠手动 + 上述单测） |

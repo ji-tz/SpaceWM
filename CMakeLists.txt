@@ -35,6 +35,8 @@ add_library(spacewm_core STATIC
   src/ui/OverviewHost.cpp
   src/ui/SpaceCardWidget.h
   src/ui/SpaceCardWidget.cpp
+  src/ui/WindowPreviewWidget.h
+  src/ui/WindowPreviewWidget.cpp
   src/ui/SwitchFlashOverlay.h
   src/ui/SwitchFlashOverlay.cpp
   src/ui/TrayIcon.h

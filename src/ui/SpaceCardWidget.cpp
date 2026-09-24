@@ -1,6 +1,11 @@
 #include "SpaceCardWidget.h"
+#include "WindowPreviewWidget.h"
 
+#include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QHBoxLayout>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QStyle>
@@ -12,6 +17,8 @@ namespace {
 constexpr int kPreviewMaxW = 340;
 constexpr int kPreviewMaxH = 240;
 constexpr int kPreviewMinEdge = 80;
+constexpr int kCompactMaxW = 200;
+constexpr int kCompactMaxH = 140;
 } // namespace
 
 SpaceCardWidget::SpaceCardWidget(QWidget *parent)
@@ -20,6 +27,7 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
     setObjectName(QStringLiteral("SpaceCard"));
     setAttribute(Qt::WA_Hover);
     setCursor(Qt::PointingHandCursor);
+    setAcceptDrops(true);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(12, 10, 12, 12);
@@ -51,7 +59,8 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
         "#SpaceCard { background: rgba(28, 28, 34, 220); border: 2px solid rgba(255,255,255,40);"
         " border-radius: 14px; }"
         "#SpaceCard[current=\"true\"] { border: 2px solid #7aa2ff; }"
-        "#SpaceCard[highlight=\"true\"] { background: rgba(40, 44, 56, 235); border: 2px solid #9ec1ff; }"));
+        "#SpaceCard[highlight=\"true\"] { background: rgba(40, 44, 56, 235); border: 2px solid #9ec1ff; }"
+        "#SpaceCard[drophover=\"true\"] { background: rgba(50, 70, 110, 245); border: 3px solid #7affc8; }"));
 
     applyAspectLayout();
 }
@@ -59,10 +68,12 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
 QSize SpaceCardWidget::previewSizeForAspect() const
 {
     const double a = m_aspect > 0.001 ? m_aspect : (16.0 / 9.0);
-    int w = kPreviewMaxW;
+    const int maxW = m_compact ? kCompactMaxW : kPreviewMaxW;
+    const int maxH = m_compact ? kCompactMaxH : kPreviewMaxH;
+    int w = maxW;
     int h = int(qRound(w / a));
-    if (h > kPreviewMaxH) {
-        h = kPreviewMaxH;
+    if (h > maxH) {
+        h = maxH;
         w = int(qRound(h * a));
     }
     w = std::max(w, kPreviewMinEdge);
@@ -76,20 +87,33 @@ void SpaceCardWidget::applyAspectLayout()
     m_preview->setFixedSize(s);
     setMinimumWidth(s.width() + 28);
     setMaximumWidth(s.width() + 40);
-    setMinimumHeight(s.height() + 72);
-    setMaximumHeight(s.height() + 88);
+    setMinimumHeight(s.height() + (m_compact ? 56 : 72));
+    setMaximumHeight(s.height() + (m_compact ? 64 : 88));
     updateGeometry();
 }
 
 QSize SpaceCardWidget::sizeHint() const
 {
     const QSize s = previewSizeForAspect();
-    return {s.width() + 28, s.height() + 80};
+    return {s.width() + 28, s.height() + (m_compact ? 60 : 80)};
 }
 
 QSize SpaceCardWidget::minimumSizeHint() const
 {
     return sizeHint();
+}
+
+void SpaceCardWidget::setCompact(bool compact)
+{
+    if (m_compact == compact)
+        return;
+    m_compact = compact;
+    if (m_title)
+        m_title->setStyleSheet(compact
+            ? QStringLiteral("QLabel { color: #f0f0f0; font-size: 14px; font-weight: 600; border: none; background: transparent; }")
+            : QStringLiteral("QLabel { color: #f0f0f0; font-size: 16px; font-weight: 600; border: none; background: transparent; }"));
+    applyAspectLayout();
+    paintPixmap();
 }
 
 void SpaceCardWidget::setMonitorAspect(int physWidth, int physHeight)
@@ -163,6 +187,71 @@ void SpaceCardWidget::setHighlighted(bool on)
     style()->unpolish(this);
     style()->polish(this);
     update();
+}
+
+bool SpaceCardWidget::extractHwnd(const QMimeData *mime, quint64 *out)
+{
+    if (!mime || !mime->hasFormat(WindowPreviewWidget::kMimeType))
+        return false;
+    const QByteArray payload = mime->data(WindowPreviewWidget::kMimeType);
+    if (payload.size() < int(sizeof(quint64)))
+        return false;
+    QDataStream ds(payload);
+    quint64 h = 0;
+    ds >> h;
+    if (!h)
+        return false;
+    if (out)
+        *out = h;
+    return true;
+}
+
+void SpaceCardWidget::dragEnterEvent(QDragEnterEvent *event)
+{
+    quint64 h = 0;
+    if (extractHwnd(event->mimeData(), &h)) {
+        m_dropHover = true;
+        setProperty("drophover", true);
+        style()->unpolish(this);
+        style()->polish(this);
+        event->acceptProposedAction();
+    } else {
+        event->ignore();
+    }
+}
+
+void SpaceCardWidget::dragMoveEvent(QDragMoveEvent *event)
+{
+    quint64 h = 0;
+    if (extractHwnd(event->mimeData(), &h))
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+
+void SpaceCardWidget::dragLeaveEvent(QDragLeaveEvent *event)
+{
+    m_dropHover = false;
+    setProperty("drophover", false);
+    style()->unpolish(this);
+    style()->polish(this);
+    QFrame::dragLeaveEvent(event);
+}
+
+void SpaceCardWidget::dropEvent(QDropEvent *event)
+{
+    quint64 h = 0;
+    m_dropHover = false;
+    setProperty("drophover", false);
+    style()->unpolish(this);
+    style()->polish(this);
+
+    if (extractHwnd(event->mimeData(), &h) && m_index >= 0) {
+        emit windowDropped(m_index, h);
+        event->acceptProposedAction();
+    } else {
+        event->ignore();
+    }
 }
 
 void SpaceCardWidget::mousePressEvent(QMouseEvent *event)
