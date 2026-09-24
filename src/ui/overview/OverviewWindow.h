@@ -15,6 +15,7 @@ class WindowPreviewWidget;
 class AddSpaceButton;
 class QScrollArea;
 class QEvent;
+class QTimer;
 
 // Mission Control style overview for ONE monitor:
 //   top    — space strip (click to switch, drop windows to place)
@@ -57,6 +58,13 @@ public:
     // Space index captured when overview opened (restored on cancel if needed).
     int originSpaceIndex() const { return m_originSpace; }
 
+    // Soft-preview hold: after leaving space/window strips, wait this long
+    // before restoring the current space's window strip (default 1000 ms).
+    void setSoftPreviewHoldMs(int ms);
+    int softPreviewHoldMs() const { return m_holdMs; }
+    // True while the hold timer is armed (pointer off keep-zones, not yet restored).
+    bool isSoftPreviewHoldPending() const;
+
 signals:
     void closed(int chosenSpace);
     // Emitted after a successful drag-place (hwnd may be null in tests via placeWindowInSpace).
@@ -82,9 +90,12 @@ private:
     void finishClose();
     void pinToMonitorPhysically();
     QString windowTitle(HWND hwnd) const;
-    // True if pos is in the outer margin band of the panel (reset soft preview).
+    // True if pos is in the outer margin band of the panel (start hold timer).
     bool isOuterMarginPos(const QPoint &pos) const;
+    bool isKeepZoneWidget(QObject *w) const;
     void restoreStripToCurrentSpace();
+    void armSoftPreviewHold();
+    void cancelSoftPreviewHold();
     bool addSpaceFromStrip();
     bool addSpaceAndPlaceWindow(quint64 hwnd);
 
@@ -98,6 +109,8 @@ private:
     int m_selected = 0;
     int m_originSpace = 0;
     int m_pendingCommit = -1;
+    int m_holdMs = 1000;
+    QTimer *m_holdTimer = nullptr;
 
     QWidget *m_root = nullptr;
     QLabel *m_header = nullptr;

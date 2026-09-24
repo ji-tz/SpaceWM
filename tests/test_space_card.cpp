@@ -79,8 +79,14 @@ private slots:
         SpaceCardWidget card;
         card.setSpace(3, QStringLiteral("HasWin"), false);
         card.setRemovable(true);
+        card.setRemoveRevealDelayMs(0); // no dwell for the click path test
         QSignalSpy removed(&card, &SpaceCardWidget::removeRequested);
         QSignalSpy activated(&card, &SpaceCardWidget::activated);
+
+        // Enter → badge revealed immediately (delay 0).
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(&card, &enter);
+        QVERIFY(card.isRemoveBadgeShown());
 
         const QPoint c = card.removeBadge().center();
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(c),
@@ -93,6 +99,40 @@ private slots:
         QCOMPARE(removed.count(), 1);
         QCOMPARE(removed.first().at(0).toInt(), 3);
         QCOMPARE(activated.count(), 0);
+    }
+
+    void removeBadgeRevealsAfterHoverDelay()
+    {
+        SpaceCardWidget card;
+        card.setSpace(1, QStringLiteral("Any"), false);
+        card.setRemovable(true);
+        card.setRemoveRevealDelayMs(40);
+
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(&card, &enter);
+        // Dwell not elapsed yet.
+        QVERIFY(!card.isRemoveBadgeShown());
+
+        // Wait past delay while still "hovered".
+        QTest::qWait(80);
+        QCoreApplication::processEvents();
+        QVERIFY(card.isRemoveBadgeShown());
+
+        // Leave hides the badge again.
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(&card, &leave);
+        QVERIFY(!card.isRemoveBadgeShown());
+    }
+
+    void nonRemovableNeverRevealsBadge()
+    {
+        SpaceCardWidget card;
+        card.setSpace(0, QStringLiteral("Solo"), false);
+        card.setRemovable(false);
+        card.setRemoveRevealDelayMs(0);
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(&card, &enter);
+        QVERIFY(!card.isRemoveBadgeShown());
     }
 
     void leaveDoesNotCrash()

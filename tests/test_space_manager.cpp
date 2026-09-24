@@ -338,6 +338,19 @@ private slots:
         QCOMPARE(sm.monitors().size(), before);
     }
 
+    void rebuildEmitsSpacePreviewInvalidated()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        QSignalSpy spy(&sm, &SpaceManager::spacePreviewInvalidated);
+
+        sm.rebuildSpaceScreenshot(m->hmon, 0);
+        QVERIFY(spy.count() >= 1);
+        QCOMPARE(spy.last().at(0).toULongLong(),
+                 quint64(reinterpret_cast<quintptr>(m->hmon)));
+        QCOMPARE(spy.last().at(1).toInt(), 0);
+    }
+
 private:
     HWND m_hwnd = nullptr;
 };

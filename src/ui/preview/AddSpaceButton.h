@@ -9,6 +9,9 @@ class AddSpaceButton : public QFrame {
 public:
     explicit AddSpaceButton(QWidget *parent = nullptr);
 
+    // Drop a window HWND onto + (used by dropEvent and unit tests).
+    bool handleWindowDrop(quint64 hwnd);
+
 signals:
     void addRequested();
     void windowDropped(quint64 hwnd);

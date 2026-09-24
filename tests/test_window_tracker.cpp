@@ -110,6 +110,27 @@ private slots:
         emit tracker.windowDestroyed(reinterpret_cast<quint64>(nullptr));
         QVERIFY(true);
     }
+
+    void foregroundEventEmitsWindowForeground()
+    {
+        WindowTracker tracker;
+        QSignalSpy fg(&tracker, &WindowTracker::windowForeground);
+
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"fg-target",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 20, 20, 200, 120,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+
+        tracker.handle(EVENT_SYSTEM_FOREGROUND, hwnd, OBJID_WINDOW);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+
+        QCOMPARE(fg.count(), 1);
+        QCOMPARE(fg.first().at(0).toULongLong(),
+                 quint64(reinterpret_cast<quintptr>(hwnd)));
+
+        ::DestroyWindow(hwnd);
+    }
 };
 
 QTEST_MAIN(TestWindowTracker)

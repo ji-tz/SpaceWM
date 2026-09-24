@@ -7,6 +7,7 @@
 #include <QtGlobal>
 
 class QMimeData;
+class QTimer;
 
 // One space tile in the top strip: drop target + click-to-switch.
 // Compact mode shrinks the preview for the Mission Control space bar.
@@ -22,9 +23,14 @@ public:
     void setHighlighted(bool on);
     // Top strip uses smaller budget so a row of spaces fits.
     void setCompact(bool compact);
-    // Show top-right "×" on hover (only for spaces that may be deleted).
+    // Whether the × badge may appear at all (Overview disables when only 1 space).
     void setRemovable(bool on);
     bool isRemovable() const { return m_removable; }
+    // Hover dwell before the circular × appears (ms). Default 2000.
+    void setRemoveRevealDelayMs(int ms);
+    int removeRevealDelayMs() const { return m_revealDelayMs; }
+    // True after dwell elapsed while still hovered (tests / paint).
+    bool isRemoveBadgeShown() const { return m_removeShown; }
 
     int spaceIndex() const { return m_index; }
     double aspect() const { return m_aspect; }
@@ -67,6 +73,8 @@ private:
     static bool extractHwnd(const QMimeData *mime, quint64 *out);
     // Hit-test top-right close badge (for tests / paint).
     QRect removeBadgeRect() const;
+    void startRevealTimer();
+    void cancelRevealTimer();
 
     int m_index = -1;
     bool m_current = false;
@@ -75,8 +83,10 @@ private:
     bool m_dropHover = false;
     bool m_removable = false;
     bool m_hovered = false;
+    bool m_removeShown = false;
     bool m_pressed = false;
     bool m_draggingReorder = false;
+    int m_revealDelayMs = 2000;
     QPoint m_pressPos;
     int m_lastReorderTarget = -1;
     double m_aspect = 16.0 / 9.0;
@@ -86,4 +96,5 @@ private:
     QLabel *m_badge = nullptr;
     QLabel *m_preview = nullptr;
     QWidget *m_thumbRow = nullptr;
+    QTimer *m_revealTimer = nullptr;
 };

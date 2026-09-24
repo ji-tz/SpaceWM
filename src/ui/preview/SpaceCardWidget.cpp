@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -31,6 +32,16 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
     setAttribute(Qt::WA_Hover);
     setCursor(Qt::PointingHandCursor);
     setAcceptDrops(true);
+
+    m_revealTimer = new QTimer(this);
+    m_revealTimer->setSingleShot(true);
+    m_revealTimer->setInterval(m_revealDelayMs);
+    connect(m_revealTimer, &QTimer::timeout, this, [this]() {
+        if (!m_removable || !m_hovered)
+            return;
+        m_removeShown = true;
+        update();
+    });
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(12, 10, 12, 12);
@@ -197,7 +208,37 @@ void SpaceCardWidget::setRemovable(bool on)
     if (m_removable == on)
         return;
     m_removable = on;
+    if (!on)
+        cancelRevealTimer();
     update();
+}
+
+void SpaceCardWidget::setRemoveRevealDelayMs(int ms)
+{
+    m_revealDelayMs = qMax(0, ms);
+    if (m_revealTimer)
+        m_revealTimer->setInterval(m_revealDelayMs);
+}
+
+void SpaceCardWidget::startRevealTimer()
+{
+    if (!m_removable || !m_hovered || !m_revealTimer)
+        return;
+    if (m_revealDelayMs <= 0) {
+        m_removeShown = true;
+        update();
+        return;
+    }
+    m_removeShown = false;
+    update();
+    m_revealTimer->start();
+}
+
+void SpaceCardWidget::cancelRevealTimer()
+{
+    if (m_revealTimer)
+        m_revealTimer->stop();
+    m_removeShown = false;
 }
 
 QRect SpaceCardWidget::removeBadgeRect() const
@@ -209,7 +250,7 @@ QRect SpaceCardWidget::removeBadgeRect() const
 void SpaceCardWidget::paintEvent(QPaintEvent *event)
 {
     QFrame::paintEvent(event);
-    if (!m_removable || !m_hovered)
+    if (!m_removable || !m_removeShown)
         return;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
@@ -290,7 +331,7 @@ void SpaceCardWidget::dropEvent(QDropEvent *event)
 
 void SpaceCardWidget::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton && m_removable
+    if (event->button() == Qt::LeftButton && m_removable && m_removeShown
         && removeBadgeRect().contains(event->pos())) {
         // Badge press: do not arm card activation.
         m_pressed = false;
@@ -349,6 +390,7 @@ void SpaceCardWidget::mouseReleaseEvent(QMouseEvent *event)
 void SpaceCardWidget::enterEvent(QEnterEvent *event)
 {
     m_hovered = true;
+    startRevealTimer();
     update();
     emit hovered(m_index);
     QFrame::enterEvent(event);
@@ -358,6 +400,7 @@ void SpaceCardWidget::leaveEvent(QEvent *event)
 {
     // Do NOT reset the bottom strip here — only outer overview margins should.
     m_hovered = false;
+    cancelRevealTimer();
     update();
     emit hoverLeft();
     QFrame::leaveEvent(event);

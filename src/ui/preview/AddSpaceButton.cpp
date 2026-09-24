@@ -78,13 +78,20 @@ void AddSpaceButton::dropEvent(QDropEvent *event)
         QDataStream ds(mime->data(WindowPreviewWidget::kMimeType));
         quint64 h = 0;
         ds >> h;
-        if (h) {
-            emit windowDropped(h);
+        if (h && handleWindowDrop(h)) {
             event->acceptProposedAction();
             return;
         }
     }
     event->ignore();
+}
+
+bool AddSpaceButton::handleWindowDrop(quint64 hwnd)
+{
+    if (!hwnd)
+        return false;
+    emit windowDropped(hwnd);
+    return true;
 }
 
 void AddSpaceButton::paintEvent(QPaintEvent *event)

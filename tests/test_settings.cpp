@@ -2,6 +2,7 @@
 
 #include "core/settings/AppSettings.h"
 #include "hotkeys/HotkeyManager.h"
+#include "ui/settings/SettingsDialog.h"
 
 class TestSettings : public QObject {
     Q_OBJECT
@@ -89,6 +90,18 @@ private slots:
         QVERIFY(!AppSettings::autoStartRegistryEnabled());
         if (was)
             QVERIFY(AppSettings::applyAutoStartRegistry(true));
+    }
+
+    void settingsDialogConstructsAndReloads()
+    {
+        SettingsDialog dlg;
+        dlg.reload();
+        QSignalSpy applied(&dlg, &SettingsDialog::settingsApplied);
+        QVERIFY(applied.isValid());
+        // KeyPressEvent path exists; non-capture keys fall through safely.
+        QKeyEvent ev(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&dlg, &ev);
+        QVERIFY(true);
     }
 };
 

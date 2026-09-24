@@ -116,8 +116,17 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     connect(m_addSpaceBtn, &AddSpaceButton::windowDropped, this,
             [this](quint64 hwnd) { addSpaceAndPlaceWindow(hwnd); });
 
-    // Outer-margin mouse move / leave → restore bottom strip to current space.
+    // Soft-preview hold: leaving space/window strips starts a 1s timer;
+    // re-entering those zones cancels it. Outer margins / panel leave also arm it.
+    m_holdTimer = new QTimer(this);
+    m_holdTimer->setSingleShot(true);
+    m_holdTimer->setInterval(m_holdMs);
+    connect(m_holdTimer, &QTimer::timeout, this, [this]() {
+        restoreStripToCurrentSpace();
+    });
     installEventFilter(this);
+    m_spaceStripHost->installEventFilter(this);
+    // window scroll installed after creation below
 
     // --- Bottom: draggable windows ---
     auto *winLabel = new QLabel(tr("Windows in the previewed space — drag onto a space"), m_root);
@@ -141,6 +150,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     m_windowStack->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     m_windowScroll->setWidget(m_windowHost);
     m_windowScroll->setWidgetResizable(true);
+    m_windowScroll->installEventFilter(this);
     v->addWidget(m_windowScroll, 1);
 
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
@@ -265,6 +275,7 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
         return;
 
     cancelAnimations();
+    cancelSoftPreviewHold();
     m_hmon = hmon;
     m_exitStarted = false;
 
@@ -325,6 +336,7 @@ void OverviewWindow::closeOverview(bool commit)
     m_open = false;
     m_closePending = true;
     cancelAnimations();
+    cancelSoftPreviewHold();
 
     emit closed(m_pendingCommit);
 
@@ -450,8 +462,8 @@ void OverviewWindow::rebuildCards()
             shot.fill(QColor(32, 36, 48));
         }
         card->setScreenshot(shot);
-        // Mac-style × only on spaces that actually have windows (and size allows).
-        card->setRemovable(m->spaces.size() > 1 && m_manager->spaceHasWindows(m_hmon, i));
+        // All spaces with >1 total: × after 2s hover (empty spaces merge windows too).
+        card->setRemovable(m->spaces.size() > 1);
 
         connect(card, &SpaceCardWidget::activated, this, [this](int idx) {
             if (!m_open)
@@ -462,10 +474,16 @@ void OverviewWindow::rebuildCards()
             closeOverview(true);
         });
         connect(card, &SpaceCardWidget::hovered, this, [this](int idx) {
-            if (m_open)
+            if (m_open) {
+                cancelSoftPreviewHold();
                 previewSpace(idx);
+            }
         });
-        // hoverLeft intentionally NOT wired to restore — only outer margins / leave panel.
+        connect(card, &SpaceCardWidget::hoverLeft, this, [this]() {
+            // Left a card → start hold (restore after m_holdMs if not re-entered).
+            if (m_open)
+                armSoftPreviewHold();
+        });
         connect(card, &SpaceCardWidget::windowDropped, this,
                 [this](int spaceIndex, quint64 hwnd) {
                     if (!m_open)
@@ -880,21 +898,78 @@ bool OverviewWindow::addSpaceAndPlaceWindow(quint64 hwnd)
     return placed;
 }
 
+void OverviewWindow::setSoftPreviewHoldMs(int ms)
+{
+    m_holdMs = qMax(0, ms);
+    if (m_holdTimer)
+        m_holdTimer->setInterval(m_holdMs);
+}
+
+bool OverviewWindow::isSoftPreviewHoldPending() const
+{
+    return m_holdTimer && m_holdTimer->isActive();
+}
+
+void OverviewWindow::armSoftPreviewHold()
+{
+    if (!m_open || !m_holdTimer)
+        return;
+    // Restart so each leave event gets a full hold window.
+    m_holdTimer->start();
+}
+
+void OverviewWindow::cancelSoftPreviewHold()
+{
+    if (m_holdTimer)
+        m_holdTimer->stop();
+}
+
+bool OverviewWindow::isKeepZoneWidget(QObject *w) const
+{
+    while (w) {
+        if (w == m_spaceStripHost || w == m_windowScroll || w == m_windowHost)
+            return true;
+        // Cards / tiles inside the strip or window scroll.
+        if (qobject_cast<SpaceCardWidget *>(w) || qobject_cast<WindowPreviewWidget *>(w)
+            || w == m_addSpaceBtn)
+            return true;
+        w = w->parent();
+    }
+    return false;
+}
+
 bool OverviewWindow::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == this && m_open && event->type() == QEvent::MouseMove) {
+    if (!m_open)
+        return QWidget::eventFilter(watched, event);
+
+    switch (event->type()) {
+    case QEvent::Enter:
+        if (isKeepZoneWidget(watched))
+            cancelSoftPreviewHold();
+        break;
+    case QEvent::Leave:
+        if (isKeepZoneWidget(watched))
+            armSoftPreviewHold();
+        break;
+    case QEvent::MouseMove: {
+        if (watched != this)
+            break;
         const auto *me = static_cast<QMouseEvent *>(event);
-        // Only the outer margin band resets — gap between strip and windows keeps preview.
         if (isOuterMarginPos(me->position().toPoint()))
-            restoreStripToCurrentSpace();
+            armSoftPreviewHold();
+        break;
+    }
+    default:
+        break;
     }
     return QWidget::eventFilter(watched, event);
 }
 
 void OverviewWindow::leaveEvent(QEvent *event)
 {
-    // Pointer left the whole overview panel → back to current space strip.
-    restoreStripToCurrentSpace();
+    // Left the panel entirely — still allow hold (e.g. onto tray) before restore.
+    armSoftPreviewHold();
     QWidget::leaveEvent(event);
 }
 

@@ -72,9 +72,25 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 
 ### 2.2 功能 ↔ 测试（摘要）
 
-完整表见历史版本或按模块扫 `tests/test_*.cpp`。当前 **12** 个测试二进制：cloak / monitors / space_manager / window_tracker / thumbnail / hotkeys / settings / space_card / overview / overview_host / window_placement / flash_overlay。
+当前 **13** 个测试二进制：`cloak` / `monitors` / `space_manager` / `window_tracker` / `thumbnail` / `hotkeys` / `settings` / `log` / `space_card` / `overview` / `overview_host` / `window_placement` / `flash_overlay`。
 
-已知缺口（见测试文件与 §2.1）：托盘 UI、SettingsDialog 交互、`main` 装配（`--quit`、前台 re-home）、LL 吞键端到端 — 多靠手动冒烟 §5。
+| 能力（本会话 + 近期 commit） | 测试 | 状态 |
+|------------------------------|------|------|
+| spdlog TR/EH（trace.log / error.log） | `test_log` | 有 |
+| space add/remove/move（+ / × / 拖动排序） | `test_window_placement` | 有 |
+| × 悬停 2s 显示、点击删除、不误触 activated | `test_space_card` | 有 |
+| **+ 按钮点击** `addRequested` | `test_window_placement` | 有 |
+| **+ 拖入窗口新建 space** | 模型：`addSpace`+`assign`；UI drop | **模型有；UI drop 弱** |
+| 软预览 / 外缘 leave 才回 current | `test_window_placement` | 有 |
+| 预览缓存 / 打开全量 space 图 | `test_window_placement` · `test_thumbnail` | 有 |
+| work area / logical DPI / DWM 可见框 | `test_monitors` | 有 |
+| System 热键解析 / 自启 | `test_settings` | 有 |
+| showAllHidden 退出恢复 | `test_cloak` | 有 |
+| 拖拽热点 mapPressToHotSpot | `test_window_placement` | 有 |
+| exclusive / 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
+| 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
+
+已知缺口优先补：`main` 前台 re-home、`+` 拖入 UI、`windowForeground`、`spacePreviewInvalidated` 直连。
 
 ### 2.3 新增 test
 

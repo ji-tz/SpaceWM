@@ -4,8 +4,13 @@
 #include "core/monitor/MonitorInfo.h"
 #include "core/window/CloakController.h"
 #include "ui/overview/OverviewWindow.h"
+#include "ui/preview/AddSpaceButton.h"
 #include "ui/preview/SpaceCardWidget.h"
 #include "ui/preview/WindowPreviewWidget.h"
+
+#include <QDropEvent>
+#include <QMimeData>
+#include <QScrollArea>
 
 #include <Windows.h>
 
@@ -193,6 +198,58 @@ private slots:
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
     }
 
+    void overviewMarksEverySpaceRemovableWhenMoreThanOne()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        QVERIFY(m->spaces.size() >= 1);
+        if (m->spaces.size() < 2)
+            QVERIFY(sm.addSpace(m->hmon));
+
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen() || w.cardCount() < 2)
+            QSKIP("need overview with ≥2 cards");
+
+        // ALL spaces (including empty) are removable when count > 1.
+        const auto cards = w.findChildren<SpaceCardWidget *>();
+        int checked = 0;
+        for (SpaceCardWidget *card : cards) {
+            if (!card || card->spaceIndex() < 0)
+                continue;
+            QVERIFY2(card->isRemovable(),
+                     qPrintable(QStringLiteral("card %1 should be removable").arg(card->spaceIndex())));
+            QCOMPARE(card->removeRevealDelayMs(), 2000);
+            ++checked;
+        }
+        QVERIFY(checked >= 2);
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void addSpaceButtonEmitsAddRequested()
+    {
+        AddSpaceButton btn;
+        QSignalSpy spy(&btn, &AddSpaceButton::addRequested);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(36, 36),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&btn, &press);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    void addSpaceButtonDropEmitsWindowDropped()
+    {
+        AddSpaceButton btn;
+        QSignalSpy dropped(&btn, &AddSpaceButton::windowDropped);
+        QVERIFY(btn.handleWindowDrop(0xABCD));
+        QCOMPARE(dropped.count(), 1);
+        QCOMPARE(dropped.first().at(0).toULongLong(), quint64(0xABCD));
+        QVERIFY(!btn.handleWindowDrop(0));
+        QCOMPARE(dropped.count(), 1);
+    }
+
     void previewAndCancelKeepsOriginOnDesktop()
     {
         SpaceManager sm;
@@ -263,29 +320,84 @@ private slots:
         if (!w.isOpen() || w.cardCount() < 2)
             QSKIP("need overview with multiple cards");
 
+        // Drain enter animation so card-move timers cannot steal hover/selection.
+        for (int i = 0; i < 30 && w.isAnimating(); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+        for (int i = 0; i < 10; ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+        w.setSoftPreviewHoldMs(60);
+
         const int cur = m->currentIndex;
         const int other = (cur + 1) % m->spaces.size();
         QVERIFY(w.previewSpace(other));
         QCOMPARE(w.selectedIndex(), other);
 
-        // Leaving the hovered card must NOT reset (gap → window strip keeps preview).
+        // Leave by spaceIndex, not findChildren order.
         const auto cards = w.findChildren<SpaceCardWidget *>();
-        QVERIFY(cards.size() > other);
+        SpaceCardWidget *card = nullptr;
+        for (SpaceCardWidget *c : cards) {
+            if (c && c->spaceIndex() == other) {
+                card = c;
+                break;
+            }
+        }
+        QVERIFY(card);
         {
             QEvent leave(QEvent::Leave);
-            QApplication::sendEvent(cards[other], &leave);
+            QApplication::sendEvent(card, &leave);
         }
         QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+        QVERIFY(w.isSoftPreviewHoldPending());
         QCOMPARE(w.selectedIndex(), other);
         QCOMPARE(m->currentIndex, cur);
 
-        // Leaving the whole overview panel restores current space strip.
+        QTest::qWait(20);
+        QCOMPARE(w.selectedIndex(), other);
+
         {
             QEvent leave(QEvent::Leave);
             QApplication::sendEvent(&w, &leave);
         }
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+        QVERIFY(w.isSoftPreviewHoldPending());
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isSoftPreviewHoldPending(), 500);
         QCOMPARE(w.selectedIndex(), cur);
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void softPreviewHoldCancelsOnKeepZoneEnter()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen() || w.cardCount() < 2)
+            QSKIP("need cards");
+        w.setSoftPreviewHoldMs(200);
+
+        const int cur = m->currentIndex;
+        const int other = (cur + 1) % m->spaces.size();
+        QVERIFY(w.previewSpace(other));
+
+        const auto cards = w.findChildren<SpaceCardWidget *>();
+        {
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(cards[other], &leave);
+        }
+        QVERIFY(w.isSoftPreviewHoldPending());
+
+        auto *scroll = w.findChild<QScrollArea *>();
+        QVERIFY(scroll);
+        {
+            QEvent enter(QEvent::Enter);
+            QApplication::sendEvent(scroll, &enter);
+        }
+        QVERIFY(!w.isSoftPreviewHoldPending());
+        QCOMPARE(w.selectedIndex(), other);
+        QCOMPARE(m->currentIndex, cur);
 
         w.closeOverview(false);
         for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
