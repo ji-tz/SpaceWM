@@ -116,6 +116,10 @@ bool WindowTracker::isManageable(HWND hwnd)
     // startup bug that flooded the desktop with hidden windows.
     if (!hwnd || !::IsWindow(hwnd) || !::IsWindowVisible(hwnd))
         return false;
+    // Minimized windows are "visible" in Win32 terms but must not be
+    // space-managed: restoring them on overview/switch un-minimizes them.
+    if (::IsIconic(hwnd))
+        return false;
     if (::GetAncestor(hwnd, GA_ROOT) != hwnd)
         return false;
     if (hasNoTaskbarIcon(hwnd))

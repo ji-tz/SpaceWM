@@ -194,24 +194,71 @@ void SpaceManager::applyVisibility(HMONITOR hmon)
     if (!m)
         return;
 
-    QSet<HWND> shouldShow;
-    if (m->currentIndex >= 0 && m->currentIndex < m->spaces.size())
-        shouldShow = m->spaces[m->currentIndex].windows;
+    const int cur = m->currentIndex;
+    if (cur < 0 || cur >= m->spaces.size())
+        return;
 
+    auto collectZ = [hmon](const QSet<HWND> &filter) {
+        QVector<HWND> out;
+        struct Ctx {
+            HMONITOR mon;
+            const QSet<HWND> *filter;
+            QVector<HWND> *out;
+        } ctx{hmon, &filter, &out};
+        ::EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+            auto *c = reinterpret_cast<Ctx *>(lp);
+            if (!c->filter->contains(hwnd) || ::IsIconic(hwnd))
+                return TRUE;
+            if (::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != c->mon)
+                return TRUE;
+            if (!::IsWindowVisible(hwnd))
+                return TRUE;
+            c->out->push_back(hwnd);
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&ctx));
+        return out;
+    };
+
+    // Save Z-order of currently visible windows per space before mutating.
+    for (int i = 0; i < m->spaces.size(); ++i) {
+        const auto z = collectZ(m->spaces[i].windows);
+        if (!z.isEmpty())
+            m->spaces[i].zOrder = z;
+    }
+
+    // Hide / show
     for (const Space &sp : m->spaces) {
         for (HWND hwnd : sp.windows) {
-            if (!::IsWindow(hwnd))
+            if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
                 continue;
-            const bool hide = !shouldShow.contains(hwnd);
-            if (hide) {
-                cloakWindow(hwnd, true);
-            } else {
-                // Only undo a hide we performed. cloak::set(false) is a
-                // no-op for windows we never hid — critical so startup /
-                // space-0 apply cannot resurrect shell-hidden windows.
-                cloakWindow(hwnd, false);
-            }
+            const bool hide = (sp.windows.contains(hwnd) && !m->spaces[cur].windows.contains(hwnd));
+            // equivalent: hide if not in current space set
+            cloakWindow(hwnd, hide);
         }
+    }
+
+    // Explicitly hide non-current (in case of empty current set edge cases)
+    for (int i = 0; i < m->spaces.size(); ++i) {
+        if (i == cur)
+            continue;
+        for (HWND hwnd : m->spaces[i].windows) {
+            if (::IsWindow(hwnd) && !::IsIconic(hwnd))
+                cloakWindow(hwnd, true);
+        }
+    }
+    for (HWND hwnd : m->spaces[cur].windows) {
+        if (::IsWindow(hwnd) && !::IsIconic(hwnd))
+            cloakWindow(hwnd, false);
+    }
+
+    // Restore saved Z-order for current space: bottom → top with HWND_TOP.
+    const QVector<HWND> &z = m->spaces[cur].zOrder;
+    for (int i = z.size() - 1; i >= 0; --i) {
+        HWND hwnd = z[i];
+        if (!::IsWindow(hwnd) || ::IsIconic(hwnd) || !::IsWindowVisible(hwnd))
+            continue;
+        ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     for (Space &sp : m->spaces) {
@@ -254,6 +301,8 @@ QVector<HWND> SpaceManager::windowsOn(HMONITOR hmon, int spaceIndex) const
 
 bool SpaceManager::trackWindow(HWND hwnd)
 {
+    if (::IsIconic(hwnd))
+        return false; // minimized: not space-managed
     if (!WindowTracker::isManageable(hwnd))
         return false;
     if (m_owner.contains(hwnd))
@@ -302,13 +351,8 @@ void SpaceManager::ensureMonitor(HMONITOR hmon)
 
 void SpaceManager::cloakWindow(HWND hwnd, bool hide)
 {
-    if (!::IsWindow(hwnd))
+    if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
         return;
-    // Never cloak if the window is currently in the foreground — would steal focus oddly.
-    if (hide && ::GetForegroundWindow() == hwnd) {
-        // Move focus to another window on the same monitor first is complex;
-        // just cloak — Windows will activate another window.
-    }
     ::cloak::set(hwnd, hide);
 }
 

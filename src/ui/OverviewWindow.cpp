@@ -13,7 +13,9 @@
 #include <QTimer>
 
 OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
-    : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool | Qt::WindowDoesNotAcceptFocus)
+    // No WindowDoesNotAcceptFocus — we need reliable focus for Esc/arrows
+    // and so Ctrl+Alt+Space can toggle without a desktop click first.
+    : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
     , m_manager(manager)
 {
     setAttribute(Qt::WA_DeleteOnClose, false);
@@ -81,9 +83,11 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon)
     show();
     raise();
     activateWindow();
-    setFocus(Qt::OtherFocusReason);
-    if (HWND h = reinterpret_cast<HWND>(winId()))
+    setFocus(Qt::ActiveWindowFocusReason);
+    if (HWND h = reinterpret_cast<HWND>(winId())) {
+        ::SetForegroundWindow(h);
         ::SetFocus(h);
+    }
 
     playEnterAnimation();
 }
@@ -161,7 +165,7 @@ void OverviewWindow::rebuildCards()
         for (HWND h : m->spaces[i].windows) {
             if (captured >= 3)
                 break;
-            if (!::IsWindow(h))
+            if (!::IsWindow(h) || ::IsIconic(h))
                 continue;
             QImage img = thumbs::capture(h, QSize(240, 135));
             if (!img.isNull()) {

@@ -14,6 +14,10 @@ QImage capture(HWND hwnd, const QSize &maxSize)
 {
     if (!hwnd || !::IsWindow(hwnd))
         return {};
+    // Minimized windows: PrintWindow can show stale/fullscreen restore artifacts
+    // and is useless for space cards — skip.
+    if (::IsIconic(hwnd))
+        return {};
 
     RECT rc{};
     if (!::GetWindowRect(hwnd, &rc))

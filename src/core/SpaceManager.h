@@ -19,6 +19,8 @@
 struct Space {
     QString name;
     QSet<HWND> windows;
+    // Top → bottom HWND order captured when this space was last visible.
+    QVector<HWND> zOrder;
 };
 
 struct MonitorSpaces {

@@ -162,6 +162,10 @@ bool showViaDwm(HWND hwnd)
 
 bool hideViaShowWindow(HWND hwnd)
 {
+    // Never take minimized windows into our hide set — we'd un-minimize them.
+    if (::IsIconic(hwnd))
+        return false;
+
     HiddenInfo st;
     st.how = How::ShowWindow;
     st.wasVisible = ::IsWindowVisible(hwnd) != FALSE;
@@ -183,12 +187,19 @@ bool showViaShowWindow(HWND hwnd)
     const HiddenInfo st = it->second;
     g_hidden.erase(it);
 
-    if (st.hasPlacement)
-        ::SetWindowPlacement(hwnd, &st.placement);
-    if (st.wasVisible)
+    // Restore exact placement (includes SW_SHOWMINIMIZED if it was iconic).
+    // Do NOT follow with SW_SHOW — that force-un-minimizes / raises wrongly.
+    if (st.hasPlacement) {
+        WINDOWPLACEMENT wp = st.placement;
+        wp.length = sizeof(wp);
+        // If we stored a normal showCmd but the window is iconic now, keep iconic.
+        if (::IsIconic(hwnd) && wp.showCmd != SW_SHOWMINIMIZED
+            && wp.showCmd != SW_SHOWMINNOACTIVE && wp.showCmd != SW_MINIMIZE)
+            wp.showCmd = SW_SHOWMINIMIZED;
+        ::SetWindowPlacement(hwnd, &wp);
+    } else if (st.wasVisible) {
         ::ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    else
-        ::ShowWindow(hwnd, SW_SHOWNA);
+    }
 
     g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
     return true;
