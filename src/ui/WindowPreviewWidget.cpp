@@ -10,6 +10,8 @@
 #include <QPainter>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 const char *WindowPreviewWidget::kMimeType = "application/x-spacewm-hwnd";
 
 WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
@@ -17,8 +19,6 @@ WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
 {
     setObjectName(QStringLiteral("WindowPreview"));
     setAttribute(Qt::WA_Hover);
-    setMinimumSize(200, 140);
-    setMaximumSize(280, 200);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setCursor(Qt::OpenHandCursor);
 
@@ -28,7 +28,6 @@ WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
 
     m_imageLabel = new QLabel(this);
     m_imageLabel->setAlignment(Qt::AlignCenter);
-    m_imageLabel->setMinimumSize(184, 104);
     m_imageLabel->setStyleSheet(QStringLiteral(
         "QLabel { border-radius: 6px; border: 1px solid rgba(255,255,255,35); background: #101018; }"));
     root->addWidget(m_imageLabel);
@@ -43,6 +42,25 @@ WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
         "#WindowPreview { background: rgba(40, 44, 58, 230); border: 2px solid rgba(255,255,255,35);"
         " border-radius: 12px; }"
         "#WindowPreview:hover { border: 2px solid rgba(158,193,255,180); background: rgba(48,54,70,240); }"));
+
+    setImageBoxSize(m_box);
+}
+
+QSize WindowPreviewWidget::imageBoxSize() const
+{
+    return m_box;
+}
+
+void WindowPreviewWidget::setImageBoxSize(const QSize &imageBox)
+{
+    const int w = std::max(imageBox.width(), 80);
+    const int h = std::max(imageBox.height(), 50);
+    m_box = QSize(w, h);
+    if (m_imageLabel)
+        m_imageLabel->setFixedSize(m_box);
+    // Frame + padding + label row.
+    setFixedSize(m_box.width() + 16, m_box.height() + 40);
+    applyPixmap();
 }
 
 void WindowPreviewWidget::setWindow(HWND hwnd, const QString &title, const QImage &preview)
@@ -50,18 +68,23 @@ void WindowPreviewWidget::setWindow(HWND hwnd, const QString &title, const QImag
     m_hwnd = hwnd;
     m_title = title;
     m_image = preview;
-
     m_label->setText(title.isEmpty() ? tr("Untitled") : title);
-    if (preview.isNull()) {
+    applyPixmap();
+}
+
+void WindowPreviewWidget::applyPixmap()
+{
+    if (!m_imageLabel)
+        return;
+    if (m_image.isNull()) {
         m_imageLabel->setText(tr("No shot"));
         m_imageLabel->setPixmap(QPixmap());
-    } else {
-        m_imageLabel->setText({});
-        const QSize target(m_imageLabel->width() > 0 ? m_imageLabel->width() : 184,
-                           m_imageLabel->height() > 0 ? m_imageLabel->height() : 104);
-        m_imageLabel->setPixmap(QPixmap::fromImage(preview).scaled(
-            target, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+        return;
     }
+    m_imageLabel->setText({});
+    // Fit inside the aspect-correct box without distorting.
+    m_imageLabel->setPixmap(QPixmap::fromImage(m_image).scaled(
+        m_box, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 void WindowPreviewWidget::mousePressEvent(QMouseEvent *event)
@@ -102,10 +125,10 @@ void WindowPreviewWidget::startDrag()
 
     QPixmap pm;
     if (!m_image.isNull())
-        pm = QPixmap::fromImage(m_image).scaled(160, 90, Qt::KeepAspectRatioByExpanding,
+        pm = QPixmap::fromImage(m_image).scaled(m_box, Qt::KeepAspectRatio,
                                                 Qt::SmoothTransformation);
     if (pm.isNull())
-        pm = grab().scaled(160, 90, Qt::KeepAspectRatioByExpanding);
+        pm = grab().scaled(m_box, Qt::KeepAspectRatio);
 
     auto *drag = new QDrag(this);
     drag->setMimeData(mime);

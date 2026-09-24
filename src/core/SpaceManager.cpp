@@ -271,19 +271,101 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
     m->spaces[index].screenshot = canvas;
 }
 
+bool SpaceManager::isMaximizedWindow(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return false;
+    // IsZoomed == maximized (not just restored-to-monitor-size).
+    return ::IsZoomed(hwnd) != FALSE;
+}
+
+bool SpaceManager::isExclusiveSpace(HMONITOR hmon, int spaceIndex) const
+{
+    return exclusiveWindowOn(hmon, spaceIndex) != nullptr;
+}
+
+HWND SpaceManager::exclusiveWindowOn(HMONITOR hmon, int spaceIndex) const
+{
+    auto *self = const_cast<SpaceManager *>(this);
+    auto *m = self->monitorOf(hmon);
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
+        return nullptr;
+    HWND h = m->spaces[spaceIndex].exclusiveWindow;
+    return (h && ::IsWindow(h)) ? h : nullptr;
+}
+
+bool SpaceManager::canAssignToSpace(HMONITOR hmon, int spaceIndex, HWND hwnd) const
+{
+    auto *self = const_cast<SpaceManager *>(this);
+    auto *m = self->monitorOf(hmon);
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size() || !hwnd)
+        return false;
+
+    const Space &sp = m->spaces[spaceIndex];
+    if (!sp.exclusiveWindow)
+        return true;
+    // Exclusive space only accepts its own bound window (re-drop / re-assign).
+    return sp.exclusiveWindow == hwnd || !::IsWindow(sp.exclusiveWindow);
+}
+
 bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
 {
     auto *m = monitorOf(hmon);
-    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size() || !hwnd)
         return false;
 
+    // Reject foreign windows into a space already bound to another maximized window.
+    if (!canAssignToSpace(hmon, spaceIndex, hwnd))
+        return false;
+
+    // If leaving an exclusive space, unbind it (restore default name).
     if (m_owner.contains(hwnd)) {
         const auto prev = m_owner.value(hwnd);
-        if (auto *pm = monitorOf(reinterpret_cast<HMONITOR>(prev.hmon)); pm && prev.space >= 0 && prev.space < pm->spaces.size())
-            pm->spaces[prev.space].windows.remove(hwnd);
+        if (auto *pm = monitorOf(reinterpret_cast<HMONITOR>(prev.hmon));
+            pm && prev.space >= 0 && prev.space < pm->spaces.size()) {
+            Space &oldSp = pm->spaces[prev.space];
+            oldSp.windows.remove(hwnd);
+            if (oldSp.exclusiveWindow == hwnd) {
+                oldSp.exclusiveWindow = nullptr;
+                // Restore default Space N name.
+                const int oldIdx = prev.space;
+                oldSp.name = QCoreApplication::translate("SpaceManager", "Space %1")
+                                 .arg(oldIdx + 1);
+            }
+        }
     }
 
-    m->spaces[spaceIndex].windows.insert(hwnd);
+    Space &sp = m->spaces[spaceIndex];
+
+    // Maximized window → exclusive bind: sole occupant, rename to window title.
+    if (isMaximizedWindow(hwnd)) {
+        // Evict any other occupants (they return to unmanaged visibility on apply).
+        const QSet<HWND> others = sp.windows;
+        for (HWND other : others) {
+            if (other == hwnd)
+                continue;
+            if (m_owner.contains(other)) {
+                const auto o = m_owner.value(other);
+                if (o.hmon == reinterpret_cast<quintptr>(hmon) && o.space == spaceIndex)
+                    m_owner.remove(other);
+            }
+            sp.windows.remove(other);
+            cloakWindow(other, false);
+        }
+        sp.windows.clear();
+        sp.windows.insert(hwnd);
+        sp.exclusiveWindow = hwnd;
+
+        wchar_t buf[256]{};
+        ::GetWindowTextW(hwnd, buf, 256);
+        QString title = QString::fromWCharArray(buf).trimmed();
+        sp.name = title.isEmpty()
+            ? QCoreApplication::translate("SpaceManager", "Space %1").arg(spaceIndex + 1)
+            : title;
+    } else {
+        sp.windows.insert(hwnd);
+    }
+
     m_owner.insert(hwnd, Owner{reinterpret_cast<quintptr>(hmon), spaceIndex});
 
     const bool shouldHide = (spaceIndex != m->currentIndex);

@@ -24,6 +24,9 @@ struct Space {
     QVector<HWND> zOrder;
     // Last full-monitor screenshot while this space was visible.
     QImage screenshot;
+    // Non-null when bound to a single maximized window (exclusive space).
+    // Other windows must not be assigned into this space.
+    HWND exclusiveWindow = nullptr;
 };
 
 struct MonitorSpaces {
@@ -60,6 +63,13 @@ public:
     bool previewSpace(HMONITOR hmon, int index);
 
     bool assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex);
+
+    // Exclusive (maximized-window) space helpers.
+    static bool isMaximizedWindow(HWND hwnd);
+    bool isExclusiveSpace(HMONITOR hmon, int spaceIndex) const;
+    HWND exclusiveWindowOn(HMONITOR hmon, int spaceIndex) const;
+    // True if space rejects additional windows (bound to a maximized window).
+    bool canAssignToSpace(HMONITOR hmon, int spaceIndex, HWND hwnd) const;
 
     int spaceOfWindow(HWND hwnd) const;
     HMONITOR ownerMonitorOf(HWND hwnd) const;

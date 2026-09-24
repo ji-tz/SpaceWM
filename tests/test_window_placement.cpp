@@ -151,6 +151,23 @@ private slots:
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
     }
 
+    void proportionalPreviewSizesPreserveAspect()
+    {
+        WindowPreviewWidget a;
+        WindowPreviewWidget b;
+        // Wide vs tall boxes — caller sets from real window rect.
+        a.setImageBoxSize(QSize(320, 180)); // 16:9
+        b.setImageBoxSize(QSize(160, 240)); // 2:3
+        QCOMPARE(a.imageBoxSize(), QSize(320, 180));
+        QCOMPARE(b.imageBoxSize(), QSize(160, 240));
+        // Frame height includes label chrome (~40).
+        QCOMPARE(a.height(), 180 + 40);
+        QCOMPARE(b.height(), 240 + 40);
+        // Different aspects must yield different widget sizes.
+        QVERIFY(a.width() != b.width());
+        QVERIFY(a.height() != b.height());
+    }
+
     void compactCardsStillNavigate()
     {
         SpaceManager sm;

@@ -18,6 +18,9 @@
 
 #include <dwmapi.h>
 
+#include <algorithm>
+#include <cmath>
+
 OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
     , m_manager(manager)
@@ -85,15 +88,12 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
 
     m_windowHost = new QWidget;
     m_windowHost->setStyleSheet(QStringLiteral("background: transparent;"));
-    auto *winOuter = new QVBoxLayout(m_windowHost);
-    winOuter->setContentsMargins(0, 0, 0, 0);
-    m_windowRow = new QHBoxLayout;
-    m_windowRow->setContentsMargins(0, 0, 0, 0);
-    m_windowRow->setSpacing(12);
-    m_windowRow->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    m_windowRow->addStretch(1);
-    winOuter->addLayout(m_windowRow);
+    m_windowStack = new QVBoxLayout(m_windowHost);
+    m_windowStack->setContentsMargins(0, 0, 0, 0);
+    m_windowStack->setSpacing(12);
+    m_windowStack->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     m_windowScroll->setWidget(m_windowHost);
+    m_windowScroll->setWidgetResizable(true);
     v->addWidget(m_windowScroll, 1);
 
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
@@ -121,6 +121,9 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
         return false;
 
     if (!m_manager->trackWindow(hwnd))
+        return false;
+    // Exclusive space rejects other windows (assignWindow enforces this).
+    if (!m_manager->canAssignToSpace(m_hmon, spaceIndex, hwnd))
         return false;
     if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex))
         return false;
@@ -391,43 +394,145 @@ void OverviewWindow::rebuildCards()
 void OverviewWindow::rebuildWindowPreviews()
 {
     auto *m = m_manager ? m_manager->monitorOf(m_hmon) : nullptr;
-    if (!m || !m_windowRow)
+    if (!m || !m_windowStack)
         return;
 
-    while (QLayoutItem *item = m_windowRow->takeAt(0)) {
+    // Clear previous rows and tiles.
+    while (QLayoutItem *item = m_windowStack->takeAt(0)) {
         if (item->widget())
             item->widget()->deleteLater();
         delete item;
     }
     m_windowPreviews.clear();
 
-    // Only the live/previewed space (matches Mission Control bottom strip).
+    // --- Collect real window rects for the previewed space ---
     const int idx = m->currentIndex;
-    QVector<HWND> hwnds;
+    struct Item {
+        HWND hwnd = nullptr;
+        int pw = 0;
+        int ph = 0;
+    };
+    QVector<Item> items;
     if (idx >= 0 && idx < m->spaces.size()) {
-        for (HWND h : m->spaces[idx].windows) {
-            if (::IsWindow(h) && !::IsIconic(h))
-                hwnds.push_back(h);
+        for (HWND hwnd : m->spaces[idx].windows) {
+            if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
+                continue;
+            RECT wr{};
+            if (!::GetWindowRect(hwnd, &wr))
+                continue;
+            Item it;
+            it.hwnd = hwnd;
+            it.pw = wr.right - wr.left;
+            it.ph = wr.bottom - wr.top;
+            if (it.pw > 0 && it.ph > 0)
+                items.push_back(it);
         }
     }
 
-    for (HWND h : hwnds) {
-        auto *tile = new WindowPreviewWidget(m_windowHost);
-        QImage shot = thumbs::capture(h, QSize(320, 180));
-        tile->setWindow(h, windowTitle(h), shot);
-        m_windowRow->addWidget(tile, 0, Qt::AlignTop);
-        m_windowPreviews.push_back(tile);
-    }
-    m_windowRow->addStretch(1);
-
-    if (m_windowPreviews.isEmpty()) {
+    if (items.isEmpty()) {
         auto *empty = new QLabel(
             idx >= 0 ? tr("No windows in this space") : tr("No windows on this display"),
             m_windowHost);
         empty->setStyleSheet(QStringLiteral(
             "QLabel { color: rgba(255,255,255,100); font-size: 13px; background: transparent; border: none; }"));
-        m_windowRow->addWidget(empty);
+        m_windowStack->addWidget(empty, 0, Qt::AlignLeft);
+        return;
     }
+
+    // --- Available strip area ---
+    int availW = m_windowScroll ? m_windowScroll->viewport()->width() : 0;
+    int availH = m_windowScroll ? m_windowScroll->viewport()->height() : 0;
+    if (availW < 200 || availH < 80) {
+        availW = m->geometry.width() > 0 ? m->geometry.width() - 72 : 1200;
+        availH = 240;
+    }
+    const int gap = 14;
+
+    auto shelfTotalHeight = [&](double scale) -> int {
+        int x = 0;
+        int rowH = 0;
+        int total = 0;
+        for (const Item &it : items) {
+            const int tw = std::max(1, int(std::lround(it.pw * scale)));
+            const int th = std::max(1, int(std::lround(it.ph * scale)));
+            const int cellW = tw + gap;
+            const int cellH = th + gap;
+            if (x > 0 && x + cellW > availW) {
+                total += rowH;
+                x = 0;
+                rowH = 0;
+            }
+            x += cellW;
+            rowH = std::max(rowH, cellH);
+        }
+        total += rowH;
+        return total;
+    };
+
+    // Larger tiles first → less waste on the last row (排满).
+    std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
+        return qint64(a.pw) * a.ph > qint64(b.pw) * b.ph;
+    });
+
+    int maxPw = 1;
+    for (const Item &it : items)
+        maxPw = std::max(maxPw, it.pw);
+
+    double lo = 0.02;
+    double hi = std::min(4.0, double(availW) / double(maxPw));
+    double best = lo;
+    for (int iter = 0; iter < 24; ++iter) {
+        const double mid = (lo + hi) * 0.5;
+        if (shelfTotalHeight(mid) <= availH) {
+            best = mid;
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    double scale = best;
+    if (scale <= 0.02)
+        scale = 0.02;
+
+    // Build shelf rows: pack into QHBoxLayouts under m_windowStack.
+    m_windowHost->setFixedWidth(availW);
+    QHBoxLayout *row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(gap);
+    row->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    int x = 0;
+
+    auto commitRow = [&](QHBoxLayout *r) {
+        if (!r)
+            return;
+        auto *holder = new QWidget(m_windowHost);
+        holder->setLayout(r);
+        m_windowStack->addWidget(holder, 0, Qt::AlignLeft);
+    };
+
+    for (const Item &it : items) {
+        const int bw = std::max(96, int(std::lround(it.pw * scale)));
+        const int bh = std::max(64, int(std::lround(it.ph * scale)));
+        const int cellW = bw + gap;
+
+        if (x > 0 && x + cellW > availW) {
+            commitRow(row);
+            row = new QHBoxLayout;
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(gap);
+            row->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+            x = 0;
+        }
+
+        auto *tile = new WindowPreviewWidget(m_windowHost);
+        tile->setImageBoxSize(QSize(bw, bh));
+        QImage shot = thumbs::capture(it.hwnd, QSize(bw, bh));
+        tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
+        row->addWidget(tile, 0, Qt::AlignTop);
+        m_windowPreviews.push_back(tile);
+        x += cellW;
+    }
+    commitRow(row);
 }
 
 void OverviewWindow::refreshCardBadges()

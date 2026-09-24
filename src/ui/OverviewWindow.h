@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 class QHBoxLayout;
+class QVBoxLayout;
 class QLabel;
 class QPropertyAnimation;
 class SpaceCardWidget;
@@ -89,7 +90,7 @@ private:
     QHBoxLayout *m_cardRow = nullptr;
     QWidget *m_spaceStripHost = nullptr;
     QWidget *m_windowHost = nullptr;
-    QHBoxLayout *m_windowRow = nullptr;
+    QVBoxLayout *m_windowStack = nullptr; // rows from shelf packing
     QScrollArea *m_windowScroll = nullptr;
     QVector<SpaceCardWidget *> m_cards;
     QVector<WindowPreviewWidget *> m_windowPreviews;

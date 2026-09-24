@@ -129,6 +129,70 @@ private slots:
         ::cloak::set(m_hwnd, false);
     }
 
+    void exclusiveMaximizedSpaceBindsAndRenames()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+
+        // Second window (also own-process → only used via assignWindow directly).
+        HWND other = ::CreateWindowExW(
+            0, L"STATIC", L"OtherApp Document",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 400, 300,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(other != nullptr);
+
+        // Maximize test window so isMaximizedWindow() is true.
+        ::ShowWindow(m_hwnd, SW_MAXIMIZE);
+        QVERIFY(SpaceManager::isMaximizedWindow(m_hwnd));
+
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 1));
+        QVERIFY(sm.isExclusiveSpace(m->hmon, 1));
+        QCOMPARE(sm.exclusiveWindowOn(m->hmon, 1), m_hwnd);
+        // Renamed to window title ("SpaceWM space test").
+        QVERIFY(m->spaces[1].name.contains(QStringLiteral("SpaceWM"))
+                || m->spaces[1].name.contains(QStringLiteral("space test")));
+        QCOMPARE(m->spaces[1].windows.size(), 1);
+        QVERIFY(m->spaces[1].windows.contains(m_hwnd));
+
+        // Another window must not enter this exclusive space.
+        QVERIFY(!sm.canAssignToSpace(m->hmon, 1, other));
+        QVERIFY(!sm.assignWindow(other, m->hmon, 1));
+        QVERIFY(!m->spaces[1].windows.contains(other));
+
+        // Non-exclusive space still accepts other.
+        QVERIFY(sm.assignWindow(other, m->hmon, 2));
+        QCOMPARE(sm.spaceOfWindow(other), 2);
+
+        // Move exclusive window out → space unbinds and restores default name.
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        QVERIFY(!sm.isExclusiveSpace(m->hmon, 1));
+        QVERIFY(sm.exclusiveWindowOn(m->hmon, 1) == nullptr);
+        QCOMPARE(m->spaces[1].name, QStringLiteral("Space 2"));
+
+        sm.untrackWindow(m_hwnd);
+        sm.untrackWindow(other);
+        ::cloak::set(m_hwnd, false);
+        ::cloak::set(other, false);
+        ::ShowWindow(m_hwnd, SW_RESTORE);
+        ::DestroyWindow(other);
+    }
+
+    void nonMaximizedDoesNotBindExclusive()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ::ShowWindow(m_hwnd, SW_RESTORE);
+        QVERIFY(!SpaceManager::isMaximizedWindow(m_hwnd));
+
+        const QString before = m->spaces[0].name;
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        QVERIFY(!sm.isExclusiveSpace(m->hmon, 0));
+        QCOMPARE(m->spaces[0].name, before);
+
+        sm.untrackWindow(m_hwnd);
+        ::cloak::set(m_hwnd, false);
+    }
+
     void switchOnlyAffectsAssignedWindowVisibility()
     {
         SpaceManager sm;
