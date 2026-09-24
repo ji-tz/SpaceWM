@@ -195,8 +195,11 @@ void OverviewWindow::rebuildCards()
     for (int i = 0; i < m->spaces.size(); ++i) {
         auto *card = new SpaceCardWidget(m_root);
         card->setSpace(i, m->spaces[i].name, i == current);
+        // Strict real monitor aspect (portrait stays tall/narrow).
+        card->setMonitorAspect(
+            m->physRect.right - m->physRect.left,
+            m->physRect.bottom - m->physRect.top);
 
-        // Always a real image: cached shot, else wallpaper/desktop, never "No preview".
         QImage shot = m->spaces[i].screenshot;
         if (shot.isNull())
             shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
@@ -214,14 +217,16 @@ void OverviewWindow::rebuildCards()
                 setSelected(idx);
         });
 
-        m_cardRow->addWidget(card);
+        m_cardRow->addWidget(card, 0, Qt::AlignVCenter);
         m_cards.push_back(card);
     }
     m_cardRow->addStretch(1);
     setSelected(m_cards.isEmpty() ? -1 : current);
 
-    // Re-scale screenshots now that cards have layout sizes.
     for (int i = 0; i < m_cards.size() && i < m->spaces.size(); ++i) {
+        m_cards[i]->setMonitorAspect(
+            m->physRect.right - m->physRect.left,
+            m->physRect.bottom - m->physRect.top);
         QImage shot = m->spaces[i].screenshot;
         if (shot.isNull())
             shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));

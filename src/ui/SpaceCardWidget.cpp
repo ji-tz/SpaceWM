@@ -2,9 +2,17 @@
 
 #include <QHBoxLayout>
 #include <QMouseEvent>
-#include <QPainter>
+#include <QResizeEvent>
 #include <QStyle>
 #include <QVBoxLayout>
+
+#include <algorithm>
+
+namespace {
+constexpr int kPreviewMaxW = 340;
+constexpr int kPreviewMaxH = 240;
+constexpr int kPreviewMinEdge = 80;
+} // namespace
 
 SpaceCardWidget::SpaceCardWidget(QWidget *parent)
     : QFrame(parent)
@@ -12,11 +20,9 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
     setObjectName(QStringLiteral("SpaceCard"));
     setAttribute(Qt::WA_Hover);
     setCursor(Qt::PointingHandCursor);
-    setMinimumSize(300, 220);
-    setMaximumHeight(360);
 
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(14, 12, 14, 14);
+    root->setContentsMargins(12, 10, 12, 12);
     root->setSpacing(8);
 
     auto *head = new QHBoxLayout;
@@ -31,21 +37,72 @@ SpaceCardWidget::SpaceCardWidget(QWidget *parent)
 
     m_preview = new QLabel(this);
     m_preview->setAlignment(Qt::AlignCenter);
-    m_preview->setMinimumSize(260, 150);
-    m_preview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_preview->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     m_preview->setStyleSheet(QStringLiteral(
         "QLabel { border-radius: 8px; border: 1px solid rgba(255,255,255,40); background: #0c0c10; }"));
-    root->addWidget(m_preview, 1);
+    root->addWidget(m_preview, 0, Qt::AlignHCenter);
 
     m_thumbRow = new QWidget(this);
     m_thumbRow->hide();
     root->addWidget(m_thumbRow);
+    root->addStretch(1);
 
     setStyleSheet(QStringLiteral(
         "#SpaceCard { background: rgba(28, 28, 34, 220); border: 2px solid rgba(255,255,255,40);"
         " border-radius: 14px; }"
         "#SpaceCard[current=\"true\"] { border: 2px solid #7aa2ff; }"
         "#SpaceCard[highlight=\"true\"] { background: rgba(40, 44, 56, 235); border: 2px solid #9ec1ff; }"));
+
+    applyAspectLayout();
+}
+
+QSize SpaceCardWidget::previewSizeForAspect() const
+{
+    const double a = m_aspect > 0.001 ? m_aspect : (16.0 / 9.0);
+    int w = kPreviewMaxW;
+    int h = int(qRound(w / a));
+    if (h > kPreviewMaxH) {
+        h = kPreviewMaxH;
+        w = int(qRound(h * a));
+    }
+    w = std::max(w, kPreviewMinEdge);
+    h = std::max(h, kPreviewMinEdge);
+    return {w, h};
+}
+
+void SpaceCardWidget::applyAspectLayout()
+{
+    const QSize s = previewSizeForAspect();
+    m_preview->setFixedSize(s);
+    setMinimumWidth(s.width() + 28);
+    setMaximumWidth(s.width() + 40);
+    setMinimumHeight(s.height() + 72);
+    setMaximumHeight(s.height() + 88);
+    updateGeometry();
+}
+
+QSize SpaceCardWidget::sizeHint() const
+{
+    const QSize s = previewSizeForAspect();
+    return {s.width() + 28, s.height() + 80};
+}
+
+QSize SpaceCardWidget::minimumSizeHint() const
+{
+    return sizeHint();
+}
+
+void SpaceCardWidget::setMonitorAspect(int physWidth, int physHeight)
+{
+    if (physWidth <= 0 || physHeight <= 0)
+        return;
+    const double a = double(physWidth) / double(physHeight);
+    m_aspectFromMonitor = true;
+    if (qFuzzyCompare(m_aspect, a))
+        return;
+    m_aspect = a;
+    applyAspectLayout();
+    paintPixmap();
 }
 
 void SpaceCardWidget::setSpace(int index, const QString &name, bool current)
@@ -62,25 +119,29 @@ void SpaceCardWidget::setSpace(int index, const QString &name, bool current)
     style()->polish(this);
 }
 
-void SpaceCardWidget::clearPreview()
+void SpaceCardWidget::paintPixmap()
 {
-    m_preview->setPixmap(QPixmap());
+    if (m_image.isNull() || !m_preview)
+        return;
     m_preview->setText({});
+    const QSize target = m_preview->size();
+    if (target.width() <= 0 || target.height() <= 0)
+        return;
+    const QPixmap pm = QPixmap::fromImage(m_image);
+    const QPixmap fit = pm.scaled(target, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    m_preview->setPixmap(fit);
 }
 
 void SpaceCardWidget::setScreenshot(const QImage &image)
 {
-    // Never show "No preview" text — ignore null and keep the last real image.
     if (image.isNull())
         return;
-    m_preview->setText({});
-    m_preview->setStyleSheet(QStringLiteral(
-        "QLabel { border-radius: 8px; border: 1px solid rgba(255,255,255,40); background: #0c0c10; }"));
-    const QPixmap pm = QPixmap::fromImage(image);
-    const QSize target = (m_preview->width() > 0 && m_preview->height() > 0)
-        ? m_preview->size()
-        : QSize(320, 180);
-    m_preview->setPixmap(pm.scaled(target, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_image = image;
+    if (!m_aspectFromMonitor && image.height() > 0) {
+        m_aspect = double(image.width()) / double(image.height());
+        applyAspectLayout();
+    }
+    paintPixmap();
 }
 
 void SpaceCardWidget::setThumbnails(const QVector<QImage> &images)
@@ -115,4 +176,10 @@ void SpaceCardWidget::enterEvent(QEnterEvent *event)
 {
     emit hovered(m_index);
     QFrame::enterEvent(event);
+}
+
+void SpaceCardWidget::resizeEvent(QResizeEvent *event)
+{
+    QFrame::resizeEvent(event);
+    paintPixmap();
 }
