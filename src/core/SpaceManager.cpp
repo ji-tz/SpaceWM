@@ -5,7 +5,9 @@
 #include "WindowTracker.h"
 
 #include <QCoreApplication>
+#include <QColor>
 #include <QCursor>
+#include <QPainter>
 #include <QPoint>
 
 #include <algorithm>
@@ -205,6 +207,68 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
     if (animateHint && m_animationEnabled && !m_overviewOpen)
         emit requestSwitchAnimation(reinterpret_cast<quint64>(hmon), from, index);
     return true;
+}
+
+bool SpaceManager::previewSpace(HMONITOR hmon, int index)
+{
+    auto *m = monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return false;
+
+    // Always set current + re-cloak so hover/drop stays in sync with the real desktop.
+    const bool changed = (m->currentIndex != index);
+    m->currentIndex = index;
+    applyVisibility(hmon);
+
+    // Composite screenshot (overview overlay is up — never BitBlt the screen).
+    rebuildSpaceScreenshot(hmon, index);
+
+    if (changed)
+        emit spaceChanged(reinterpret_cast<quint64>(hmon), index);
+    return true;
+}
+
+void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
+{
+    auto *m = monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return;
+    const int monW = m->physRect.right - m->physRect.left;
+    const int monH = m->physRect.bottom - m->physRect.top;
+    if (monW <= 0 || monH <= 0)
+        return;
+
+    QImage canvas = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+    if (canvas.isNull()) {
+        canvas = QImage(640, 360, QImage::Format_ARGB32_Premultiplied);
+        canvas.fill(QColor(32, 36, 48));
+    }
+
+    // Scale factor physical monitor → canvas.
+    const double sx = double(canvas.width()) / monW;
+    const double sy = double(canvas.height()) / monH;
+
+    QPainter painter(&canvas);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    for (HWND hwnd : m->spaces[index].windows) {
+        if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
+            continue;
+        RECT wr{};
+        if (!::GetWindowRect(hwnd, &wr))
+            continue;
+        const int ww = wr.right - wr.left;
+        const int wh = wr.bottom - wr.top;
+        if (ww <= 0 || wh <= 0)
+            continue;
+        QImage shot = thumbs::capture(hwnd, QSize(qMax(1, int(ww * sx)), qMax(1, int(wh * sy))));
+        if (shot.isNull())
+            continue;
+        const int x = int((wr.left - m->physRect.left) * sx);
+        const int y = int((wr.top - m->physRect.top) * sy);
+        painter.drawImage(QPoint(x, y), shot);
+    }
+    painter.end();
+    m->spaces[index].screenshot = canvas;
 }
 
 bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)

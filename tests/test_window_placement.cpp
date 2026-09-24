@@ -96,15 +96,57 @@ private slots:
         if (!w.isOpen())
             QSKIP("overview did not open");
 
-        // Preview count equals tracked non-iconic windows on this monitor.
+        // Bottom strip = windows of the *current* space only (live preview).
         int expected = 0;
-        for (const Space &sp : m->spaces)
-            for (HWND h : sp.windows)
+        const int cur = m->currentIndex;
+        if (cur >= 0 && cur < m->spaces.size()) {
+            for (HWND h : m->spaces[cur].windows)
                 if (::IsWindow(h) && !::IsIconic(h))
                     ++expected;
+        }
         QCOMPARE(w.windowPreviewCount(), expected);
 
+        // Hover/preview another space → strip follows that space.
+        if (m->spaces.size() > 1 && w.cardCount() > 1) {
+            const int other = (cur + 1) % m->spaces.size();
+            QVERIFY(w.previewSpace(other));
+            QCOMPARE(m->currentIndex, other);
+            QCOMPARE(w.selectedIndex(), other);
+            int expectedOther = 0;
+            for (HWND h : m->spaces[other].windows)
+                if (::IsWindow(h) && !::IsIconic(h))
+                    ++expectedOther;
+            QCOMPARE(w.windowPreviewCount(), expectedOther);
+            // Composite screenshot for the previewed space is available.
+            QVERIFY(!m->spaces[other].screenshot.isNull());
+        }
+
         w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void previewAndCancelRestoresOrigin()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        const int origin = m->currentIndex;
+
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen())
+            QSKIP("overview did not open");
+        QCOMPARE(w.originSpaceIndex(), origin);
+
+        if (m->spaces.size() > 1) {
+            const int other = (origin + 1) % m->spaces.size();
+            QVERIFY(w.previewSpace(other));
+            QCOMPARE(m->currentIndex, other);
+        }
+
+        w.closeOverview(false); // cancel → restore origin on desktop
+        QCOMPARE(m->currentIndex, origin);
+
         for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
     }

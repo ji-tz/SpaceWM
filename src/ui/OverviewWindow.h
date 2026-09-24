@@ -43,10 +43,17 @@ public:
     // Mission Control: drop hwnd onto space index (public for tests).
     bool placeWindowInSpace(HWND hwnd, int spaceIndex);
 
+    // Hover/keyboard: live-switch the real desktop + refresh strip for that space.
+    bool previewSpace(int spaceIndex);
+    // Space index captured when overview opened (restored on cancel).
+    int originSpaceIndex() const { return m_originSpace; }
+
 signals:
     void closed(int chosenSpace);
     // Emitted after a successful drag-place (hwnd may be null in tests via placeWindowInSpace).
     void windowPlaced(quint64 hwnd, int spaceIndex);
+    // Live preview moved to another space (desktop already synced).
+    void spacePreviewed(int spaceIndex);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -55,6 +62,8 @@ protected:
 private:
     void rebuildCards();
     void rebuildWindowPreviews();
+    void refreshCardBadges();
+    void refreshCardScreenshot(int index);
     void setSelected(int index);
     void cancelAnimations();
     void playEnterAnimation();
@@ -71,6 +80,7 @@ private:
     bool m_hostManaged = false;
     bool m_exitStarted = false;
     int m_selected = 0;
+    int m_originSpace = 0;
     int m_pendingCommit = -1;
 
     QWidget *m_root = nullptr;

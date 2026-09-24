@@ -72,6 +72,34 @@ private slots:
         QCOMPARE((0 - 1 + n) % n, 3);
     }
 
+    void previewSpaceSyncsWhileOverviewOpen()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        m->currentIndex = 0;
+        sm.setOverviewOpen(true);
+
+        QVERIFY(sm.previewSpace(m->hmon, 2));
+        QCOMPARE(m->currentIndex, 2);
+
+        // Same index still succeeds (refresh path after drop).
+        QVERIFY(sm.previewSpace(m->hmon, 2));
+        QCOMPARE(m->currentIndex, 2);
+
+        // Invalid indices
+        QVERIFY(!sm.previewSpace(m->hmon, -1));
+        QVERIFY(!sm.previewSpace(m->hmon, 99));
+        QVERIFY(!sm.previewSpace(nullptr, 0));
+
+        // rebuild screenshot under overview must not crash / must produce image
+        sm.rebuildSpaceScreenshot(m->hmon, 2);
+        QVERIFY(!m->spaces[2].screenshot.isNull());
+
+        sm.setOverviewOpen(false);
+        sm.previewSpace(m->hmon, 0);
+        QCOMPARE(m->currentIndex, 0);
+    }
+
     void assignAndQueryOwnership()
     {
         SpaceManager sm;

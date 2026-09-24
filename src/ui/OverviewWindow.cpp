@@ -16,6 +16,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <dwmapi.h>
+
 OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
     , m_manager(manager)
@@ -42,8 +44,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(m_header);
 
     m_hint = new QLabel(
-        tr("Top: spaces (click / drop windows here) · Bottom: drag windows to a space · "
-           "←/→ select · Enter switch · Esc cancel"),
+        tr("Hover a space to sync the desktop · drag windows below onto a space · "
+           "←/→ preview · Enter confirm (instant) · Esc cancel"),
         m_root);
     m_hint->setStyleSheet(QStringLiteral(
         "QLabel { color: rgba(255,255,255,140); font-size: 13px; "
@@ -68,7 +70,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(m_spaceStripHost);
 
     // --- Bottom: draggable windows ---
-    auto *winLabel = new QLabel(tr("Windows on this display — drag onto a space"), m_root);
+    auto *winLabel = new QLabel(tr("Windows in the previewed space — drag onto a space"), m_root);
     winLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
         "background: transparent; border: none; }"));
@@ -123,11 +125,36 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex))
         return false;
 
-    emit windowPlaced(reinterpret_cast<quint64>(hwnd), spaceIndex);
-    // Stay open so the user can place more windows (macOS behavior).
-    rebuildCards();
+    // 1) Sync the real desktop to that space first (windows show/hide).
+    previewSpace(spaceIndex);
+
+    // 2) Composite a fresh card image and push it onto the strip.
+    refreshCardScreenshot(spaceIndex);
+    refreshCardBadges();
+
+    // 3) Bottom strip = windows of the previewed space only.
     rebuildWindowPreviews();
     setSelected(spaceIndex);
+
+    emit windowPlaced(reinterpret_cast<quint64>(hwnd), spaceIndex);
+    return true;
+}
+
+bool OverviewWindow::previewSpace(int spaceIndex)
+{
+    if (!m_manager || !m_hmon)
+        return false;
+    auto *m = m_manager->monitorOf(m_hmon);
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
+        return false;
+
+    // Live cloak on the desktop under the overlay (no animation).
+    m_manager->previewSpace(m_hmon, spaceIndex);
+    m_selected = spaceIndex;
+    refreshCardBadges();
+    rebuildWindowPreviews();
+    refreshCardScreenshot(spaceIndex);
+    emit spacePreviewed(spaceIndex);
     return true;
 }
 
@@ -171,6 +198,8 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
 
     setGeometry(m->geometry);
     rebuildCards();
+    // Bottom strip starts as the space already live on the desktop.
+    m_originSpace = m->currentIndex;
     rebuildWindowPreviews();
 
     m_open = true;
@@ -198,6 +227,15 @@ void OverviewWindow::closeOverview(bool commit)
 {
     if (!m_open || m_closePending)
         return;
+
+    if (!commit && m_manager && m_hmon) {
+        // Cancel: put the real desktop back so hover previews don't stick.
+        auto *m = m_manager->monitorOf(m_hmon);
+        if (m && m_originSpace >= 0 && m_originSpace < m->spaces.size()
+            && m->currentIndex != m_originSpace) {
+            m_manager->previewSpace(m_hmon, m_originSpace);
+        }
+    }
 
     m_pendingCommit = commit ? m_selected : -1;
     m_open = false;
@@ -329,11 +367,12 @@ void OverviewWindow::rebuildCards()
                 return;
             if (idx >= 0 && idx < m_cards.size())
                 m_selected = idx;
+            // Desktop already matches if user hovered this card — commit is instant.
             closeOverview(true);
         });
         connect(card, &SpaceCardWidget::hovered, this, [this](int idx) {
             if (m_open)
-                setSelected(idx);
+                previewSpace(idx);
         });
         connect(card, &SpaceCardWidget::windowDropped, this,
                 [this](int spaceIndex, quint64 hwnd) {
@@ -362,10 +401,11 @@ void OverviewWindow::rebuildWindowPreviews()
     }
     m_windowPreviews.clear();
 
-    // All windows assigned to any space on this monitor (all spaces).
+    // Only the live/previewed space (matches Mission Control bottom strip).
+    const int idx = m->currentIndex;
     QVector<HWND> hwnds;
-    for (const Space &sp : m->spaces) {
-        for (HWND h : sp.windows) {
+    if (idx >= 0 && idx < m->spaces.size()) {
+        for (HWND h : m->spaces[idx].windows) {
             if (::IsWindow(h) && !::IsIconic(h))
                 hwnds.push_back(h);
         }
@@ -381,11 +421,36 @@ void OverviewWindow::rebuildWindowPreviews()
     m_windowRow->addStretch(1);
 
     if (m_windowPreviews.isEmpty()) {
-        auto *empty = new QLabel(tr("No windows on this display"), m_windowHost);
+        auto *empty = new QLabel(
+            idx >= 0 ? tr("No windows in this space") : tr("No windows on this display"),
+            m_windowHost);
         empty->setStyleSheet(QStringLiteral(
             "QLabel { color: rgba(255,255,255,100); font-size: 13px; background: transparent; border: none; }"));
         m_windowRow->addWidget(empty);
     }
+}
+
+void OverviewWindow::refreshCardBadges()
+{
+    auto *m = m_manager ? m_manager->monitorOf(m_hmon) : nullptr;
+    if (!m)
+        return;
+    for (int i = 0; i < m_cards.size() && i < m->spaces.size(); ++i) {
+        const bool isCurrent = (i == m->currentIndex);
+        m_cards[i]->setSpace(i, m->spaces[i].name, isCurrent);
+        m_cards[i]->setHighlighted(i == m_selected);
+    }
+}
+
+void OverviewWindow::refreshCardScreenshot(int index)
+{
+    auto *m = m_manager ? m_manager->monitorOf(m_hmon) : nullptr;
+    if (!m || index < 0 || index >= m->spaces.size() || index >= m_cards.size())
+        return;
+    QImage shot = m->spaces[index].screenshot;
+    if (shot.isNull())
+        shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+    m_cards[index]->setScreenshot(shot);
 }
 
 void OverviewWindow::setSelected(int index)
@@ -429,19 +494,19 @@ void OverviewWindow::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     case Qt::Key_Left:
-        setSelected((m_selected - 1 + n) % n);
+        previewSpace((m_selected - 1 + n) % n);
         event->accept();
         return;
     case Qt::Key_Right:
-        setSelected((m_selected + 1) % n);
+        previewSpace((m_selected + 1) % n);
         event->accept();
         return;
     case Qt::Key_Home:
-        setSelected(0);
+        previewSpace(0);
         event->accept();
         return;
     case Qt::Key_End:
-        setSelected(n - 1);
+        previewSpace(n - 1);
         event->accept();
         return;
     default:

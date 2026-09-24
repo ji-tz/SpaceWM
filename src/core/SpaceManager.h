@@ -54,6 +54,11 @@ public:
 
     bool switchSpace(HMONITOR hmon, int index, bool animateHint = true);
 
+    // Live-preview a space while the overview overlay is open:
+    // updates currentIndex + cloak immediately (no flash). Same index still
+    // re-applies visibility so callers can refresh UI after drops.
+    bool previewSpace(HMONITOR hmon, int index);
+
     bool assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex);
 
     int spaceOfWindow(HWND hwnd) const;
@@ -74,6 +79,10 @@ public:
 
     // Snapshot the monitor into space[index].screenshot (call while space is visible).
     void captureSpaceScreenshot(HMONITOR hmon, int index);
+
+    // Composite wallpaper + window PrintWindows into space[index].screenshot.
+    // Safe while the overview overlay covers the screen (does not BitBlt desktop).
+    void rebuildSpaceScreenshot(HMONITOR hmon, int index);
 
     // Fill empty space previews with desktop wallpaper / live shot (cold start).
     void seedScreenshots();
