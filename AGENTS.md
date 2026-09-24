@@ -1,5 +1,3 @@
-# AGENTS
-
 # SpaceWM 开发与测试规范
 
 本文件是本仓库的 **agent / 开发者契约**（原 `agent.md`）。任何修改必须遵守下列规则。
@@ -124,6 +122,8 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | Space 卡片 | `ui/preview/SpaceCardWidget.*` | `test_space_card` | 有 |
 | 单屏 / 多屏 overview | `OverviewWindow` / `OverviewHost` | `test_overview` · `test_overview_host` | 有 |
 | **软预览 / 悬停离开 / 拖放停原 space / 全量预览 / tile DPI** | `OverviewWindow` 等 | `test_window_placement` | 有 |
+| **space 增删排序（+ / × / 拖动重排）** | `SpaceManager::{add,remove,move}Space` + `AddSpaceButton` + `SpaceCardWidget` | `test_window_placement` · `test_space_card` | 有 |
+| **悬停离开卡片不重置；外缘/整面板 leave 才回 current** | `OverviewWindow::{eventFilter,leaveEvent}` | `test_window_placement` | 有 |
 | 拖拽热点 | `mapPressToHotSpot` | `test_window_placement` | 有；**ghost 80%** 未断言 |
 | 切换 flash | `SwitchFlashOverlay` | `test_flash_overlay` | 有 |
 | 托盘 | `TrayIcon` | — | **无**（弱依赖） |
