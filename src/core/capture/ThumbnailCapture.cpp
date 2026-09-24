@@ -151,9 +151,22 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     HDC screen = ::GetDC(nullptr);
     if (!screen)
         return {};
+    // Prefer a 32-bit DIB section so we get top-down BGRA without an extra
+    // GetDIBits round-trip that can soft-convert some surfaces.
     HDC mem = ::CreateCompatibleDC(screen);
-    HBITMAP bmp = ::CreateCompatibleBitmap(screen, fullW, fullH);
-    if (!mem || !bmp) {
+    void *bits = nullptr;
+    HBITMAP bmp = nullptr;
+    {
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = fullW;
+        bi.bmiHeader.biHeight = -fullH; // top-down
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        bmp = ::CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    }
+    if (!mem || !bmp || !bits) {
         if (bmp) ::DeleteObject(bmp);
         if (mem) ::DeleteDC(mem);
         ::ReleaseDC(nullptr, screen);
@@ -161,11 +174,22 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     }
     HGDIOBJ old = ::SelectObject(mem, bmp);
 
-    const BOOL ok = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+    // PW_RENDERFULLCONTENT: capture layered/composited content at native size.
+    BOOL ok = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
     if (!ok)
-        ::BitBlt(mem, 0, 0, fullW, fullH, screen, rc.left, rc.top, SRCCOPY);
+        ok = ::BitBlt(mem, 0, 0, fullW, fullH, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);
+    if (!ok) {
+        ::SelectObject(mem, old);
+        ::DeleteObject(bmp);
+        ::DeleteDC(mem);
+        ::ReleaseDC(nullptr, screen);
+        return {};
+    }
 
-    QImage img = gdiToImage(mem, bmp, fullW, fullH);
+    QImage img(fullW, fullH, QImage::Format_ARGB32);
+    // GDI DIB is BGRA little-endian == Qt ARGB32 on little-endian.
+    memcpy(img.bits(), bits, size_t(fullW) * size_t(fullH) * 4);
+    img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
     ::SelectObject(mem, old);
     ::DeleteObject(bmp);

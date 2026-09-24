@@ -12,7 +12,9 @@ class QLabel;
 class QPropertyAnimation;
 class SpaceCardWidget;
 class WindowPreviewWidget;
+class AddSpaceButton;
 class QScrollArea;
+class QEvent;
 
 // Mission Control style overview for ONE monitor:
 //   top    — space strip (click to switch, drop windows to place)
@@ -65,6 +67,8 @@ signals:
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void rebuildCards();
@@ -78,6 +82,11 @@ private:
     void finishClose();
     void pinToMonitorPhysically();
     QString windowTitle(HWND hwnd) const;
+    // True if pos is in the outer margin band of the panel (reset soft preview).
+    bool isOuterMarginPos(const QPoint &pos) const;
+    void restoreStripToCurrentSpace();
+    bool addSpaceFromStrip();
+    bool addSpaceAndPlaceWindow(quint64 hwnd);
 
     SpaceManager *m_manager = nullptr;
     HMONITOR m_hmon = nullptr;
@@ -95,6 +104,7 @@ private:
     QLabel *m_hint = nullptr;
     QHBoxLayout *m_cardRow = nullptr;
     QWidget *m_spaceStripHost = nullptr;
+    AddSpaceButton *m_addSpaceBtn = nullptr;
     QWidget *m_windowHost = nullptr;
     QVBoxLayout *m_windowStack = nullptr; // rows from shelf packing
     QScrollArea *m_windowScroll = nullptr;

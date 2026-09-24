@@ -1,16 +1,21 @@
 #include "OverviewWindow.h"
 
+#include "ui/preview/AddSpaceButton.h"
 #include "ui/preview/SpaceCardWidget.h"
 #include "ui/preview/WindowPreviewWidget.h"
 #include "core/capture/ThumbnailCapture.h"
+#include "core/monitor/MonitorInfo.h"
 #include "core/window/WindowTracker.h"
 
+#include <QEvent>
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QColor>
+#include <QLayout>
+#include <QMouseEvent>
 #include <QPropertyAnimation>
 #include <QScrollArea>
 #include <QScreen>
@@ -29,6 +34,27 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     setAttribute(Qt::WA_DeleteOnClose, false);
     setObjectName(QStringLiteral("OverviewRoot"));
     setAttribute(Qt::WA_TranslucentBackground, false);
+
+    // Model re-rendered a space (new window, move, untrack) → reload cards.
+    if (m_manager) {
+        connect(m_manager, &SpaceManager::spacePreviewInvalidated, this,
+                [this](quint64 hmon, int spaceIndex) {
+                    if (!m_open || !m_hmon || hmon != quint64(m_hmon))
+                        return;
+                    if (spaceIndex >= 0 && spaceIndex < m_cards.size()
+                        && spaceIndex < m_manager->spaceCount(m_hmon))
+                        refreshCardScreenshot(spaceIndex);
+                    if (spaceIndex == m_selected)
+                        rebuildWindowPreviews();
+                });
+        connect(m_manager, &SpaceManager::windowUntracked, this, [this](quint64) {
+            if (!m_open)
+                return;
+            for (int i = 0; i < m_cards.size(); ++i)
+                refreshCardScreenshot(i);
+            rebuildWindowPreviews();
+        });
+    }
 
     m_root = new QWidget(this);
     m_root->setObjectName(QStringLiteral("OverviewPanel"));
@@ -72,6 +98,15 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     m_cardRow->addStretch(1);
     stripOuter->addLayout(m_cardRow);
     v->addWidget(m_spaceStripHost);
+
+    m_addSpaceBtn = new AddSpaceButton(m_spaceStripHost);
+    connect(m_addSpaceBtn, &AddSpaceButton::addRequested, this,
+            [this]() { addSpaceFromStrip(); });
+    connect(m_addSpaceBtn, &AddSpaceButton::windowDropped, this,
+            [this](quint64 hwnd) { addSpaceAndPlaceWindow(hwnd); });
+
+    // Outer-margin mouse move / leave → restore bottom strip to current space.
+    installEventFilter(this);
 
     // --- Bottom: draggable windows ---
     auto *winLabel = new QLabel(tr("Windows in the previewed space — drag onto a space"), m_root);
@@ -195,13 +230,16 @@ void OverviewWindow::pinToMonitorPhysically()
 {
     if (!m_hmon)
         return;
-    RECT phys{};
-    if (!monitors::physRectOf(m_hmon, &phys))
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!::GetMonitorInfoW(m_hmon, &mi))
         return;
+    // Pin to work area so the taskbar stays visible/clickable under the overlay.
+    const RECT &r = mi.rcWork;
     if (HWND h = reinterpret_cast<HWND>(winId())) {
         ::SetWindowPos(h, HWND_TOP,
-                       phys.left, phys.top,
-                       phys.right - phys.left, phys.bottom - phys.top,
+                       r.left, r.top,
+                       r.right - r.left, r.bottom - r.top,
                        SWP_NOACTIVATE);
     }
 }
@@ -228,7 +266,9 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
         // Host path: batch caches already built in OverviewHost::openAll.
     }
 
-    setGeometry(m->geometry);
+    // Cover the work area only — taskbar remains on top / visible.
+    const QRect work = monitors::logicalWorkArea(hmon);
+    setGeometry(work.isValid() && !work.isEmpty() ? work : m->geometry);
     rebuildCards();
     m_originSpace = m->currentIndex;
     m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
@@ -373,7 +413,8 @@ void OverviewWindow::rebuildCards()
     m_header->setText(tr("Spaces — %1").arg(m->deviceName));
 
     while (QLayoutItem *item = m_cardRow->takeAt(0)) {
-        if (item->widget())
+        // Keep the shared + button alive across rebuilds.
+        if (item->widget() && item->widget() != m_addSpaceBtn)
             item->widget()->deleteLater();
         delete item;
     }
@@ -398,6 +439,8 @@ void OverviewWindow::rebuildCards()
             shot.fill(QColor(32, 36, 48));
         }
         card->setScreenshot(shot);
+        // Mac-style × only on spaces that actually have windows (and size allows).
+        card->setRemovable(m->spaces.size() > 1 && m_manager->spaceHasWindows(m_hmon, i));
 
         connect(card, &SpaceCardWidget::activated, this, [this](int idx) {
             if (!m_open)
@@ -411,17 +454,54 @@ void OverviewWindow::rebuildCards()
             if (m_open)
                 previewSpace(idx);
         });
+        // hoverLeft intentionally NOT wired to restore — only outer margins / leave panel.
         connect(card, &SpaceCardWidget::windowDropped, this,
                 [this](int spaceIndex, quint64 hwnd) {
                     if (!m_open)
                         return;
                     placeWindowInSpace(reinterpret_cast<HWND>(hwnd), spaceIndex);
                 });
+        connect(card, &SpaceCardWidget::removeRequested, this, [this](int idx) {
+            if (!m_open || !m_manager || !m_hmon)
+                return;
+            if (!m_manager->removeSpace(m_hmon, idx))
+                return;
+            // Clamp selection after structural change.
+            const int n = m_manager->spaceCount(m_hmon);
+            if (m_selected >= n)
+                m_selected = qMax(0, n - 1);
+            m_originSpace = qBound(0, m_originSpace, qMax(0, n - 1));
+            rebuildCards();
+            rebuildWindowPreviews();
+            refreshCardBadges();
+            setSelected(m_selected);
+        });
+        connect(card, &SpaceCardWidget::reorderRequested, this, [this](int from, int to) {
+            if (!m_open || !m_manager || !m_hmon)
+                return;
+            if (!m_manager->moveSpace(m_hmon, from, to))
+                return;
+            // Keep following the same logical space (index shifted).
+            if (m_selected == from)
+                m_selected = to;
+            else if (from < m_selected && to >= m_selected)
+                --m_selected;
+            else if (from > m_selected && to <= m_selected)
+                ++m_selected;
+            m_selected = qBound(0, m_selected, qMax(0, m_manager->spaceCount(m_hmon) - 1));
+            m_originSpace = qBound(0, m_originSpace, qMax(0, m_manager->spaceCount(m_hmon) - 1));
+            rebuildCards();
+            rebuildWindowPreviews();
+            refreshCardBadges();
+            setSelected(m_selected);
+        });
 
         m_cardRow->addWidget(card, 0, Qt::AlignVCenter);
         m_cards.push_back(card);
     }
     m_cardRow->addStretch(1);
+    // Trailing + after stretch so it sits at the far right of the strip.
+    m_cardRow->addWidget(m_addSpaceBtn, 0, Qt::AlignVCenter);
     setSelected(m_cards.isEmpty() ? -1 : current);
 
     // Cards may still have zero preview size before layout — re-apply once shown.
@@ -460,7 +540,7 @@ void OverviewWindow::rebuildWindowPreviews()
 
     struct Item {
         HWND hwnd = nullptr;
-        int pw = 0;
+        int pw = 0; // logical (Qt) size — matches widget / strip coordinates
         int ph = 0;
     };
     QVector<Item> items;
@@ -468,15 +548,16 @@ void OverviewWindow::rebuildWindowPreviews()
         for (HWND hwnd : m->spaces[idx].windows) {
             if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
                 continue;
-            RECT wr{};
-            if (!::GetWindowRect(hwnd, &wr))
-                continue;
-            Item it;
-            it.hwnd = hwnd;
-            it.pw = wr.right - wr.left;
-            it.ph = wr.bottom - wr.top;
-            if (it.pw > 0 && it.ph > 0)
+            // GetWindowRect is physical; convert with THIS window's monitor DPI
+            // so scale≤1 means "not larger than the on-screen window".
+            const QSize logical = monitors::logicalWindowSize(hwnd);
+            if (logical.width() > 0 && logical.height() > 0) {
+                Item it;
+                it.hwnd = hwnd;
+                it.pw = logical.width();
+                it.ph = logical.height();
                 items.push_back(it);
+            }
         }
     }
 
@@ -524,13 +605,13 @@ void OverviewWindow::rebuildWindowPreviews()
         maxPh = std::max(maxPh, it.ph);
     }
 
-    // Uniform scale ≤ 1.0 so a tile is never larger than the real window.
-    // Readable floor lifts scale a bit but is also capped by real size.
+    // Uniform scale ≤ 1.0 so a tile is never larger than the real window
+    // (pw/ph are already Qt logical — same units as availW/H and QWidget).
     auto tileSize = [&](const Item &it, double scale) -> QSize {
         const double pw = std::max(1, it.pw);
         const double ph = std::max(1, it.ph);
         double s = std::min(std::max(scale, 0.02), 1.0);
-        // Raise s until min edge is met — but never past 1.0 (real size).
+        // Readable floor in logical px — still never past 1.0 (real size).
         const double sMinW = 96.0 / pw;
         const double sMinH = 64.0 / ph;
         s = std::max(s, std::min(1.0, std::max(sMinW, sMinH)));
@@ -614,8 +695,8 @@ void OverviewWindow::rebuildWindowPreviews()
 
         auto *tile = new WindowPreviewWidget(m_windowHost);
         tile->setImageBoxSize(QSize(bw, bh));
-        // One cached image per HWND — scaled copy for this tile only.
-        QImage shot = thumbs::windowShot(it.hwnd, QSize(bw, bh));
+        // Full-resolution cached shot — tile scales once to physical pixels (DPR).
+        QImage shot = thumbs::windowShot(it.hwnd);
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
         row->addWidget(tile, 0, Qt::AlignTop);
         m_windowPreviews.push_back(tile);
@@ -732,6 +813,78 @@ void OverviewWindow::mouseDoubleClickEvent(QMouseEvent *event)
         return;
     }
     QWidget::mouseDoubleClickEvent(event);
+}
+
+bool OverviewWindow::isOuterMarginPos(const QPoint &pos) const
+{
+    if (!m_root || !m_root->layout())
+        return false;
+    // Layout contentsRect is in m_root coordinates; m_root fills this widget.
+    const QRect inner = m_root->layout()->contentsRect();
+    return !inner.contains(pos);
+}
+
+void OverviewWindow::restoreStripToCurrentSpace()
+{
+    if (!m_open || !m_manager || !m_hmon)
+        return;
+    auto *m = m_manager->monitorOf(m_hmon);
+    if (!m)
+        return;
+    if (m_selected != m->currentIndex)
+        previewSpace(m->currentIndex);
+}
+
+bool OverviewWindow::addSpaceFromStrip()
+{
+    if (!m_open || !m_manager || !m_hmon)
+        return false;
+    if (!m_manager->addSpace(m_hmon))
+        return false;
+    const int last = m_manager->spaceCount(m_hmon) - 1;
+    m_selected = last;
+    rebuildCards();
+    rebuildWindowPreviews();
+    refreshCardBadges();
+    setSelected(last);
+    return true;
+}
+
+bool OverviewWindow::addSpaceAndPlaceWindow(quint64 hwnd)
+{
+    if (!m_open || !m_manager || !m_hmon)
+        return false;
+    if (!m_manager->addSpace(m_hmon))
+        return false;
+    const int last = m_manager->spaceCount(m_hmon) - 1;
+    const bool placed = placeWindowInSpace(reinterpret_cast<HWND>(hwnd), last);
+    // Stay on origin/current after place (placeWindowInSpace already keeps origin).
+    m_selected = m_manager->monitorOf(m_hmon)
+                     ? m_manager->monitorOf(m_hmon)->currentIndex
+                     : last;
+    rebuildCards();
+    rebuildWindowPreviews();
+    refreshCardBadges();
+    setSelected(m_selected);
+    return placed;
+}
+
+bool OverviewWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == this && m_open && event->type() == QEvent::MouseMove) {
+        const auto *me = static_cast<QMouseEvent *>(event);
+        // Only the outer margin band resets — gap between strip and windows keeps preview.
+        if (isOuterMarginPos(me->position().toPoint()))
+            restoreStripToCurrentSpace();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void OverviewWindow::leaveEvent(QEvent *event)
+{
+    // Pointer left the whole overview panel → back to current space strip.
+    restoreStripToCurrentSpace();
+    QWidget::leaveEvent(event);
 }
 
 void OverviewWindow::playEnterAnimation()

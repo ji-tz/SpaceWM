@@ -64,7 +64,7 @@ public:
     virtual HRESULT STDMETHODCALLTYPE SetFocus() = 0;
     virtual HRESULT STDMETHODCALLTYPE SwitchTo() = 0;
     virtual HRESULT STDMETHODCALLTYPE TryInvokeBack(void *cb) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetThumbnailWindow(HWND *h) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetThumbnailWindow(HWND *hwnd) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetMonitor(void **m) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetVisibility(int *v) = 0;
     virtual HRESULT STDMETHODCALLTYPE SetCloak(int cloakType, int unknown) = 0;
@@ -77,7 +77,7 @@ public:
     virtual HRESULT STDMETHODCALLTYPE GetViews(void **v) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetViewsByZOrder(void **v) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetViewsByAppUserModelId(PCWSTR id, void **v) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetViewForHwnd(HWND h, IApplicationViewSlim **view) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetViewForHwnd(HWND hwnd, IApplicationViewSlim **view) = 0;
 };
 
 IApplicationViewCollectionSlim *viewCollection()
@@ -193,7 +193,6 @@ bool showViaShowWindow(HWND hwnd)
     if (st.hasPlacement) {
         WINDOWPLACEMENT wp = st.placement;
         wp.length = sizeof(wp);
-        // If we stored a normal showCmd but the window is iconic now, keep iconic.
         if (::IsIconic(hwnd) && wp.showCmd != SW_SHOWMINIMIZED
             && wp.showCmd != SW_SHOWMINNOACTIVE && wp.showCmd != SW_MINIMIZE)
             wp.showCmd = SW_SHOWMINIMIZED;
@@ -209,7 +208,6 @@ bool showViaShowWindow(HWND hwnd)
 void remember(HWND hwnd, How how)
 {
     HiddenInfo &st = g_hidden[hwnd];
-    // Keep original wasVisible/placement if we already recorded a hide.
     if (st.how == How::NotHidden) {
         st.wasVisible = ::IsWindowVisible(hwnd) != FALSE;
         st.hasPlacement = ::GetWindowPlacement(hwnd, &st.placement) != FALSE;
@@ -232,7 +230,6 @@ bool set(HWND hwnd, bool enable)
         return false;
 
     if (enable) {
-        // Already hidden by us — idempotent.
         auto it = g_hidden.find(hwnd);
         if (it != g_hidden.end() && it->second.how != How::NotHidden)
             return true;
@@ -245,17 +242,13 @@ bool set(HWND hwnd, bool enable)
             remember(hwnd, How::Dwm);
             return true;
         }
-        // Cross-process reliable path.
         return hideViaShowWindow(hwnd);
     }
 
     // ---- show: ONLY reverse what we did ----
     auto it = g_hidden.find(hwnd);
-    if (it == g_hidden.end()) {
-        // We never hid this window. Do NOT ShowWindow / uncloak —
-        // it may be hidden by the shell, tray, system VD, etc.
+    if (it == g_hidden.end())
         return false;
-    }
 
     const How how = it->second.how;
     switch (how) {
@@ -303,7 +296,6 @@ int hiddenCount()
 
 int showAllHidden()
 {
-    // set(hwnd, false) mutates g_hidden — snapshot keys first.
     std::vector<HWND> keys;
     keys.reserve(g_hidden.size());
     for (const auto &kv : g_hidden)

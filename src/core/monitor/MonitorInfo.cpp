@@ -117,4 +117,56 @@ QRect logicalGeometry(HMONITOR hmon)
     return toLogical(phys, hmon);
 }
 
+QRect logicalWorkArea(HMONITOR hmon)
+{
+    if (!hmon)
+        return {};
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!::GetMonitorInfoW(hmon, &mi))
+        return logicalGeometry(hmon);
+    return toLogical(mi.rcWork, hmon);
+}
+
+UINT dpiFor(HMONITOR hmon)
+{
+    return effectiveDpiX(hmon);
+}
+
+double scaleFactor(HMONITOR hmon)
+{
+    const UINT dpi = effectiveDpiX(hmon);
+    return dpi > 0 ? double(dpi) / 96.0 : 1.0;
+}
+
+QSize toLogicalSize(int physW, int physH, UINT dpiX, UINT dpiY)
+{
+    if (physW <= 0 || physH <= 0)
+        return {};
+    if (dpiX == 0)
+        dpiX = 96;
+    if (dpiY == 0)
+        dpiY = 96;
+    const int w = ::MulDiv(physW, 96, int(dpiX));
+    const int h = ::MulDiv(physH, 96, int(dpiY));
+    return QSize(std::max(1, w), std::max(1, h));
+}
+
+QSize logicalWindowSize(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return {};
+    RECT wr{};
+    if (!::GetWindowRect(hwnd, &wr))
+        return {};
+    const int pw = wr.right - wr.left;
+    const int ph = wr.bottom - wr.top;
+    if (pw <= 0 || ph <= 0)
+        return {};
+    const HMONITOR hmon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    UINT dx = 96, dy = 96;
+    ::GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &dx, &dy);
+    return toLogicalSize(pw, ph, dx, dy);
+}
+
 } // namespace monitors

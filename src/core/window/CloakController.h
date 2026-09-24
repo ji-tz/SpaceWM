@@ -24,8 +24,8 @@ Backend lastBackend();
 // Test/monitoring: how many windows we currently hold hidden.
 int hiddenCount();
 
-// Normal exit: reverse EVERY hide this process performed (all backends).
-// Only touches HWNDs we recorded — never shell-hidden windows.
+// Graceful exit: reverse EVERY hide this process performed (all backends).
+// Only touches HWNDs we recorded in this process — never shell-hidden windows.
 // Returns how many windows were restored.
 int showAllHidden();
 

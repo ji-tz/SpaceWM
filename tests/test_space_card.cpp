@@ -63,12 +63,45 @@ private slots:
         card.setSpace(1, QStringLiteral("Two"), false);
         QSignalSpy spy(&card, &SpaceCardWidget::activated);
 
-        // Synthesize a left press.
+        // Activation fires on release (press+release without drag / badge).
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(10, 10),
                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&card, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(10, 10),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&card, &release);
         QCOMPARE(spy.count(), 1);
         QCOMPARE(spy.first().at(0).toInt(), 1);
+    }
+
+    void removeBadgeClickEmitsRemoveNotActivate()
+    {
+        SpaceCardWidget card;
+        card.setSpace(3, QStringLiteral("HasWin"), false);
+        card.setRemovable(true);
+        QSignalSpy removed(&card, &SpaceCardWidget::removeRequested);
+        QSignalSpy activated(&card, &SpaceCardWidget::activated);
+
+        const QPoint c = card.removeBadge().center();
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(c),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&card, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(c),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&card, &release);
+
+        QCOMPARE(removed.count(), 1);
+        QCOMPARE(removed.first().at(0).toInt(), 3);
+        QCOMPARE(activated.count(), 0);
+    }
+
+    void leaveDoesNotCrash()
+    {
+        SpaceCardWidget card;
+        card.setSpace(0, QStringLiteral("S"), false);
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(&card, &leave);
+        QVERIFY(true);
     }
 };
 

@@ -76,12 +76,30 @@ public:
     // Ensure every managed window has a cached windowShot (overview entry).
     void warmWindowShots();
 
+    // Drop cached shot for hwnd and re-render its owner space (SHOW/resize).
+    void refreshWindowAfterUpdate(HWND hwnd);
+
+    // Append a new empty space on this monitor (Mac-style "+").
+    bool addSpace(HMONITOR hmon);
+
+    // Delete space[index]; windows move to the previous space (index 0 → next).
+    // Fails if only one space remains. Adjusts currentIndex and owners.
+    bool removeSpace(HMONITOR hmon, int index);
+
+    // True if space has at least one live managed window (for UI "can close").
+    bool spaceHasWindows(HMONITOR hmon, int spaceIndex) const;
+
+    // Reorder: move space[from] to index[to] (drag in the strip).
+    bool moveSpace(HMONITOR hmon, int from, int to);
+
 signals:
     void spaceChanged(quint64 hmon, int index);
     void monitorLayoutChanged();
     void windowTracked(quint64 hwnd);
     void windowUntracked(quint64 hwnd);
     void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex);
+    // A space's screenshot was re-rendered — overview cards should reload it.
+    void spacePreviewInvalidated(quint64 hmon, int spaceIndex);
 
 private:
     void ensureMonitor(HMONITOR hmon);

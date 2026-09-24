@@ -4,7 +4,7 @@ Windows 上的**按显示器独立虚拟桌面（Spaces）管理器**，体验�
 
 C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64。
 
-> 本仓库的开发与测试契约见 [`agent.md`](agent.md)（改代码前必读）。
+> 本仓库的开发与测试契约见 [`AGENT.md`](AGENT.md)（改代码前必读）；问题记录体系见 [`docs/EH.md`](docs/EH.md) / [`docs/TR.md`](docs/TR.md)（`AGENT.md` §0）。
 
 ## 功能
 
@@ -16,7 +16,7 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
   - 底部窗口预览：按真实窗口宽高比缩放，可拖到任意 space 卡片完成归位；
   - 悬停 / 键盘仅总览内预览（不切桌面），**点击才正式切换**；拖入窗口不跳到目标 space。
 - **最大化窗口独占 space**：最大化窗口绑定独立 space，拒收其它窗口混入。
-- **全局热键**：`RegisterHotKey` + 原生事件过滤。
+- **全局热键**：低级键盘钩子（含 System 预设 Win 组合吞掉）+ 可配置序列。
 - **切换动画**：方向性半透明 flash，不逐帧抓屏。
 - **托盘**：状态显示、上/下一切换、打开总览、刷新显示器、退出（安全 uncloak）。
 - **混合 DPI 安全**：进程启用 Per-Monitor V2；`QWidget` 用逻辑坐标，落位用物理 `SetWindowPos`；竖屏显示器预览保持真实宽高比。
@@ -55,7 +55,7 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 | `Ctrl+Alt+Space` | 打开 / 关闭总览（所有屏同时） |
 | `Ctrl+Alt+1` ~ `Ctrl+Alt+4` | 跳转到光标所在屏的第 N 个 space |
 
-总览内：单击卡片 / `Enter` 才切换该屏，`Esc` 取消，悬停仅在总览内预览，拖动底部窗口预览到卡片可移动窗口（停留在当前 space）。
+总览内：单击卡片 / `Enter` 才切换该屏，`Esc` 取消；悬停仅在总览内预览（卡片之间/到窗口条**不**回退，移到面板外缘才回 current）；顶部条最右 **+** 新增 space（也可把窗口拖到 + 上）；有窗口的卡片悬停出 **×** 删除（窗口并入前一个 space）；按住卡片可拖动排序；拖底部窗口到卡片移动窗口（停留在当前 space）。
 
 ## 构建
 
@@ -74,10 +74,10 @@ cmd /c "`"$vcvars`" && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -
 
 ## 测试
 
-11 个 Qt Test 可执行文件，通过 CTest 统一调度：
+12 个 Qt Test 可执行文件，通过 CTest 统一调度：
 
 ```powershell
-# 构建 + 全量回归（agent.md 要求：任何源码修改后必须全量通过）
+# 构建 + 全量回归（AGENT.md 要求：任何源码修改后必须全量通过）
 cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build --output-on-failure"
 
 # 或使用封装脚本
@@ -92,13 +92,14 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 | `test_window_tracker` | 窗口发现、本进程/最小化排除 |
 | `test_thumbnail` | 整屏截图、壁纸兜底、PrintWindow |
 | `test_hotkeys` | 全局热键注册与分发 |
+| `test_settings` | 热键序列 / System 预设 / 开机自启 |
 | `test_space_card` | 卡片宽高比、紧凑模式、拖放 |
 | `test_overview` | 单屏总览开关、按键、快速连开 |
 | `test_overview_host` | 多屏同时总览 |
-| `test_window_placement` | 拖入 space、总览内预览、底部预览比例 |
+| `test_window_placement` | 软预览、悬停离开、拖放停原 space、tile DPI、全量预览 |
 | `test_flash_overlay` | 切换 flash 动画 |
 
-新增 / 修改功能必须同步测试，详见 [`agent.md` §2](agent.md)。
+新增 / 修改功能必须同步测试，详见 [`AGENT.md` §2](AGENT.md)。
 
 可选：在 [Windows Sandbox](scripts/enable-windows-sandbox.ps1) 中跑隔离回归，避免测试触碰宿主桌面状态。
 
@@ -110,10 +111,10 @@ SpaceManager   → monitor → space[i] → HWND + 截图 + Z 序 + 独占绑定
 Cloak          → hide 只记录自己藏过的；show 只恢复自己
 OverviewHost   → 每屏一个 OverviewWindow，同时开关（Mission Control）
 OverviewWindow → 单屏：顶部 space 条 + 底部窗口预览（DPI 逻辑坐标 + 物理 SetWindowPos）
-HotkeyManager  → RegisterHotKey + WM_HOTKEY（Ctrl+Alt+←/→/Space/1-4）
-ThumbnailCapture → PrintWindow / BitBlt / 壁纸兜底
+HotkeyManager  → WH_KEYBOARD_LL（匹配绑定 down+up 吞掉，支持 System 预设）
+ThumbnailCapture → PrintWindow / windowShot 缓存 / 壁纸兜底
 SwitchFlashOverlay → 切换方向性闪光
-TrayIcon       → 托盘状态与菜单
+TrayIcon       → 托盘状态与菜单（点击开设置）
 ```
 
 ### 关键不变量
@@ -127,7 +128,7 @@ TrayIcon       → 托盘状态与菜单
 
 ```text
 SpaceWM/
-├── agent.md              # 开发与测试契约（必读）
+├── AGENT.md            # 开发与测试契约（必读）
 ├── CMakeLists.txt        # 主构建：spacewm_core 静态库 + SpaceWM.exe + 测试
 ├── lib/                  # 可移植运行时（Qt DLL + 插件 + CRT，已入库）
 ├── cmake/CopyCrt.cmake   # 拷贝 MSVC CRT 到 lib/

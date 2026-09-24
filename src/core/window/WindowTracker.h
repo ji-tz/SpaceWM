@@ -36,12 +36,15 @@ signals:
     void windowCreated(quint64 hwnd);
     void windowDestroyed(quint64 hwnd);
     void windowMoved(quint64 hwnd);
+    // Top-level window came to the foreground (taskbar click, Alt+Tab, …).
+    void windowForeground(quint64 hwnd);
 
 private:
     HWINEVENTHOOK m_createHook = nullptr;
     HWINEVENTHOOK m_destroyHook = nullptr;
     HWINEVENTHOOK m_locationHook = nullptr;
     HWINEVENTHOOK m_showHook = nullptr;
+    HWINEVENTHOOK m_foregroundHook = nullptr;
 
     WindowCallback m_onCreated;
     WindowCallback m_onDestroyed;

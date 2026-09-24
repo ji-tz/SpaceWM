@@ -303,6 +303,143 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
     }
     painter.end();
     sp.screenshot = canvas;
+    emit spacePreviewInvalidated(reinterpret_cast<quint64>(hmon), index);
+}
+
+void SpaceManager::refreshWindowAfterUpdate(HWND hwnd)
+{
+    if (!hwnd || !m_owner.contains(hwnd))
+        return;
+    // Window may have been captured mid-create; drop stale shot.
+    thumbs::invalidateWindow(hwnd);
+    const Owner o = m_owner.value(hwnd);
+    rebuildSpaceScreenshot(reinterpret_cast<HMONITOR>(o.hmon), o.space);
+    emit windowTracked(reinterpret_cast<quint64>(hwnd));
+}
+
+bool SpaceManager::addSpace(HMONITOR hmon)
+{
+    auto *m = monitorOf(hmon);
+    if (!m)
+        return false;
+    Space sp;
+    sp.name = defaultSpaceName(m->spaces.size());
+    m->spaces.push_back(std::move(sp));
+    const int idx = m->spaces.size() - 1;
+    rebuildSpaceScreenshot(hmon, idx);
+    emit monitorLayoutChanged();
+    return true;
+}
+
+bool SpaceManager::removeSpace(HMONITOR hmon, int index)
+{
+    auto *m = monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return false;
+    if (m->spaces.size() <= 1)
+        return false; // keep at least one space
+
+    // Merge into previous space; index 0 has no previous → use next.
+    const int dest = (index > 0) ? index - 1 : 1;
+    if (dest == index || dest < 0 || dest >= m->spaces.size())
+        return false;
+
+    Space &removed = m->spaces[index];
+    Space &keep = m->spaces[dest];
+
+    // Move every window into the keep space (update owners).
+    const QSet<HWND> moving = removed.windows;
+    for (HWND hwnd : moving) {
+        if (removed.exclusiveWindow == hwnd) {
+            removed.exclusiveWindow = nullptr;
+        }
+        m_owner.insert(hwnd, Owner{reinterpret_cast<quintptr>(hmon), dest});
+        keep.windows.insert(hwnd);
+    }
+    removed.windows.clear();
+    removed.exclusiveWindow = nullptr;
+    removed.zOrder.clear();
+
+    // Drop exclusive binding on dest if we merged a non-exclusive into exclusive keep…
+    // (keep already owns its own exclusive; merge only adds windows — if keep is exclusive,
+    //  reject merge by unbinding keep's exclusive first so it can accept the set.)
+    if (keep.exclusiveWindow && !moving.isEmpty()) {
+        // Becoming a multi-window space: unbind exclusive and restore default name later.
+        const HWND bound = keep.exclusiveWindow;
+        keep.exclusiveWindow = nullptr;
+        if (m_owner.contains(bound)) {
+            // Bound window stays in keep.windows (still there).
+        }
+        keep.name = defaultSpaceName(dest);
+    }
+
+    m->spaces.remove(index);
+
+    // Fix currentIndex after removal.
+    if (m->currentIndex == index)
+        m->currentIndex = dest;
+    else if (m->currentIndex > index)
+        --m->currentIndex;
+    if (m->currentIndex < 0 || m->currentIndex >= m->spaces.size())
+        m->currentIndex = 0;
+
+    // Re-number default-looking names for simplicity after structural change.
+    for (int i = 0; i < m->spaces.size(); ++i) {
+        // Keep exclusive/custom titles; only renumber plain "Space N" if index shifted.
+        // (No-op for custom titles.)
+    }
+
+    applyVisibility(hmon);
+    rebuildSpaceScreenshot(hmon, dest);
+    emit spaceChanged(reinterpret_cast<quint64>(hmon), m->currentIndex);
+    emit monitorLayoutChanged();
+    return true;
+}
+
+bool SpaceManager::spaceHasWindows(HMONITOR hmon, int spaceIndex) const
+{
+    auto *self = const_cast<SpaceManager *>(this);
+    auto *m = self->monitorOf(hmon);
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
+        return false;
+    for (HWND hwnd : m->spaces[spaceIndex].windows) {
+        if (::IsWindow(hwnd) && !::IsIconic(hwnd))
+            return true;
+    }
+    return false;
+}
+
+bool SpaceManager::moveSpace(HMONITOR hmon, int from, int to)
+{
+    auto *m = monitorOf(hmon);
+    if (!m)
+        return false;
+    const int n = m->spaces.size();
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to)
+        return false;
+
+    Space sp = m->spaces.takeAt(from);
+    m->spaces.insert(to, std::move(sp));
+
+    // Remap currentIndex for the shift.
+    if (m->currentIndex == from)
+        m->currentIndex = to;
+    else if (from < m->currentIndex && to >= m->currentIndex)
+        --m->currentIndex;
+    else if (from > m->currentIndex && to <= m->currentIndex)
+        ++m->currentIndex;
+    m->currentIndex = std::clamp(m->currentIndex, 0, n - 1);
+
+    // Owner indices are absolute — rebuild from the new order.
+    for (int i = 0; i < m->spaces.size(); ++i) {
+        for (HWND hwnd : m->spaces[i].windows)
+            m_owner.insert(hwnd, Owner{reinterpret_cast<quintptr>(hmon), i});
+    }
+
+    applyVisibility(hmon);
+    emit spaceChanged(reinterpret_cast<quint64>(hmon), m->currentIndex);
+    emit monitorLayoutChanged();
+    return true;
 }
 
 bool SpaceManager::isMaximizedWindow(HWND hwnd)
@@ -532,10 +669,12 @@ QVector<HWND> SpaceManager::windowsOn(HMONITOR hmon, int spaceIndex) const
 
 bool SpaceManager::trackWindow(HWND hwnd)
 {
-    // Already ours — re-entry must succeed even if isManageable would reject
-    // (e.g. tests that assignWindow first, or own-process windows).
-    if (m_owner.contains(hwnd))
+    // Already ours: SHOW after CREATE / re-entry — content may be ready now.
+    // Re-capture the shot and re-render the owner space (esp. secondary monitors).
+    if (m_owner.contains(hwnd)) {
+        refreshWindowAfterUpdate(hwnd);
         return true;
+    }
     if (::IsIconic(hwnd))
         return false;
     if (!WindowTracker::isManageable(hwnd))

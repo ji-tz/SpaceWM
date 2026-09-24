@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "core/space/SpaceManager.h"
+#include "core/monitor/MonitorInfo.h"
 #include "core/window/CloakController.h"
 #include "ui/overview/OverviewWindow.h"
 #include "ui/preview/SpaceCardWidget.h"
@@ -253,6 +254,129 @@ private slots:
         ::DestroyWindow(hwnd);
     }
 
+    void hoverLeaveDoesNotResetUntilPanelLeave()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen() || w.cardCount() < 2)
+            QSKIP("need overview with multiple cards");
+
+        const int cur = m->currentIndex;
+        const int other = (cur + 1) % m->spaces.size();
+        QVERIFY(w.previewSpace(other));
+        QCOMPARE(w.selectedIndex(), other);
+
+        // Leaving the hovered card must NOT reset (gap → window strip keeps preview).
+        const auto cards = w.findChildren<SpaceCardWidget *>();
+        QVERIFY(cards.size() > other);
+        {
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(cards[other], &leave);
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+        QCOMPARE(w.selectedIndex(), other);
+        QCOMPARE(m->currentIndex, cur);
+
+        // Leaving the whole overview panel restores current space strip.
+        {
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(&w, &leave);
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+        QCOMPARE(w.selectedIndex(), cur);
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void addAndRemoveSpaceFromManager()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        const int n0 = m->spaces.size();
+        QVERIFY(n0 >= 1);
+
+        QVERIFY(sm.addSpace(m->hmon));
+        QCOMPARE(m->spaces.size(), n0 + 1);
+        QVERIFY(!m->spaces.last().name.isEmpty());
+
+        // Remove last (has no windows) — still allowed if size > 1; merge to previous.
+        QVERIFY(sm.removeSpace(m->hmon, m->spaces.size() - 1));
+        QCOMPARE(m->spaces.size(), n0);
+
+        // Last remaining space cannot be removed.
+        while (m->spaces.size() > 1)
+            QVERIFY(sm.removeSpace(m->hmon, m->spaces.size() - 1));
+        QVERIFY(!sm.removeSpace(m->hmon, 0));
+        QCOMPARE(m->spaces.size(), 1);
+
+        // Restore default count for other tests sharing process state? fresh manager each test.
+        QVERIFY(sm.addSpace(m->hmon));
+        QVERIFY(sm.addSpace(m->hmon));
+        QVERIFY(sm.addSpace(m->hmon));
+    }
+
+    void removeSpaceMovesWindowsToPrevious()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"merge-src",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, 320, 220,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(sm.addSpace(m->hmon)); // ensure > 1
+        const int src = m->spaces.size() - 1;
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, src));
+        QCOMPARE(sm.spaceOfWindow(hwnd), src);
+        QVERIFY(sm.spaceHasWindows(m->hmon, src));
+
+        QVERIFY(sm.removeSpace(m->hmon, src));
+        // Window now owned by previous space.
+        QCOMPARE(sm.spaceOfWindow(hwnd), src - 1);
+        QVERIFY(m->spaces[src - 1].windows.contains(hwnd));
+        QVERIFY(!sm.spaceHasWindows(m->hmon, m->spaces.size())); // out of range → false
+
+        sm.untrackWindow(hwnd);
+        ::cloak::set(hwnd, false);
+        ::DestroyWindow(hwnd);
+    }
+
+    void moveSpaceReordersAndKeepsOwner()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        const int n = m->spaces.size();
+        QVERIFY(n >= 2);
+
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"reorder-w",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 300, 200,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, 0));
+        QCOMPARE(sm.spaceOfWindow(hwnd), 0);
+
+        QVERIFY(sm.moveSpace(m->hmon, 0, 2));
+        QCOMPARE(m->spaces.size(), n);
+        // Owner remapped with the moved space.
+        QCOMPARE(sm.spaceOfWindow(hwnd), 2);
+        QVERIFY(m->spaces[2].windows.contains(hwnd));
+        QVERIFY(!sm.spaceHasWindows(m->hmon, 0));
+        QCOMPARE(m->currentIndex, 2); // was 0, followed the move
+
+        QVERIFY(!sm.moveSpace(m->hmon, 0, 0));
+        QVERIFY(!sm.moveSpace(m->hmon, -1, 0));
+        QVERIFY(!sm.moveSpace(m->hmon, 0, n));
+
+        sm.untrackWindow(hwnd);
+        ::cloak::set(hwnd, false);
+        ::DestroyWindow(hwnd);
+    }
+
     void proportionalPreviewSizesPreserveAspect()
     {
         WindowPreviewWidget a;
@@ -339,16 +463,21 @@ private slots:
             const HWND hwnd = w.windowPreviewHandle(i);
             const QSize box = w.windowPreviewBoxSize(i);
             QVERIFY(hwnd != nullptr);
+            // Tiles use Qt logical size (per-monitor DPI), not physical GetWindowRect.
+            const QSize real = monitors::logicalWindowSize(hwnd);
+            QVERIFY(real.width() > 0 && real.height() > 0);
+            QVERIFY2(box.width() <= real.width(),
+                     qPrintable(QStringLiteral("tile %1 wider than logical real (%2>%3)")
+                                    .arg(box.width()).arg(real.width()).arg(real.width())));
+            QVERIFY2(box.height() <= real.height(),
+                     qPrintable(QStringLiteral("tile %1 taller than logical real (%2>%3)")
+                                    .arg(box.height()).arg(real.height()).arg(real.height())));
+            // Physical is always ≥ logical at DPI≥96 — tile must not exceed physical either.
             RECT wr{};
-            QVERIFY(::GetWindowRect(hwnd, &wr));
-            const int rw = wr.right - wr.left;
-            const int rh = wr.bottom - wr.top;
-            QVERIFY2(box.width() <= rw,
-                     qPrintable(QStringLiteral("tile %1 wider than real (%2>%3)")
-                                    .arg(box.width()).arg(rw).arg(rw)));
-            QVERIFY2(box.height() <= rh,
-                     qPrintable(QStringLiteral("tile %1 taller than real (%2>%3)")
-                                    .arg(box.height()).arg(rh).arg(rh)));
+            if (::GetWindowRect(hwnd, &wr)) {
+                QVERIFY(box.width() <= wr.right - wr.left);
+                QVERIFY(box.height() <= wr.bottom - wr.top);
+            }
         }
 
         // Distinct windows → distinct tiles; packing gaps are layout's job

@@ -2,6 +2,7 @@
 #include <QMessageBox>
 #include <QSharedMemory>
 #include <QTimer>
+#include <QWinEventNotifier>
 
 #include "core/space/SpaceManager.h"
 #include "core/window/CloakController.h"
@@ -14,6 +15,10 @@
 #include "ui/tray/TrayIcon.h"
 
 #include <Windows.h>
+
+// Named event: another process (build script) can request a graceful quit
+// so cloak::showAllHidden() runs before the process exits.
+static constexpr wchar_t kQuitEventName[] = L"SpaceWM-quit";
 
 // DPI awareness before any window is created — critical for correct
 // monitor rects and PrintWindow thumbnails on scaled displays.
@@ -31,8 +36,24 @@ static void enableDpiAwareness()
     ::SetProcessDPIAware();
 }
 
+static void signalExistingInstanceQuit()
+{
+    if (HANDLE h = ::OpenEventW(EVENT_MODIFY_STATE, FALSE, kQuitEventName)) {
+        ::SetEvent(h);
+        ::CloseHandle(h);
+    }
+}
+
 int main(int argc, char *argv[])
 {
+    // External graceful quit (scripts/stop-spacewm.ps1, SpaceWM.exe --quit).
+    for (int i = 1; i < argc; ++i) {
+        if (qstrcmp(argv[i], "--quit") == 0) {
+            signalExistingInstanceQuit();
+            return 0;
+        }
+    }
+
     enableDpiAwareness();
 
     QApplication app(argc, argv);
@@ -43,11 +64,24 @@ int main(int argc, char *argv[])
     // Single instance — avoid double-hooking hotkeys.
     QSharedMemory guard(QStringLiteral("SpaceWM-single-instance"));
     if (guard.attach()) {
+        // Already running: --quit already handled above; plain launch just exits.
         QMessageBox::information(nullptr, QStringLiteral("SpaceWM"),
                                  QStringLiteral("SpaceWM is already running (check the tray)."));
         return 0;
     }
     guard.create(1);
+
+    // Graceful stop path used by build scripts before replacing the exe.
+    HANDLE quitEvent = ::CreateEventW(nullptr, TRUE, FALSE, kQuitEventName);
+    QWinEventNotifier *quitNotifier = nullptr;
+    if (quitEvent) {
+        quitNotifier = new QWinEventNotifier(quitEvent, &app);
+        QObject::connect(quitNotifier, &QWinEventNotifier::activated, &app,
+                         [&app]() {
+                             cloak::showAllHidden();
+                             app.quit();
+                         });
+    }
 
     SpaceManager manager;
     WindowTracker tracker;
@@ -78,8 +112,37 @@ int main(int argc, char *argv[])
             manager.trackWindow(hwnd);
             return;
         }
-        if (manager.ownerMonitorOf(hwnd) != target)
+        if (manager.ownerMonitorOf(hwnd) != target) {
             manager.assignWindow(hwnd, target, m->currentIndex);
+        } else {
+            // Same monitor: size/position changed — re-render that space preview.
+            manager.refreshWindowAfterUpdate(hwnd);
+        }
+    });
+
+    // Taskbar / Alt+Tab while overview is open → land on the CURRENT space
+    // and close the overlay so the app is visible on the live desktop.
+    QObject::connect(&tracker, &WindowTracker::windowForeground, &app, [&](quint64 h) {
+        HWND hwnd = reinterpret_cast<HWND>(h);
+        if (!overview.isOpen() || !hwnd || !::IsWindow(hwnd))
+            return;
+        const int ownedSpace = manager.spaceOfWindow(hwnd);
+        // Own overview tool windows are unmanaged — ignore those foreground events.
+        if (ownedSpace < 0 && !WindowTracker::isManageable(hwnd))
+            return;
+
+        HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        auto *m = manager.monitorOf(mon);
+        if (!m)
+            return;
+        if (ownedSpace < 0)
+            manager.trackWindow(hwnd);
+        if (manager.ownerMonitorOf(hwnd) != mon
+            || manager.spaceOfWindow(hwnd) != m->currentIndex)
+            manager.assignWindow(hwnd, mon, m->currentIndex);
+
+        // Leave preview; stay on the real current space with the app shown.
+        overview.closeAll(false);
     });
 
     // Display change
@@ -195,14 +258,21 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager, &SpaceManager::refreshMonitors);
     QObject::connect(&tray, &TrayIcon::quitRequested, &app, [&]() {
-        // Normal exit: bring back every window WE hid (all spaces / backends).
+        // Graceful quit: uncloak every window WE hid in this process.
         // Never shows windows we did not hide.
         cloak::showAllHidden();
         app.quit();
     });
-    // Safety net for any other normal quit path (e.g. future menu/exit hooks).
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
         cloak::showAllHidden();
+    });
+
+    // Close named event handle on the way out (notifier first).
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [quitEvent, quitNotifier]() {
+        if (quitNotifier)
+            quitNotifier->setEnabled(false);
+        if (quitEvent)
+            ::CloseHandle(quitEvent);
     });
 
     if (!hotkeys.registerDefaults()) {

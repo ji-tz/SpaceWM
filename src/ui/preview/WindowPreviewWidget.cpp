@@ -86,9 +86,25 @@ void WindowPreviewWidget::applyPixmap()
         return;
     }
     m_imageLabel->setText({});
-    // Fit inside the aspect-correct box without distorting.
-    m_imageLabel->setPixmap(QPixmap::fromImage(m_image).scaled(
-        m_box, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+
+    // Scale ONCE to the label's physical pixel size. A logical-size pixmap is
+    // upscaled by the compositor on 150%/200% DPI and looks soft.
+    const qreal dpr = m_imageLabel->devicePixelRatioF();
+    if (dpr <= 0.0)
+        return;
+    const QSize phys(qMax(1, int(std::lround(m_box.width() * dpr))),
+                     qMax(1, int(std::lround(m_box.height() * dpr))));
+
+    QImage src = m_image;
+    if (src.width() > phys.width() || src.height() > phys.height()
+        || src.width() < phys.width() * 0.9) {
+        // Fit inside phys box (KeepAspectRatio), then QLabel centers it.
+        src = src.scaled(phys, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    QPixmap pm = QPixmap::fromImage(src);
+    pm.setDevicePixelRatio(dpr);
+    m_imageLabel->setPixmap(pm);
 }
 
 void WindowPreviewWidget::mousePressEvent(QMouseEvent *event)

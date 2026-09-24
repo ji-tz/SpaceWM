@@ -1,12 +1,15 @@
 #include "ui/preview/SpaceCardWidget.h"
 #include "ui/preview/WindowPreviewWidget.h"
 
+#include <QApplication>
 #include <QDataStream>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QHBoxLayout>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QResizeEvent>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -189,6 +192,37 @@ void SpaceCardWidget::setHighlighted(bool on)
     update();
 }
 
+void SpaceCardWidget::setRemovable(bool on)
+{
+    if (m_removable == on)
+        return;
+    m_removable = on;
+    update();
+}
+
+QRect SpaceCardWidget::removeBadgeRect() const
+{
+    const int s = m_compact ? 18 : 22;
+    return QRect(width() - s - 6, 6, s, s);
+}
+
+void SpaceCardWidget::paintEvent(QPaintEvent *event)
+{
+    QFrame::paintEvent(event);
+    if (!m_removable || !m_hovered)
+        return;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRect r = removeBadgeRect();
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 160));
+    p.drawEllipse(r);
+    p.setPen(QPen(QColor(255, 90, 90), 2));
+    const int m = r.width() / 4;
+    p.drawLine(r.left() + m, r.top() + m, r.right() - m, r.bottom() - m);
+    p.drawLine(r.right() - m, r.top() + m, r.left() + m, r.bottom() - m);
+}
+
 bool SpaceCardWidget::extractHwnd(const QMimeData *mime, quint64 *out)
 {
     if (!mime || !mime->hasFormat(WindowPreviewWidget::kMimeType))
@@ -256,15 +290,77 @@ void SpaceCardWidget::dropEvent(QDropEvent *event)
 
 void SpaceCardWidget::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton)
-        emit activated(m_index);
+    if (event->button() == Qt::LeftButton && m_removable
+        && removeBadgeRect().contains(event->pos())) {
+        // Badge press: do not arm card activation.
+        m_pressed = false;
+        m_draggingReorder = false;
+        emit removeRequested(m_index);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        m_pressed = true;
+        m_draggingReorder = false;
+        m_pressPos = event->pos();
+        m_lastReorderTarget = -1;
+    }
     QFrame::mousePressEvent(event);
+}
+
+void SpaceCardWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_pressed && (event->buttons() & Qt::LeftButton)) {
+        if (!m_draggingReorder
+            && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
+            m_draggingReorder = true;
+        }
+        if (m_draggingReorder) {
+            QWidget *w = QApplication::widgetAt(event->globalPosition().toPoint());
+            while (w && w != this) {
+                if (auto *card = qobject_cast<SpaceCardWidget *>(w)) {
+                    const int target = card->spaceIndex();
+                    if (target >= 0 && target != m_index && target != m_lastReorderTarget) {
+                        m_lastReorderTarget = target;
+                        emit reorderRequested(m_index, target);
+                    }
+                    break;
+                }
+                w = w->parentWidget();
+            }
+        }
+    }
+    QFrame::mouseMoveEvent(event);
+}
+
+void SpaceCardWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    const bool cardPress = m_pressed;
+    const bool wasDrag = m_draggingReorder;
+    m_pressed = false;
+    m_draggingReorder = false;
+    m_lastReorderTarget = -1;
+    // Only a completed card-body press+release (not badge, not reorder drag) activates.
+    if (event->button() == Qt::LeftButton && cardPress && !wasDrag)
+        emit activated(m_index);
+    QFrame::mouseReleaseEvent(event);
 }
 
 void SpaceCardWidget::enterEvent(QEnterEvent *event)
 {
+    m_hovered = true;
+    update();
     emit hovered(m_index);
     QFrame::enterEvent(event);
+}
+
+void SpaceCardWidget::leaveEvent(QEvent *event)
+{
+    // Do NOT reset the bottom strip here — only outer overview margins should.
+    m_hovered = false;
+    update();
+    emit hoverLeft();
+    QFrame::leaveEvent(event);
 }
 
 void SpaceCardWidget::resizeEvent(QResizeEvent *event)

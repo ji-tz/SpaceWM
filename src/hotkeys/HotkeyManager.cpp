@@ -66,11 +66,15 @@ void readMods(bool *ctrl, bool *alt, bool *shift, bool *win)
 
 LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode == HC_ACTION && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+    if (nCode == HC_ACTION
+        && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN
+            || wParam == WM_KEYUP || wParam == WM_SYSKEYUP)) {
         auto *kb = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
         if (!(kb->flags & LLKHF_INJECTED) && g_manager) {
             bool c = false, a = false, s = false, w = false;
             readMods(&c, &a, &s, &w);
+            // On KEYUP, GetAsyncKeyState may already have the key released —
+            // for modifier matching use the key-up's own vk when it is a modifier.
             const auto bindings = g_manager->bindings();
             for (const auto &b : bindings) {
                 if (b.vk == 0)
@@ -79,8 +83,11 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
                     continue;
                 if (!HotkeyManager::modifiersMatch(b.modifiers, c, a, s, w))
                     continue;
-                emitAction(b.action);
-                // Swallow so system shortcuts (Win+Tab, Ctrl+Win+…) don't also fire.
+                const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+                if (isDown)
+                    emitAction(b.action);
+                // Swallow down AND up so Windows virtual-desktop / Task View
+                // never sees Win+Tab or Ctrl+Win+←/→.
                 return 1;
             }
         }
