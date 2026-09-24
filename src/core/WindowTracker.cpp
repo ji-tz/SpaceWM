@@ -110,20 +110,19 @@ QVector<HWND> WindowTracker::snapshotManageableWindows()
 
 bool WindowTracker::isManageable(HWND hwnd)
 {
-    if (!hwnd || !::IsWindow(hwnd))
+    // Only discover currently-visible top-level windows.
+    // Never adopt shell-hidden / system-VD-hidden / minimized ghosts —
+    // treating those as space members and then "showing" them was the
+    // startup bug that flooded the desktop with hidden windows.
+    if (!hwnd || !::IsWindow(hwnd) || !::IsWindowVisible(hwnd))
         return false;
-    // Hidden windows are still manageable if they are top-level roots —
-    // we may have hid them via ShowWindow fallback for space switching.
     if (::GetAncestor(hwnd, GA_ROOT) != hwnd)
         return false;
     if (hasNoTaskbarIcon(hwnd))
         return false;
-    // Shell-cloaked by system VD: leave alone unless we already track it
-    // (caller may re-check). For discovery, skip.
     if (isCloakedByShell(hwnd))
         return false;
 
-    // Skip desktop / shell chrome.
     wchar_t cls[64]{};
     ::GetClassNameW(hwnd, cls, 64);
     static const QSet<QString> banned = {
@@ -162,15 +161,6 @@ bool WindowTracker::isManageable(HWND hwnd)
     ::GetWindowThreadProcessId(hwnd, &pid);
     if (pid == ::GetCurrentProcessId())
         return false;
-
-    // Require either currently visible, or has a title (so we can re-show
-    // windows we hid for spaces without treating random ghosts as apps).
-    if (!::IsWindowVisible(hwnd)) {
-        wchar_t title[8]{};
-        ::GetWindowTextW(hwnd, title, 8);
-        if (title[0] == L'\0')
-            return false;
-    }
 
     return true;
 }

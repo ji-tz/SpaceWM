@@ -4,16 +4,24 @@
 
 // Hide/show a window without destroying it (per-monitor space switching).
 //
-// Backend order:
-//   1) IApplicationView::SetCloak via ImmersiveShell (shell-equivalent)
-//   2) DwmSetWindowAttribute(DWMWA_CLOAK) — often E_ACCESSDENIED for other PIDs
-//   3) ShowWindow(SW_HIDE/SW_SHOW) — always works across processes
+// CRITICAL: never show a window unless WE previously hid it.
+// Showing arbitrary invisible windows would un-hide system/shell windows.
 namespace cloak {
 
+// Hide (enable=true) or show again (enable=false).
+// show is a no-op (returns false) if this process did not hide the window.
 bool set(HWND hwnd, bool enable);
+
+// True if we hid it, or DWM reports cloaked.
 bool isCloaked(HWND hwnd);
+
+// True only if SpaceWM's ShowWindow backend currently hides this HWND.
+bool isHiddenByUs(HWND hwnd);
 
 enum class Backend { None, ImmersiveView, DwmAttribute, ShowWindow };
 Backend lastBackend();
+
+// Test/monitoring: how many windows we currently hold hidden.
+int hiddenCount();
 
 } // namespace cloak

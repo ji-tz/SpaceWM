@@ -185,7 +185,7 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager, &SpaceManager::refreshMonitors);
     QObject::connect(&tray, &TrayIcon::quitRequested, &app, [&]() {
-        // Uncloak everything so no windows are stuck hidden on exit.
+        // Uncloak ONLY windows we hid; never show shell-hidden windows.
         for (MonitorSpaces *m : manager.monitors()) {
             for (int s = 0; s < m->spaces.size(); ++s) {
                 for (HWND hwnd : m->spaces[s].windows) {

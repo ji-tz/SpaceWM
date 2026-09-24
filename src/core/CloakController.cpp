@@ -26,13 +26,22 @@ constexpr int AVCT_DEFAULT = 1;
 
 std::atomic<int> g_lastBackend{0};
 
-// Windows we hid via ShowWindow — remember to restore visibility.
-struct HiddenState {
+// How we hid a window — only reverse with the matching show path.
+enum class How : unsigned char {
+    NotHidden,
+    ShowWindow,
+    Dwm,
+    Immersive,
+};
+
+struct HiddenInfo {
+    How how = How::NotHidden;
     bool wasVisible = false;
     WINDOWPLACEMENT placement{};
     bool hasPlacement = false;
 };
-std::unordered_map<HWND, HiddenState> g_hidden;
+
+std::unordered_map<HWND, HiddenInfo> g_hidden;
 
 struct ComMark {
     HRESULT hr;
@@ -103,7 +112,7 @@ IApplicationViewCollectionSlim *viewCollection()
     return cached;
 }
 
-bool setViaApplicationView(HWND hwnd, bool enable)
+bool hideViaApplicationView(HWND hwnd)
 {
     auto *coll = viewCollection();
     if (!coll)
@@ -112,8 +121,7 @@ bool setViaApplicationView(HWND hwnd, bool enable)
     IApplicationViewSlim *view = nullptr;
     if (FAILED(coll->GetViewForHwnd(hwnd, &view)) || !view)
         return false;
-    const HRESULT hr = view->SetCloak(enable ? AVCT_DEFAULT : AVCT_NONE,
-                                      enable ? 1 : 0);
+    const HRESULT hr = view->SetCloak(AVCT_DEFAULT, 1);
     view->Release();
     if (FAILED(hr))
         return false;
@@ -121,9 +129,23 @@ bool setViaApplicationView(HWND hwnd, bool enable)
     return true;
 }
 
-bool setViaDwm(HWND hwnd, bool enable)
+bool showViaApplicationView(HWND hwnd)
 {
-    BOOL value = enable ? TRUE : FALSE;
+    auto *coll = viewCollection();
+    if (!coll)
+        return false;
+    ComMark com;
+    IApplicationViewSlim *view = nullptr;
+    if (FAILED(coll->GetViewForHwnd(hwnd, &view)) || !view)
+        return false;
+    const HRESULT hr = view->SetCloak(AVCT_NONE, 0);
+    view->Release();
+    return SUCCEEDED(hr);
+}
+
+bool hideViaDwm(HWND hwnd)
+{
+    BOOL value = TRUE;
     const HRESULT hr = ::DwmSetWindowAttribute(hwnd, 13, &value, sizeof(value));
     if (FAILED(hr))
         return false;
@@ -131,45 +153,61 @@ bool setViaDwm(HWND hwnd, bool enable)
     return true;
 }
 
-bool setViaShowWindow(HWND hwnd, bool enable)
+bool showViaDwm(HWND hwnd)
 {
-    if (enable) {
-        if (g_hidden.count(hwnd))
-            return true; // already hidden by us
+    BOOL value = FALSE;
+    const HRESULT hr = ::DwmSetWindowAttribute(hwnd, 13, &value, sizeof(value));
+    return SUCCEEDED(hr);
+}
 
-        HiddenState st;
-        st.wasVisible = ::IsWindowVisible(hwnd) != FALSE;
-        st.hasPlacement = ::GetWindowPlacement(hwnd, &st.placement) != FALSE;
-        g_hidden[hwnd] = st;
+bool hideViaShowWindow(HWND hwnd)
+{
+    HiddenInfo st;
+    st.how = How::ShowWindow;
+    st.wasVisible = ::IsWindowVisible(hwnd) != FALSE;
+    st.hasPlacement = ::GetWindowPlacement(hwnd, &st.placement) != FALSE;
+    g_hidden[hwnd] = st;
 
-        // SW_HIDE works cross-process without special privileges.
-        ::ShowWindow(hwnd, SW_HIDE);
-        g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
-        return true;
-    }
+    ::ShowWindow(hwnd, SW_HIDE);
+    g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
+    return true;
+}
 
+// ONLY call when g_hidden says we used ShowWindow to hide this HWND.
+bool showViaShowWindow(HWND hwnd)
+{
     auto it = g_hidden.find(hwnd);
-    if (it == g_hidden.end()) {
-        // Uncloak request for a window we didn't hide via this path —
-        // still try a gentle show if it was invisible.
-        if (!::IsWindowVisible(hwnd)) {
-            ::ShowWindow(hwnd, SW_SHOWNA);
-            g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
-            return true;
-        }
+    if (it == g_hidden.end() || it->second.how != How::ShowWindow)
         return false;
-    }
 
-    const HiddenState st = it->second;
+    const HiddenInfo st = it->second;
     g_hidden.erase(it);
 
     if (st.hasPlacement)
         ::SetWindowPlacement(hwnd, &st.placement);
     if (st.wasVisible)
         ::ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    else
+        ::ShowWindow(hwnd, SW_SHOWNA);
 
     g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
     return true;
+}
+
+void remember(HWND hwnd, How how)
+{
+    HiddenInfo &st = g_hidden[hwnd];
+    // Keep original wasVisible/placement if we already recorded a hide.
+    if (st.how == How::NotHidden) {
+        st.wasVisible = ::IsWindowVisible(hwnd) != FALSE;
+        st.hasPlacement = ::GetWindowPlacement(hwnd, &st.placement) != FALSE;
+    }
+    st.how = how;
+}
+
+void forget(HWND hwnd)
+{
+    g_hidden.erase(hwnd);
 }
 
 } // namespace
@@ -181,27 +219,60 @@ bool set(HWND hwnd, bool enable)
     if (!hwnd || !::IsWindow(hwnd))
         return false;
 
-    // 1) Shell view cloak (best fidelity) — may fail if ImmersiveShell not activatable.
-    if (setViaApplicationView(hwnd, enable))
-        return true;
+    if (enable) {
+        // Already hidden by us — idempotent.
+        auto it = g_hidden.find(hwnd);
+        if (it != g_hidden.end() && it->second.how != How::NotHidden)
+            return true;
 
-    // 2) DWM cloak — works for some own-process / same-IL windows.
-    if (setViaDwm(hwnd, enable))
-        return true;
+        if (hideViaApplicationView(hwnd)) {
+            remember(hwnd, How::Immersive);
+            return true;
+        }
+        if (hideViaDwm(hwnd)) {
+            remember(hwnd, How::Dwm);
+            return true;
+        }
+        // Cross-process reliable path.
+        return hideViaShowWindow(hwnd);
+    }
 
-    // 3) ShowWindow — reliable cross-process fallback.
-    if (setViaShowWindow(hwnd, enable))
-        return true;
+    // ---- show: ONLY reverse what we did ----
+    auto it = g_hidden.find(hwnd);
+    if (it == g_hidden.end()) {
+        // We never hid this window. Do NOT ShowWindow / uncloak —
+        // it may be hidden by the shell, tray, system VD, etc.
+        return false;
+    }
 
-    g_lastBackend.store(static_cast<int>(Backend::None));
-    return false;
+    const How how = it->second.how;
+    switch (how) {
+    case How::ShowWindow:
+        return showViaShowWindow(hwnd);
+    case How::Dwm:
+        forget(hwnd);
+        return showViaDwm(hwnd);
+    case How::Immersive:
+        forget(hwnd);
+        return showViaApplicationView(hwnd);
+    case How::NotHidden:
+    default:
+        forget(hwnd);
+        return false;
+    }
+}
+
+bool isHiddenByUs(HWND hwnd)
+{
+    auto it = g_hidden.find(hwnd);
+    return it != g_hidden.end() && it->second.how == How::ShowWindow;
 }
 
 bool isCloaked(HWND hwnd)
 {
     if (!hwnd || !::IsWindow(hwnd))
         return false;
-    if (g_hidden.count(hwnd))
+    if (isHiddenByUs(hwnd))
         return true;
     DWORD cloaked = 0;
     const HRESULT hr = ::DwmGetWindowAttribute(hwnd, 14, &cloaked, sizeof(cloaked));
@@ -211,6 +282,11 @@ bool isCloaked(HWND hwnd)
 Backend lastBackend()
 {
     return static_cast<Backend>(g_lastBackend.load());
+}
+
+int hiddenCount()
+{
+    return static_cast<int>(g_hidden.size());
 }
 
 } // namespace cloak

@@ -194,25 +194,26 @@ void SpaceManager::applyVisibility(HMONITOR hmon)
     if (!m)
         return;
 
-    // Collect the set of windows that should be visible on this monitor.
     QSet<HWND> shouldShow;
     if (m->currentIndex >= 0 && m->currentIndex < m->spaces.size())
         shouldShow = m->spaces[m->currentIndex].windows;
 
-    // Windows we track on this monitor.
     for (const Space &sp : m->spaces) {
         for (HWND hwnd : sp.windows) {
-            if (!::IsWindow(hwnd)) {
+            if (!::IsWindow(hwnd))
                 continue;
-            }
             const bool hide = !shouldShow.contains(hwnd);
-            // Don't fight shell cloaking: if shell already cloaked it for
-            // system VD reasons, still apply our rule only for windows we own.
-            cloakWindow(hwnd, hide);
+            if (hide) {
+                cloakWindow(hwnd, true);
+            } else {
+                // Only undo a hide we performed. cloak::set(false) is a
+                // no-op for windows we never hid — critical so startup /
+                // space-0 apply cannot resurrect shell-hidden windows.
+                cloakWindow(hwnd, false);
+            }
         }
     }
 
-    // Purge dead handles.
     for (Space &sp : m->spaces) {
         for (auto it = sp.windows.begin(); it != sp.windows.end();) {
             if (!::IsWindow(*it)) {
