@@ -48,6 +48,22 @@ int idToAction(int id)
 HHOOK g_llHookHandle = nullptr;
 HotkeyManager *g_manager = nullptr;
 
+// --- LL Win-key state machine (System preset occupies Win combos) ---
+// The shell opens the Start/Windows menu when it sees Win down + Win up
+// without a key it recognizes in between. Swallowing only Left/Tab still
+// lets that Win tap through → menu. Defer Win down until we know the next key.
+bool g_winArmed = false;       // any binding uses MOD_WIN
+bool g_winDeferred = false;    // saw Win down, not yet forwarded to the shell
+bool g_winForwarded = false;   // deferred Win down was flushed via SendInput
+bool g_ateChordKey = false;    // a MOD_WIN binding swallowed its trigger key
+UINT g_pendingWinVk = VK_LWIN;
+int g_winDownCount = 0;        // physical LWIN/RWIN downs seen by the hook
+
+// Tracked modifiers (updated even for swallowed keys). OR'd with async state.
+bool g_tCtrl = false;
+bool g_tAlt = false;
+bool g_tShift = false;
+
 void emitAction(int action)
 {
     if (g_manager)
@@ -56,12 +72,63 @@ void emitAction(int action)
         }, Qt::QueuedConnection);
 }
 
+bool isModVk(UINT vk)
+{
+    switch (vk) {
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+    case VK_MENU: case VK_LMENU: case VK_RMENU:
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+    case VK_LWIN: case VK_RWIN:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void trackModifier(UINT vk, bool down)
+{
+    switch (vk) {
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL: g_tCtrl = down; break;
+    case VK_MENU: case VK_LMENU: case VK_RMENU: g_tAlt = down; break;
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT: g_tShift = down; break;
+    default: break;
+    }
+}
+
+void injectVk(UINT vk, bool down)
+{
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = WORD(vk);
+    in.ki.dwFlags = down ? 0u : KEYEVENTF_KEYUP;
+    ::SendInput(1, &in, sizeof(INPUT));
+}
+
+void flushDeferredWinDown()
+{
+    if (!g_winDeferred || g_winForwarded)
+        return;
+    injectVk(g_pendingWinVk, true);
+    g_winDeferred = false;
+    g_winForwarded = true;
+    g_ateChordKey = false;
+}
+
+void resetWinChordState()
+{
+    g_winDeferred = false;
+    g_winForwarded = false;
+    g_ateChordKey = false;
+}
+
 void readMods(bool *ctrl, bool *alt, bool *shift, bool *win)
 {
-    *ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    *alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-    *shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-    *win = ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+    *ctrl = g_tCtrl || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+    *alt = g_tAlt || ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
+    *shift = g_tShift || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+    // Deferred Win was never forwarded — rely on the hook-local count.
+    *win = g_winDownCount > 0
+        || ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
 }
 
 LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -71,25 +138,84 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             || wParam == WM_KEYUP || wParam == WM_SYSKEYUP)) {
         auto *kb = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
         if (!(kb->flags & LLKHF_INJECTED) && g_manager) {
+            const UINT vk = kb->vkCode;
+            const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+            const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+
+            if (isModVk(vk)) {
+                if (vk == VK_LWIN || vk == VK_RWIN) {
+                    if (isDown) {
+                        ++g_winDownCount;
+                        g_pendingWinVk = vk;
+                    } else if (g_winDownCount > 0) {
+                        --g_winDownCount;
+                    }
+                } else if (isDown || isUp) {
+                    trackModifier(vk, isDown);
+                }
+            }
+
+            // Physical Win key: defer / swallow so the shell never sees a
+            // bare or Ctrl+Win tap (those open the Windows/Start menu).
+            if (g_winArmed && (vk == VK_LWIN || vk == VK_RWIN)) {
+                if (isDown
+                    && HotkeyManager::winKeyDownDecision(g_winArmed)
+                           == HotkeyManager::WinDownDecision::Defer) {
+                    g_winDeferred = true;
+                    g_winForwarded = false;
+                    g_ateChordKey = false;
+                    g_pendingWinVk = vk;
+                    return 1;
+                }
+                if (isUp) {
+                    if (g_winDeferred && !g_winForwarded) {
+                        const bool foreign = g_tCtrl || g_tAlt || g_tShift;
+                        const auto upDecision = HotkeyManager::winKeyUpDecision(
+                            /*deferredNotForwarded=*/true, g_ateChordKey, foreign);
+                        resetWinChordState();
+                        if (upDecision == HotkeyManager::WinUpDecision::InjectTap) {
+                            injectVk(vk, true);
+                            injectVk(vk, false);
+                        }
+                        // Pass / Swallow / InjectTap all end the deferred cycle.
+                        return 1;
+                    }
+                    if (g_winForwarded) {
+                        // Shell already got the deferred down — pass the up.
+                        resetWinChordState();
+                        return CallNextHookEx(g_llHookHandle, nCode, wParam, lParam);
+                    }
+                }
+            }
+
             bool c = false, a = false, s = false, w = false;
             readMods(&c, &a, &s, &w);
-            // On KEYUP, GetAsyncKeyState may already have the key released —
-            // for modifier matching use the key-up's own vk when it is a modifier.
+            // While Win is deferred, GetAsyncKeyState may not report it; force on.
+            if (g_winDeferred && !g_winForwarded)
+                w = true;
+
             const auto bindings = g_manager->bindings();
             for (const auto &b : bindings) {
                 if (b.vk == 0)
                     continue;
-                if (b.vk != kb->vkCode)
+                if (b.vk != vk)
                     continue;
                 if (!HotkeyManager::modifiersMatch(b.modifiers, c, a, s, w))
                     continue;
-                const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
                 if (isDown)
                     emitAction(b.action);
                 // Swallow down AND up so Windows virtual-desktop / Task View
                 // never sees Win+Tab or Ctrl+Win+←/→.
+                if ((b.modifiers & MOD_WIN) != 0)
+                    g_ateChordKey = true;
                 return 1;
             }
+
+            // Not a SpaceWM chord: release a deferred Win so Win+E etc. still work.
+            if (g_winDeferred && !g_winForwarded && !isModVk(vk))
+                flushDeferredWinDown();
+
+            return CallNextHookEx(g_llHookHandle, nCode, wParam, lParam);
         }
     }
     return CallNextHookEx(g_llHookHandle, nCode, wParam, lParam);
@@ -113,8 +239,13 @@ HotkeyManager::~HotkeyManager()
         UnhookWindowsHookEx(g_llHookHandle);
         g_llHookHandle = nullptr;
     }
-    if (g_manager == this)
+    if (g_manager == this) {
         g_manager = nullptr;
+        g_winArmed = false;
+        resetWinChordState();
+        g_winDownCount = 0;
+        g_tCtrl = g_tAlt = g_tShift = false;
+    }
     if (qApp)
         qApp->removeNativeEventFilter(this);
 }
@@ -268,6 +399,39 @@ bool HotkeyManager::modifiersMatch(UINT required, bool ctrl, bool alt, bool shif
     return rc == ctrl && ra == alt && rs == shift && rw == win;
 }
 
+bool HotkeyManager::bindingsUseWin(const QVector<Binding> &bindings)
+{
+    for (const auto &b : bindings) {
+        if ((b.modifiers & MOD_WIN) != 0)
+            return true;
+    }
+    return false;
+}
+
+HotkeyManager::WinDownDecision HotkeyManager::winKeyDownDecision(bool winBindingsArmed)
+{
+    return winBindingsArmed ? WinDownDecision::Defer : WinDownDecision::Pass;
+}
+
+HotkeyManager::WinUpDecision HotkeyManager::winKeyUpDecision(bool deferredNotForwarded,
+                                                             bool chordKeyAte,
+                                                             bool foreignModifierHeld)
+{
+    if (!deferredNotForwarded)
+        return WinUpDecision::Pass;
+    // Chord already consumed by us, or Ctrl/Win without a trigger key —
+    // never let the shell complete a Win tap (Windows/Start menu).
+    if (chordKeyAte || foreignModifierHeld)
+        return WinUpDecision::Swallow;
+    // Plain Win tap: replay down+up so Start still opens.
+    return WinUpDecision::InjectTap;
+}
+
+bool HotkeyManager::usesWinBindings() const
+{
+    return bindingsUseWin(m_bindings);
+}
+
 void HotkeyManager::loadFromSettings()
 {
     AppSettings settings;
@@ -287,6 +451,8 @@ void HotkeyManager::loadFromSettings()
 bool HotkeyManager::armFromBindings()
 {
     unregisterAll();
+    g_winArmed = bindingsUseWin(m_bindings);
+    resetWinChordState();
     // Prefer LL hook (can swallow Win+Tab etc.). RegisterHotKey only if hook failed.
     const bool llOk = g_llHookHandle != nullptr;
     if (!llOk) {

@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include "core/settings/AppSettings.h"
 #include "hotkeys/HotkeyManager.h"
 
 class TestHotkeys : public QObject {
@@ -42,6 +43,79 @@ private slots:
         qintptr result = 0;
         QVERIFY(!hm.nativeEventFilter("windows_generic_MSG", &msg, &result));
         QVERIFY(!hm.nativeEventFilter("windows_dispatcher_MSG", nullptr, &result));
+    }
+
+    void winKeyDownDefersOnlyWhenWinBindingsArmed()
+    {
+        QCOMPARE(HotkeyManager::winKeyDownDecision(false),
+                 HotkeyManager::WinDownDecision::Pass);
+        QCOMPARE(HotkeyManager::winKeyDownDecision(true),
+                 HotkeyManager::WinDownDecision::Defer);
+    }
+
+    // System preset: Ctrl+Win without ←/→ must not complete a shell Win tap
+    // (that pops the Windows/Start menu).
+    void winKeyUpSwallowsCtrlWinWithoutTrigger()
+    {
+        QCOMPARE(HotkeyManager::winKeyUpDecision(true, /*chord*/ false,
+                                                 /*ctrl*/ true),
+                 HotkeyManager::WinUpDecision::Swallow);
+    }
+
+    // After Ctrl+Win+Left was swallowed, Win up must also be swallowed.
+    void winKeyUpSwallowsAfterChord()
+    {
+        QCOMPARE(HotkeyManager::winKeyUpDecision(true, /*chord*/ true,
+                                                 /*ctrl*/ true),
+                 HotkeyManager::WinUpDecision::Swallow);
+        QCOMPARE(HotkeyManager::winKeyUpDecision(true, /*chord*/ true,
+                                                 /*ctrl*/ false),
+                 HotkeyManager::WinUpDecision::Swallow);
+    }
+
+    // Plain Win tap still opens Start (replay down+up).
+    void winKeyUpInjectsPlainTap()
+    {
+        QCOMPARE(HotkeyManager::winKeyUpDecision(true, false, false),
+                 HotkeyManager::WinUpDecision::InjectTap);
+    }
+
+    void winKeyUpPassesWhenNotDeferred()
+    {
+        QCOMPARE(HotkeyManager::winKeyUpDecision(false, false, false),
+                 HotkeyManager::WinUpDecision::Pass);
+    }
+
+    void bindingsUseWinDetectsSystemPreset()
+    {
+        QVector<HotkeyManager::Binding> defs;
+        HotkeyManager::Binding b;
+        QVERIFY(HotkeyManager::sequenceToBinding(
+            HotkeyManager::SwitchPrevSpace,
+            HotkeyManager::defaultSequence(HotkeyManager::SwitchPrevSpace), &b));
+        defs.push_back(b);
+        QVERIFY(!HotkeyManager::bindingsUseWin(defs));
+
+        QVERIFY(HotkeyManager::sequenceToBinding(
+            HotkeyManager::SwitchPrevSpace,
+            HotkeyManager::systemSequence(HotkeyManager::SwitchPrevSpace), &b));
+        defs.push_back(b);
+        QVERIFY(HotkeyManager::bindingsUseWin(defs));
+    }
+
+    void systemPresetArmsUsesWinBindings()
+    {
+        AppSettings s;
+        s.setHotkeyPreset(QStringLiteral("system"));
+        HotkeyManager hm;
+        QVERIFY(hm.registerDefaults());
+        QVERIFY(hm.usesWinBindings());
+        hm.unregisterAll();
+        s.setHotkeyPreset(QStringLiteral("default"));
+        HotkeyManager hm2;
+        QVERIFY(hm2.registerDefaults());
+        QVERIFY(!hm2.usesWinBindings());
+        hm2.unregisterAll();
     }
 };
 

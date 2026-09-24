@@ -29,6 +29,10 @@ public:
         QString sequence;   // portable QKeySequence text (UI / settings)
     };
 
+    // Pure LL-hook policy for the physical Win key (unit-tested).
+    enum class WinDownDecision { Pass, Defer };
+    enum class WinUpDecision { Pass, Swallow, InjectTap };
+
     explicit HotkeyManager(QObject *parent = nullptr);
     ~HotkeyManager() override;
 
@@ -39,6 +43,7 @@ public:
 
     QVector<Binding> bindings() const { return m_bindings; }
     Binding bindingFor(int action) const;
+    bool usesWinBindings() const;
 
     // Portable sequence helpers (pure — unit-tested).
     static QString defaultSequence(int action);
@@ -50,6 +55,18 @@ public:
     static int winModsToQtMods(UINT mods);
     static UINT qtKeyToVk(int qtKey);
     static int vkToQtKey(UINT vk);
+    static bool bindingsUseWin(const QVector<Binding> &bindings);
+    // Win key down: when any binding uses MOD_WIN, defer so the shell never
+    // sees a bare Win tap until we know whether a SpaceWM chord completes.
+    static WinDownDecision winKeyDownDecision(bool winBindingsArmed);
+    // Win key up while down was deferred and not forwarded to the shell.
+    //   chordKeyAte        — a MOD_WIN binding already swallowed its trigger
+    //   foreignModifierHeld — Ctrl/Alt/Shift down (e.g. Ctrl+Win with no trigger)
+    // Swallow both cases so Windows does not open the Start/Windows menu;
+    // plain Win tap still injects down+up so Start keeps working.
+    static WinUpDecision winKeyUpDecision(bool deferredNotForwarded,
+                                          bool chordKeyAte,
+                                          bool foreignModifierHeld);
 
     // native filter
     bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override;
