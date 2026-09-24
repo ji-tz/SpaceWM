@@ -15,7 +15,6 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
   - 顶部 space 条：点击切换、接收拖放；
   - 底部窗口预览：按真实窗口宽高比缩放，可拖到任意 space 卡片完成归位；
   - 悬停 / 键盘仅总览内预览（不切桌面），**点击才正式切换**；拖入窗口不跳到目标 space。
-- **最大化窗口独占 space**：最大化窗口绑定独立 space，拒收其它窗口混入。
 - **全局热键**：低级键盘钩子（含 System 预设 Win 组合吞掉）+ 可配置序列。
 - **切换动画**：方向性半透明 flash，不逐帧抓屏。
 - **托盘**：状态显示、上/下一切换、打开总览、刷新显示器、退出（安全 uncloak）。
@@ -32,7 +31,6 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 | **显示器** | monitor · `MonitorSpaces` / `MonitorInfo` | 一块物理（或系统枚举出的）屏幕。每块 monitor **独立**维护自己的 space 列表与当前 space，互不影响。 |
 | **space** | space · `Space` | 某一块 monitor 上的一个“虚拟桌面槽位”。默认 4 个。同一 space 内的窗口一起显示/隐藏；非当前 space 的窗口被 cloak，不销毁。**不是** Windows 系统虚拟桌面。 |
 | **窗口** | window · `HWND` / `WindowTracker` | 托管的顶层应用窗口。由 `WindowTracker` 发现；用 `HWND` 标识；归某个 `(monitor, space)` 所有。最小化窗口、本进程窗口、shell 窗口不纳入管理。 |
-| **独占 space** | exclusive space · `Space::exclusiveWindow` | 绑定了单个最大化窗口的 space。会改名为该窗口标题，且拒收其它窗口拖入。 |
 | **总览** | overview · `OverviewHost` / `OverviewWindow` | Mission Control 式全屏界面。默认所有 monitor **同时**打开，每屏一个 `OverviewWindow`，展示该屏自己的 spaces。 |
 | **space 预览（卡片图）** | space preview · `Space::screenshot` · `SpaceCardWidget` | 总览**顶部 space 条**上每个 space 卡片里的缩略图。**一律渲染**（不 BitBlt）：壁纸铺满画布 + 各窗口按 Z 序 `PrintWindow` 合成。总览打开时也安全（不会截到自己）。 |
 | **space 预览（总览内 UI）** | soft preview · `OverviewWindow::previewSpace` | 总览中悬停/方向键：只高亮卡片、刷新底部窗口条与卡片图，**不切换**真实 monitor space。点击 / `Enter` 才 `switchSpace`。 |
@@ -88,7 +86,7 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 |------|------|
 | `test_cloak` | 多后端隐藏 / 只恢复自己藏过的窗口 |
 | `test_monitors` | 显示器枚举、逻辑 DPI 几何、物理 RECT |
-| `test_space_manager` | per-monitor 切换、归属、Z 序、截图、独占 space |
+| `test_space_manager` | per-monitor 切换、归属、Z 序、截图 |
 | `test_window_tracker` | 窗口发现、本进程/最小化排除 |
 | `test_thumbnail` | 整屏截图、壁纸兜底、PrintWindow |
 | `test_hotkeys` | 全局热键注册与分发 |
@@ -107,7 +105,7 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 
 ```text
 WindowTracker  → 发现可管理窗口（可见、非本进程、非最小化、非 shell）
-SpaceManager   → monitor → space[i] → HWND + 截图 + Z 序 + 独占绑定
+SpaceManager   → monitor → space[i] → HWND + 截图 + Z 序
 Cloak          → hide 只记录自己藏过的；show 只恢复自己
 OverviewHost   → 每屏一个 OverviewWindow，同时开关（Mission Control）
 OverviewWindow → 单屏：顶部 space 条 + 底部窗口预览（DPI 逻辑坐标 + 物理 SetWindowPos）

@@ -193,9 +193,6 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
 
     if (!m_manager->trackWindow(hwnd))
         return false;
-    // Exclusive space rejects other windows (assignWindow enforces this).
-    if (!m_manager->canAssignToSpace(m_hmon, spaceIndex, hwnd))
-        return false;
 
     // Source space/monitor before the move so we can refresh the vacated card.
     const int srcSpace = m_manager->spaceOfWindow(hwnd);

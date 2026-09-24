@@ -348,30 +348,12 @@ bool SpaceManager::removeSpace(HMONITOR hmon, int index)
     Space &keep = m->spaces[dest];
 
     // Move every window into the keep space (update owners).
-    const QSet<HWND> moving = removed.windows;
-    for (HWND hwnd : moving) {
-        if (removed.exclusiveWindow == hwnd) {
-            removed.exclusiveWindow = nullptr;
-        }
+    for (HWND hwnd : removed.windows) {
         m_owner.insert(hwnd, Owner{reinterpret_cast<quintptr>(hmon), dest});
         keep.windows.insert(hwnd);
     }
     removed.windows.clear();
-    removed.exclusiveWindow = nullptr;
     removed.zOrder.clear();
-
-    // Drop exclusive binding on dest if we merged a non-exclusive into exclusive keep…
-    // (keep already owns its own exclusive; merge only adds windows — if keep is exclusive,
-    //  reject merge by unbinding keep's exclusive first so it can accept the set.)
-    if (keep.exclusiveWindow && !moving.isEmpty()) {
-        // Becoming a multi-window space: unbind exclusive and restore default name later.
-        const HWND bound = keep.exclusiveWindow;
-        keep.exclusiveWindow = nullptr;
-        if (m_owner.contains(bound)) {
-            // Bound window stays in keep.windows (still there).
-        }
-        keep.name = defaultSpaceName(dest);
-    }
 
     m->spaces.remove(index);
 
@@ -382,12 +364,6 @@ bool SpaceManager::removeSpace(HMONITOR hmon, int index)
         --m->currentIndex;
     if (m->currentIndex < 0 || m->currentIndex >= m->spaces.size())
         m->currentIndex = 0;
-
-    // Re-number default-looking names for simplicity after structural change.
-    for (int i = 0; i < m->spaces.size(); ++i) {
-        // Keep exclusive/custom titles; only renumber plain "Space N" if index shifted.
-        // (No-op for custom titles.)
-    }
 
     applyVisibility(hmon);
     rebuildSpaceScreenshot(hmon, dest);
@@ -442,54 +418,13 @@ bool SpaceManager::moveSpace(HMONITOR hmon, int from, int to)
     return true;
 }
 
-bool SpaceManager::isMaximizedWindow(HWND hwnd)
-{
-    if (!hwnd || !::IsWindow(hwnd))
-        return false;
-    // IsZoomed == maximized (not just restored-to-monitor-size).
-    return ::IsZoomed(hwnd) != FALSE;
-}
-
-bool SpaceManager::isExclusiveSpace(HMONITOR hmon, int spaceIndex) const
-{
-    return exclusiveWindowOn(hmon, spaceIndex) != nullptr;
-}
-
-HWND SpaceManager::exclusiveWindowOn(HMONITOR hmon, int spaceIndex) const
-{
-    auto *self = const_cast<SpaceManager *>(this);
-    auto *m = self->monitorOf(hmon);
-    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
-        return nullptr;
-    HWND h = m->spaces[spaceIndex].exclusiveWindow;
-    return (h && ::IsWindow(h)) ? h : nullptr;
-}
-
-bool SpaceManager::canAssignToSpace(HMONITOR hmon, int spaceIndex, HWND hwnd) const
-{
-    auto *self = const_cast<SpaceManager *>(this);
-    auto *m = self->monitorOf(hmon);
-    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size() || !hwnd)
-        return false;
-
-    const Space &sp = m->spaces[spaceIndex];
-    if (!sp.exclusiveWindow)
-        return true;
-    // Exclusive space only accepts its own bound window (re-drop / re-assign).
-    return sp.exclusiveWindow == hwnd || !::IsWindow(sp.exclusiveWindow);
-}
-
 bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
 {
     auto *m = monitorOf(hmon);
     if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size() || !hwnd)
         return false;
 
-    // Reject foreign windows into a space already bound to another maximized window.
-    if (!canAssignToSpace(hmon, spaceIndex, hwnd))
-        return false;
-
-    // If leaving an exclusive space, unbind it (restore default name).
+    // Leave previous space if any (refresh vacated card later).
     int prevSpace = -1;
     HMONITOR prevMon = nullptr;
     if (m_owner.contains(hwnd)) {
@@ -498,49 +433,11 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
             pm && prev.space >= 0 && prev.space < pm->spaces.size()) {
             prevSpace = prev.space;
             prevMon = pm->hmon;
-            Space &oldSp = pm->spaces[prev.space];
-            oldSp.windows.remove(hwnd);
-            if (oldSp.exclusiveWindow == hwnd) {
-                oldSp.exclusiveWindow = nullptr;
-                // Restore default Space N name.
-                const int oldIdx = prev.space;
-                oldSp.name = QCoreApplication::translate("SpaceManager", "Space %1")
-                                 .arg(oldIdx + 1);
-            }
+            pm->spaces[prev.space].windows.remove(hwnd);
         }
     }
 
-    Space &sp = m->spaces[spaceIndex];
-
-    // Maximized window → exclusive bind: sole occupant, rename to window title.
-    if (isMaximizedWindow(hwnd)) {
-        // Evict any other occupants (they return to unmanaged visibility on apply).
-        const QSet<HWND> others = sp.windows;
-        for (HWND other : others) {
-            if (other == hwnd)
-                continue;
-            if (m_owner.contains(other)) {
-                const auto o = m_owner.value(other);
-                if (o.hmon == reinterpret_cast<quintptr>(hmon) && o.space == spaceIndex)
-                    m_owner.remove(other);
-            }
-            sp.windows.remove(other);
-            cloakWindow(other, false);
-        }
-        sp.windows.clear();
-        sp.windows.insert(hwnd);
-        sp.exclusiveWindow = hwnd;
-
-        wchar_t buf[256]{};
-        ::GetWindowTextW(hwnd, buf, 256);
-        QString title = QString::fromWCharArray(buf).trimmed();
-        sp.name = title.isEmpty()
-            ? QCoreApplication::translate("SpaceManager", "Space %1").arg(spaceIndex + 1)
-            : title;
-    } else {
-        sp.windows.insert(hwnd);
-    }
-
+    m->spaces[spaceIndex].windows.insert(hwnd);
     m_owner.insert(hwnd, Owner{reinterpret_cast<quintptr>(hmon), spaceIndex});
 
     const bool shouldHide = (spaceIndex != m->currentIndex);

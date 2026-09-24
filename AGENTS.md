@@ -87,7 +87,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | System 热键解析 / 自启 | `test_settings` | 有 |
 | showAllHidden 退出恢复 | `test_cloak` | 有 |
 | 拖拽热点 mapPressToHotSpot | `test_window_placement` | 有 |
-| exclusive / 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
+| 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
 | 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
 
 已知缺口优先补：`main` 前台 re-home、`+` 拖入 UI、`windowForeground`、`spacePreviewInvalidated` 直连。

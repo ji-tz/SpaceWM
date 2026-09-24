@@ -36,13 +36,6 @@ public:
 
     bool assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex);
 
-    // Exclusive (maximized-window) space helpers.
-    static bool isMaximizedWindow(HWND hwnd);
-    bool isExclusiveSpace(HMONITOR hmon, int spaceIndex) const;
-    HWND exclusiveWindowOn(HMONITOR hmon, int spaceIndex) const;
-    // True if space rejects additional windows (bound to a maximized window).
-    bool canAssignToSpace(HMONITOR hmon, int spaceIndex, HWND hwnd) const;
-
     int spaceOfWindow(HWND hwnd) const;
     HMONITOR ownerMonitorOf(HWND hwnd) const;
 

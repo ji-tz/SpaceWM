@@ -22,9 +22,6 @@ struct Space {
     QVector<HWND> zOrder;
     // Last rendered preview: wallpaper full-bleed + windows in Z-order (not a BitBlt).
     QImage screenshot;
-    // Non-null when bound to a single maximized window (exclusive space).
-    // Other windows must not be assigned into this space.
-    HWND exclusiveWindow = nullptr;
 };
 
 struct MonitorSpaces {
