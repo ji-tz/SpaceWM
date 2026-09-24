@@ -24,7 +24,7 @@ cmd /c "`"$vcvars`" && cmake -S D:\workspace\SpaceWM -B D:\workspace\SpaceWM\bui
 
 产物：`build/SpaceWM.exe`（POST_BUILD 自动 `windeployqt` → `lib/` → 拷回 `build/`）。
 
-**`build/`、`lib/` 不入库**（见 `.gitignore`）。
+**`build/` 不入库**；**`lib/` 入库**（可移植运行时：Qt DLL + 插件 + MSVC CRT，约 60MB）。克隆后若缺 `build/` 内 exe，可用本机 Qt 重编；`lib/` 可直接与 `build/SpaceWM.exe` 并列运行。
 
 ---
 
