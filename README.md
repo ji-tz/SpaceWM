@@ -4,7 +4,7 @@ Windows 上的**按显示器独立虚拟桌面（Spaces）管理器**，体验�
 
 C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64。
 
-> 本仓库的开发与测试契约见 [`AGENTS.md`](AGENTS.md)（改代码前必读）。运行日志：**TR** → `trace.log`，**EH** → `error.log`（spdlog，见 `AGENTS.md` §0）。
+> 本仓库的开发与测试契约见 [`AGENTS.md`](AGENTS.md)（改代码前必读）。运行日志：**TR** → `TR/trace.log`，**EH** → `EH/error.log`（仓库根目录下，spdlog，见 `AGENTS.md` §0）。
 
 ## 功能
 

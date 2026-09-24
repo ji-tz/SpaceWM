@@ -1,8 +1,8 @@
 #include "core/log/Log.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
-#include <QStandardPaths>
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
@@ -19,16 +19,42 @@ namespace {
 
 std::shared_ptr<spdlog::logger> g_trace;
 std::shared_ptr<spdlog::logger> g_error;
-QString g_dir;
+QString g_root; // project root (or init override); TR/ and EH/ live under it
 std::mutex g_initMu;
 bool g_crashInstalled = false;
 
-QString defaultLogDir()
+// Walk up from the exe (build/, build/tests/, …) to the repo root that has
+// AGENTS.md + CMakeLists.txt + src/ — so runtime TR/EH land in <projectRoot>/.
+QString detectProjectRoot()
 {
-    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (base.isEmpty())
-        base = QDir::tempPath() + QStringLiteral("/SpaceWM");
-    return base + QStringLiteral("/logs");
+    QString dir = QCoreApplication::applicationDirPath();
+    for (int i = 0; i < 8 && !dir.isEmpty(); ++i) {
+        if (QFile::exists(dir + QStringLiteral("/AGENTS.md"))
+            && QFile::exists(dir + QStringLiteral("/CMakeLists.txt"))
+            && QDir(dir + QStringLiteral("/src")).exists()) {
+            return dir;
+        }
+        QDir d(dir);
+        if (!d.cdUp())
+            break;
+        dir = d.absolutePath();
+    }
+    // Installed / portable copy without sources: still log beside the exe's parent.
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QDir d(appDir);
+    if (d.cdUp())
+        return d.absolutePath();
+    return appDir;
+}
+
+QString trDirOf(const QString &root)
+{
+    return root + QStringLiteral("/TR");
+}
+
+QString ehDirOf(const QString &root)
+{
+    return root + QStringLiteral("/EH");
 }
 
 void flushAll()
@@ -45,10 +71,11 @@ void writeCrashLine(const char *kind, const char *detail)
         if (g_error)
             g_error->critical("[crash] {} {}", kind, detail ? detail : "");
         else {
-            // Logger not up — still best-effort append to error.log.
-            QDir().mkpath(g_dir.isEmpty() ? defaultLogDir() : g_dir);
-            QFile f((g_dir.isEmpty() ? defaultLogDir() : g_dir)
-                    + QStringLiteral("/error.log"));
+            // Logger not up — still best-effort append to <root>/EH/error.log.
+            const QString root = g_root.isEmpty() ? detectProjectRoot() : g_root;
+            const QString ehDir = ehDirOf(root);
+            QDir().mkpath(ehDir);
+            QFile f(ehDir + QStringLiteral("/error.log"));
             if (f.open(QIODevice::Append | QIODevice::Text))
                 f.write(QByteArray("[crash] ") + kind + " " + (detail ? detail : "") + "\n");
         }
@@ -84,32 +111,38 @@ bool init(const QString &dirOverride)
     if (g_trace && g_error)
         return true;
 
-    g_dir = dirOverride.isEmpty() ? defaultLogDir() : dirOverride;
-    QDir().mkpath(g_dir);
+    g_root = dirOverride.isEmpty() ? detectProjectRoot() : dirOverride;
+    const QString trDir = trDirOf(g_root);
+    const QString ehDir = ehDirOf(g_root);
+    QDir().mkpath(trDir);
+    QDir().mkpath(ehDir);
 
     try {
         // Drop previous instances so shutdown()+init() can recreate (tests).
         spdlog::drop("spacewm-trace");
         spdlog::drop("spacewm-error");
 
-        // TR: info+ → trace.log (append — never wipe history on re-init)
+        // TR: info+ → <root>/TR/trace.log (append — never wipe on re-init)
         g_trace = spdlog::basic_logger_mt(
-            "spacewm-trace", (g_dir + QStringLiteral("/trace.log")).toStdString(),
+            "spacewm-trace", (trDir + QStringLiteral("/trace.log")).toStdString(),
             /*truncate=*/false);
         g_trace->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
         g_trace->set_level(spdlog::level::info);
         g_trace->flush_on(spdlog::level::info);
 
-        // EH: warn+ → error.log
+        // EH: warn+ → <root>/EH/error.log
         g_error = spdlog::basic_logger_mt(
-            "spacewm-error", (g_dir + QStringLiteral("/error.log")).toStdString(),
+            "spacewm-error", (ehDir + QStringLiteral("/error.log")).toStdString(),
             /*truncate=*/false);
         g_error->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
         g_error->set_level(spdlog::level::warn);
         g_error->flush_on(spdlog::level::warn);
 
         spdlog::set_default_logger(g_trace);
-        g_trace->info("log init dir={}", g_dir.toStdString());
+        g_trace->info("log init root={} TR={} EH={}",
+                      g_root.toStdString(),
+                      trDir.toStdString(),
+                      ehDir.toStdString());
         return true;
     } catch (const std::exception &ex) {
         Q_UNUSED(ex)
@@ -141,17 +174,17 @@ void flush()
 
 QString logDir()
 {
-    return g_dir;
+    return g_root;
 }
 
 QString tracePath()
 {
-    return g_dir.isEmpty() ? QString() : g_dir + QStringLiteral("/trace.log");
+    return g_root.isEmpty() ? QString() : g_root + QStringLiteral("/TR/trace.log");
 }
 
 QString errorPath()
 {
-    return g_dir.isEmpty() ? QString() : g_dir + QStringLiteral("/error.log");
+    return g_root.isEmpty() ? QString() : g_root + QStringLiteral("/EH/error.log");
 }
 
 void trace(const QString &msg)

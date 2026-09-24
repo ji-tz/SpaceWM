@@ -5,7 +5,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 
-// TR = trace.log (runtime), EH = error.log (errors) — spdlog-backed.
+// TR = <root>/TR/trace.log, EH = <root>/EH/error.log — spdlog-backed.
 class TestLog : public QObject {
     Q_OBJECT
 private slots:
@@ -24,11 +24,13 @@ private slots:
         m_dir = nullptr;
     }
 
-    void pathsAreUnderLogDir()
+    void pathsAreUnderProjectStyleEhTrDirs()
     {
         QCOMPARE(spacelog::logDir(), m_dir->path());
-        QVERIFY(spacelog::tracePath().endsWith(QStringLiteral("/trace.log")));
-        QVERIFY(spacelog::errorPath().endsWith(QStringLiteral("/error.log")));
+        QVERIFY(spacelog::tracePath().endsWith(QStringLiteral("/TR/trace.log")));
+        QVERIFY(spacelog::errorPath().endsWith(QStringLiteral("/EH/error.log")));
+        QVERIFY(spacelog::tracePath().startsWith(m_dir->path()));
+        QVERIFY(spacelog::errorPath().startsWith(m_dir->path()));
     }
 
     void traceWritesTraceLog()

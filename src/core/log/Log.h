@@ -4,11 +4,12 @@
 
 // Runtime logging via spdlog (third-party).
 //
-// TR (trace):  runtime flow → <logDir>/trace.log   (info and above)
-// EH (error):  errors / crashes / critical         → <logDir>/error.log
+// TR (trace):  runtime flow → <projectRoot>/TR/trace.log   (info and above)
+// EH (error):  errors / crashes / critical → <projectRoot>/EH/error.log
 //
-// Log dir default: <AppData>/SpaceWM/logs  (override: SpaceWM::log::init(dir)).
-// Logs are NOT committed to git.
+// Default root: repo root detected from the exe path (build/ → parent with
+// AGENTS.md + CMakeLists.txt + src/). Override: spacelog::init(dir) uses
+// <dir>/TR/ and <dir>/EH/ (tests). Logs are NOT committed to git.
 namespace spacelog {
 
 // Create sinks/threads. Safe to call once at startup; idempotent.
@@ -17,8 +18,9 @@ void shutdown();
 // Force flush both sinks (tests / before process exit).
 void flush();
 
-// Directory that contains trace.log / error.log (empty if not initialized).
+// Project (or override) root. Empty if not initialized.
 QString logDir();
+// <root>/TR/trace.log and <root>/EH/error.log
 QString tracePath();
 QString errorPath();
 

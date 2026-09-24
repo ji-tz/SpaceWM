@@ -62,7 +62,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName(QStringLiteral("SpaceWM"));
     app.setQuitOnLastWindowClosed(false);
 
-    // TR/EH: spdlog → %AppData%\SpaceWM\logs\{trace,error}.log
+    // TR/EH: spdlog → <projectRoot>/TR/trace.log + <projectRoot>/EH/error.log
     spacelog::init();
     spacelog::installCrashHandlers();
     spacelog::info(QStringLiteral("SpaceWM starting"));
