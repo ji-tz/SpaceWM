@@ -550,6 +550,7 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
     if (prevSpace >= 0 && prevMon && (prevMon != hmon || prevSpace != spaceIndex))
         rebuildSpaceScreenshot(prevMon, prevSpace);
     rebuildSpaceScreenshot(hmon, spaceIndex);
+    emit windowTracked(reinterpret_cast<quint64>(hwnd));
 
     return true;
 }

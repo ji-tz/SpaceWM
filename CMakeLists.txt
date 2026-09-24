@@ -14,6 +14,17 @@ if(NOT WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# Third-party logging: spdlog → runtime trace.log / error.log
+# ---------------------------------------------------------------------------
+include(FetchContent)
+FetchContent_Declare(
+  spdlog
+  GIT_REPOSITORY https://github.com/gabime/spdlog.git
+  GIT_TAG        v1.15.0
+)
+FetchContent_MakeAvailable(spdlog)
+
+# ---------------------------------------------------------------------------
 # Core library (no main) — shared by the app and the test binaries.
 # ---------------------------------------------------------------------------
 add_library(spacewm_core STATIC
@@ -30,6 +41,8 @@ add_library(spacewm_core STATIC
   src/core/capture/ThumbnailCapture.cpp
   src/core/settings/AppSettings.h
   src/core/settings/AppSettings.cpp
+  src/core/log/Log.h
+  src/core/log/Log.cpp
   src/hotkeys/HotkeyManager.h
   src/hotkeys/HotkeyManager.cpp
   src/ui/overview/OverviewWindow.h
@@ -55,6 +68,7 @@ target_include_directories(spacewm_core PUBLIC src)
 target_link_libraries(spacewm_core PUBLIC
   Qt6::Widgets
   Qt6::Gui
+  spdlog::spdlog
   dwmapi
   user32
   gdi32

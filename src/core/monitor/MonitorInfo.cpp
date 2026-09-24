@@ -1,10 +1,12 @@
 #include "core/monitor/MonitorInfo.h"
 
+#include <dwmapi.h>
 #include <shellscalingapi.h>
 
 #include <algorithm>
 
 #pragma comment(lib, "Shcore.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 namespace {
 
@@ -157,8 +159,13 @@ QSize logicalWindowSize(HWND hwnd)
     if (!hwnd || !::IsWindow(hwnd))
         return {};
     RECT wr{};
-    if (!::GetWindowRect(hwnd, &wr))
-        return {};
+    // Prefer visible DWM frame (excludes invisible resize borders).
+    const HRESULT hr = ::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                               &wr, sizeof(wr));
+    if (FAILED(hr) || (wr.right - wr.left) <= 0 || (wr.bottom - wr.top) <= 0) {
+        if (!::GetWindowRect(hwnd, &wr))
+            return {};
+    }
     const int pw = wr.right - wr.left;
     const int ph = wr.bottom - wr.top;
     if (pw <= 0 || ph <= 0)

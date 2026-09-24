@@ -5,6 +5,7 @@
 #include <QWinEventNotifier>
 
 #include "core/space/SpaceManager.h"
+#include "core/log/Log.h"
 #include "core/window/CloakController.h"
 #include "core/window/WindowTracker.h"
 #include "hotkeys/HotkeyManager.h"
@@ -61,12 +62,19 @@ int main(int argc, char *argv[])
     app.setOrganizationName(QStringLiteral("SpaceWM"));
     app.setQuitOnLastWindowClosed(false);
 
+    // TR/EH: spdlog → %AppData%\SpaceWM\logs\{trace,error}.log
+    spacelog::init();
+    spacelog::installCrashHandlers();
+    spacelog::info(QStringLiteral("SpaceWM starting"));
+
     // Single instance — avoid double-hooking hotkeys.
     QSharedMemory guard(QStringLiteral("SpaceWM-single-instance"));
     if (guard.attach()) {
         // Already running: --quit already handled above; plain launch just exits.
         QMessageBox::information(nullptr, QStringLiteral("SpaceWM"),
                                  QStringLiteral("SpaceWM is already running (check the tray)."));
+        spacelog::info(QStringLiteral("exit: another instance already running"));
+        spacelog::shutdown();
         return 0;
     }
     guard.create(1);
@@ -265,6 +273,8 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
         cloak::showAllHidden();
+        spacelog::info(QStringLiteral("SpaceWM exiting (showAllHidden)"));
+        spacelog::shutdown();
     });
 
     // Close named event handle on the way out (notifier first).

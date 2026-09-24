@@ -8,6 +8,7 @@ set(SPACEWM_TEST_NAMES
   test_thumbnail
   test_hotkeys
   test_settings
+  test_log
   test_space_card
   test_overview
   test_overview_host

@@ -5,7 +5,11 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include <dwmapi.h>
+
 #include <algorithm>
+
+#pragma comment(lib, "dwmapi.lib")
 
 #ifndef PW_RENDERFULLCONTENT
 #define PW_RENDERFULLCONTENT 0x00000002
@@ -195,6 +199,21 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     ::DeleteObject(bmp);
     ::DeleteDC(mem);
     ::ReleaseDC(nullptr, screen);
+
+    // Crop to visible DWM frame — GetWindowRect includes invisible resize
+    // borders that show up as empty margins in the preview tile.
+    RECT vis{};
+    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                          &vis, sizeof(vis)))) {
+        const int x = vis.left - rc.left;
+        const int y = vis.top - rc.top;
+        const int w = vis.right - vis.left;
+        const int h = vis.bottom - vis.top;
+        if (x >= 0 && y >= 0 && w > 0 && h > 0
+            && x + w <= img.width() && y + h <= img.height()) {
+            img = img.copy(x, y, w, h);
+        }
+    }
 
     if (img.isNull())
         return {};

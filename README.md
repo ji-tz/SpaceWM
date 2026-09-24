@@ -4,7 +4,7 @@ Windows 上的**按显示器独立虚拟桌面（Spaces）管理器**，体验�
 
 C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64。
 
-> 本仓库的开发与测试契约见 [`AGENT.md`](AGENT.md)（改代码前必读）；问题记录体系见 [`docs/EH.md`](docs/EH.md) / [`docs/TR.md`](docs/TR.md)（`AGENT.md` §0）。
+> 本仓库的开发与测试契约见 [`AGENTS.md`](AGENTS.md)（改代码前必读）。运行日志：**TR** → `trace.log`，**EH** → `error.log`（spdlog，见 `AGENTS.md` §0）。
 
 ## 功能
 
@@ -77,7 +77,7 @@ cmd /c "`"$vcvars`" && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -
 12 个 Qt Test 可执行文件，通过 CTest 统一调度：
 
 ```powershell
-# 构建 + 全量回归（AGENT.md 要求：任何源码修改后必须全量通过）
+# 构建 + 全量回归（AGENTS.md 要求：任何源码修改后必须全量通过）
 cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build --output-on-failure"
 
 # 或使用封装脚本
@@ -99,7 +99,7 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 | `test_window_placement` | 软预览、悬停离开、拖放停原 space、tile DPI、全量预览 |
 | `test_flash_overlay` | 切换 flash 动画 |
 
-新增 / 修改功能必须同步测试，详见 [`AGENT.md` §2](AGENT.md)。
+新增 / 修改功能必须同步测试，详见 [`AGENTS.md` §2](AGENTS.md)。
 
 可选：在 [Windows Sandbox](scripts/enable-windows-sandbox.ps1) 中跑隔离回归，避免测试触碰宿主桌面状态。
 
@@ -128,7 +128,7 @@ TrayIcon       → 托盘状态与菜单（点击开设置）
 
 ```text
 SpaceWM/
-├── AGENT.md            # 开发与测试契约（必读）
+├── AGENTS.md            # 开发与测试契约（必读）
 ├── CMakeLists.txt        # 主构建：spacewm_core 静态库 + SpaceWM.exe + 测试
 ├── lib/                  # 可移植运行时（Qt DLL + 插件 + CRT，已入库）
 ├── cmake/CopyCrt.cmake   # 拷贝 MSVC CRT 到 lib/

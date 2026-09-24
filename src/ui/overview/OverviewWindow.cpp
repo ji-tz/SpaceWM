@@ -54,6 +54,17 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
                 refreshCardScreenshot(i);
             rebuildWindowPreviews();
         });
+        // New/moved window on this monitor → refresh bottom strip (taskbar launches etc.).
+        connect(m_manager, &SpaceManager::windowTracked, this, [this](quint64 hwnd) {
+            if (!m_open || !m_hmon || !m_manager)
+                return;
+            const HWND h = reinterpret_cast<HWND>(hwnd);
+            if (m_manager->ownerMonitorOf(h) != m_hmon)
+                return;
+            const int sp = m_manager->spaceOfWindow(h);
+            if (sp == m_selected || sp == m_manager->currentSpaceIndex(m_hmon))
+                rebuildWindowPreviews();
+        });
     }
 
     m_root = new QWidget(this);

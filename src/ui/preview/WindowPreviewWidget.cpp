@@ -96,11 +96,8 @@ void WindowPreviewWidget::applyPixmap()
                      qMax(1, int(std::lround(m_box.height() * dpr))));
 
     QImage src = m_image;
-    if (src.width() > phys.width() || src.height() > phys.height()
-        || src.width() < phys.width() * 0.9) {
-        // Fit inside phys box (KeepAspectRatio), then QLabel centers it.
-        src = src.scaled(phys, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
+    // Always fill the physical box so the tile is never letterboxed/cropped short.
+    src = src.scaled(phys, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
     QPixmap pm = QPixmap::fromImage(src);
     pm.setDevicePixelRatio(dpr);

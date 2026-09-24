@@ -40,3 +40,7 @@ Testing/Temporary/
 # OS
 Thumbs.db
 .DS_Store
+
+# Runtime logs (TR/EH) — never commit
+*.log
+logs/
