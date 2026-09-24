@@ -46,11 +46,13 @@ public:
     HWND windowPreviewHandle(int i) const;
 
     // Mission Control: drop hwnd onto space index (public for tests).
+    // Does NOT switch the live monitor space — stays on the current space.
     bool placeWindowInSpace(HWND hwnd, int spaceIndex);
 
-    // Hover/keyboard: live-switch the real desktop + refresh strip for that space.
+    // UI-only preview (hover / arrows): highlight + bottom strip + card image.
+    // Does not change the real desktop space; click/Enter commits via closed().
     bool previewSpace(int spaceIndex);
-    // Space index captured when overview opened (restored on cancel).
+    // Space index captured when overview opened (restored on cancel if needed).
     int originSpaceIndex() const { return m_originSpace; }
 
 signals:

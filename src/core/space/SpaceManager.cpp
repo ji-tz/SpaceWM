@@ -142,6 +142,7 @@ void SpaceManager::captureSpaceScreenshot(HMONITOR hmon, int index)
 
 void SpaceManager::seedScreenshots()
 {
+    // Cheap: only fill gaps. Full batch is buildAllSpacePreviews() on open.
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
         MonitorSpaces &m = it.value();
         const int w = m.physRect.right - m.physRect.left;
@@ -150,9 +151,34 @@ void SpaceManager::seedScreenshots()
             continue;
 
         for (int i = 0; i < m.spaces.size(); ++i) {
-            // Always re-render current; fill empties for the rest.
-            if (i == m.currentIndex || m.spaces[i].screenshot.isNull())
+            if (m.spaces[i].screenshot.isNull())
                 rebuildSpaceScreenshot(m.hmon, i);
+        }
+    }
+}
+
+void SpaceManager::buildAllSpacePreviews()
+{
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+        MonitorSpaces &m = it.value();
+        const int w = m.physRect.right - m.physRect.left;
+        const int h = m.physRect.bottom - m.physRect.top;
+        if (w <= 0 || h <= 0)
+            continue;
+        for (int i = 0; i < m.spaces.size(); ++i)
+            rebuildSpaceScreenshot(m.hmon, i);
+    }
+}
+
+void SpaceManager::warmWindowShots()
+{
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+        const MonitorSpaces &m = it.value();
+        for (const Space &sp : m.spaces) {
+            for (HWND hwnd : sp.windows) {
+                if (::IsWindow(hwnd) && !::IsIconic(hwnd))
+                    thumbs::windowShot(hwnd); // capture once into cache
+            }
         }
     }
 }
@@ -265,8 +291,8 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
             continue;
         const int dw = qMax(1, int(std::lround(ww * sx)));
         const int dh = qMax(1, int(std::lround(wh * sy)));
-        // Capture at full window aspect then force exact on-canvas box (same sx/sy).
-        QImage shot = thumbs::capture(hwnd, QSize(dw, dh));
+        // Shared per-window cache — same image as the bottom strip tiles.
+        QImage shot = thumbs::windowShot(hwnd, QSize(dw, dh));
         if (shot.isNull())
             continue;
         if (shot.width() != dw || shot.height() != dh)
@@ -383,9 +409,10 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
     const bool shouldHide = (spaceIndex != m->currentIndex);
     cloakWindow(hwnd, shouldHide);
 
-    // Source space lost a window — refresh its cached screenshot so cards stay in sync.
+    // Content changed → repaint both spaces (source lost a window, dest gained one).
     if (prevSpace >= 0 && prevMon && (prevMon != hmon || prevSpace != spaceIndex))
         rebuildSpaceScreenshot(prevMon, prevSpace);
+    rebuildSpaceScreenshot(hmon, spaceIndex);
 
     return true;
 }
@@ -505,12 +532,14 @@ QVector<HWND> SpaceManager::windowsOn(HMONITOR hmon, int spaceIndex) const
 
 bool SpaceManager::trackWindow(HWND hwnd)
 {
+    // Already ours — re-entry must succeed even if isManageable would reject
+    // (e.g. tests that assignWindow first, or own-process windows).
+    if (m_owner.contains(hwnd))
+        return true;
     if (::IsIconic(hwnd))
         return false;
     if (!WindowTracker::isManageable(hwnd))
         return false;
-    if (m_owner.contains(hwnd))
-        return true;
 
     HMONITOR h = monitors::fromWindow(hwnd);
     ensureMonitor(h);
@@ -526,9 +555,13 @@ void SpaceManager::untrackWindow(HWND hwnd)
     if (!m_owner.contains(hwnd))
         return;
     const auto owner = m_owner.take(hwnd);
+    thumbs::invalidateWindow(hwnd);
     if (auto *m = monitorOf(reinterpret_cast<HMONITOR>(owner.hmon))) {
-        if (owner.space >= 0 && owner.space < m->spaces.size())
+        if (owner.space >= 0 && owner.space < m->spaces.size()) {
             m->spaces[owner.space].windows.remove(hwnd);
+            // Membership changed → repaint that space only.
+            rebuildSpaceScreenshot(reinterpret_cast<HMONITOR>(owner.hmon), owner.space);
+        }
     }
     emit windowUntracked(reinterpret_cast<quint64>(hwnd));
 }

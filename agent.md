@@ -62,8 +62,10 @@ cmd /c "`"$vcvars`" && cmake --build D:\workspace\SpaceWM\build --parallel && ct
 | **多屏同时 overview（Mission Control 式）** | `ui/overview/OverviewHost.*` | `tests/test_overview_host.cpp` |
 | **窗口拖入 space（顶部 space 条 + 底部窗口预览）** | `ui/preview/WindowPreviewWidget.*` + `OverviewWindow` drop | `tests/test_window_placement.cpp` |
 | **窗口移出 space 后源卡片/截图同步刷新** | `SpaceManager::assignWindow` → `rebuildSpaceScreenshot(prev)` + `OverviewWindow::placeWindowInSpace` | `tests/test_space_manager.cpp` · `tests/test_window_placement.cpp` |
-| **打开 overview 时缺省 space 预览必有图** | `seedScreenshots` + `OverviewWindow::openOnMonitor`/`rebuildCards` 兜底链 | `tests/test_window_placement.cpp` |
-| **悬停/键盘 live 预览桌面 + 底部只显示该 space 窗口 + 渲染合成截图** | `SpaceManager::previewSpace/rebuildSpaceScreenshot`（壁纸铺满 + 窗口 Z 序 PrintWindow，**不用 BitBlt**） | `tests/test_space_manager.cpp` · `tests/test_window_placement.cpp` |
+| **进入总览一次性生成全部 space/window 预览并缓存** | `SpaceManager::buildAllSpacePreviews` + `warmWindowShots` + `thumbs::windowShot`（每 HWND 一张） | `tests/test_window_placement.cpp` · `tests/test_thumbnail.cpp` |
+| **space 内容变化才重绘该 space 预览** | `assignWindow` / `untrackWindow` → `rebuildSpaceScreenshot` | `tests/test_space_manager.cpp` |
+| **悬停/键盘仅 UI 预览（不切桌面）+ 点击才 switchSpace** | `OverviewWindow::previewSpace`（UI-only）+ `closed`→`switchSpace` | `tests/test_window_placement.cpp` |
+| **拖入 space 不跳转，停留在原 space** | `OverviewWindow::placeWindowInSpace` | `tests/test_window_placement.cpp` |
 | **space 预览全部渲染（含背景/Z 序）** | `rebuildSpaceScreenshot` + `captureSpaceScreenshot` 委托 + `thumbs::wallpaperFilled` | `tests/test_space_manager.cpp` |
 | **窗口缩略图全尺寸 PrintWindow 再缩放** | `ThumbnailCapture::capture`（禁止预缩小 DC） | `tests/test_thumbnail.cpp` |
 | **最大化窗口独占 space（绑定改名、拒收其它窗口）** | `Space::exclusiveWindow` + `assignWindow`/`canAssignToSpace` | `tests/test_space_manager.cpp` |

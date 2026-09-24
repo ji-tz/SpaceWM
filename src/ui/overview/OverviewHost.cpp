@@ -91,9 +91,9 @@ void OverviewHost::openAll()
     m_switching = false;
     m_active = nullptr;
 
-    m_manager->seedScreenshots();
-    for (MonitorSpaces *m : m_manager->monitors())
-        m_manager->captureSpaceScreenshot(m->hmon, m->currentIndex);
+    // One-shot entry cache: every space composite + every window shot, once.
+    m_manager->buildAllSpacePreviews();
+    m_manager->warmWindowShots();
     m_manager->setOverviewOpen(true);
 
     const HMONITOR cursor = monitors::fromCursor();

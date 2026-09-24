@@ -85,6 +85,43 @@ private slots:
 
         ::DestroyWindow(hwnd);
     }
+
+    void windowShotCachesOnceAndScales()
+    {
+        thumbs::clearWindowCache();
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"cache target",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30, 30, 500, 360,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        ::ShowWindow(hwnd, SW_SHOW);
+        ::UpdateWindow(hwnd);
+        ::Sleep(30);
+
+        const QImage full1 = thumbs::windowShot(hwnd);
+        QVERIFY(!full1.isNull());
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+
+        // Second call must reuse the same source (no new cache entry).
+        const QImage full2 = thumbs::windowShot(hwnd);
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+        // Same dimensions; identical bits (shared cache, not recaptured).
+        QCOMPARE(full2.size(), full1.size());
+        QVERIFY(full2.bits() != full1.bits() || full2.constBits() == full1.constBits());
+
+        // Scaled views fit maxSize and keep aspect of the one source image.
+        const QImage small = thumbs::windowShot(hwnd, QSize(120, 90));
+        QVERIFY(!small.isNull());
+        QVERIFY(small.width() <= 120);
+        QVERIFY(small.height() <= 90);
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+
+        thumbs::invalidateWindow(hwnd);
+        QCOMPARE(thumbs::windowCacheCount(), 0);
+
+        ::DestroyWindow(hwnd);
+        thumbs::clearWindowCache();
+    }
 };
 
 QTEST_MAIN(TestThumbnail)

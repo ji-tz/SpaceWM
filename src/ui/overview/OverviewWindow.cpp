@@ -48,8 +48,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(m_header);
 
     m_hint = new QLabel(
-        tr("Hover a space to sync the desktop · drag windows below onto a space · "
-           "←/→ preview · Enter confirm (instant) · Esc cancel"),
+        tr("Hover a space to preview it here · click to switch · "
+           "drag windows below onto a space · ←/→ select · Enter confirm · Esc cancel"),
         m_root);
     m_hint->setStyleSheet(QStringLiteral(
         "QLabel { color: rgba(255,255,255,140); font-size: 13px; "
@@ -144,29 +144,26 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     // Source space/monitor before the move so we can refresh the vacated card.
     const int srcSpace = m_manager->spaceOfWindow(hwnd);
     HMONITOR srcMon = m_manager->ownerMonitorOf(hwnd);
+    // Stay on the space we are viewing — do NOT jump to the drop target.
+    const int stay = m->currentIndex;
 
     if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex))
         return false;
 
-    // 1) Sync the real desktop to the destination (windows show/hide).
-    previewSpace(spaceIndex);
-
-    // 2) Composite a fresh card image for the destination.
+    // Destination card (window now lives there — may be hidden).
     refreshCardScreenshot(spaceIndex);
-
-    // 3) Source space lost a window — assignWindow already rebuilt its screenshot;
-    //    push that image onto the source card so the strip stays in sync.
+    // Source card lost a window.
     if (srcSpace >= 0 && (srcMon != m_hmon || srcSpace != spaceIndex)) {
         if (srcMon == m_hmon || !srcMon)
             refreshCardScreenshot(srcSpace);
-        // Other monitors' panels pull the rebuilt shot on their next open/preview.
     }
 
     refreshCardBadges();
 
-    // 4) Bottom strip = windows of the previewed space only.
+    // Keep UI + desktop on the original space; strip drops the moved window.
+    m_selected = stay;
     rebuildWindowPreviews();
-    setSelected(spaceIndex);
+    setSelected(stay);
 
     emit windowPlaced(reinterpret_cast<quint64>(hwnd), spaceIndex);
     return true;
@@ -180,8 +177,12 @@ bool OverviewWindow::previewSpace(int spaceIndex)
     if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
         return false;
 
-    // Live cloak on the desktop under the overlay (no animation).
-    m_manager->previewSpace(m_hmon, spaceIndex);
+    // UI-only preview: highlight + bottom strip + card image.
+    // Does NOT change the real monitor space (currentIndex / cloak).
+    // Formal switch happens on click/Enter via closed() → switchSpace.
+    if (m_selected == spaceIndex && m_open)
+        return true;
+
     m_selected = spaceIndex;
     refreshCardBadges();
     rebuildWindowPreviews();
@@ -220,26 +221,20 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
 
     if (m_manager) {
         if (!m_hostManaged) {
-            m_manager->seedScreenshots();
-            m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
+            m_manager->buildAllSpacePreviews();
+            m_manager->warmWindowShots();
             m_manager->setOverviewOpen(true);
-        } else {
-            // Host already set overviewOpen → BitBlt is a no-op; still re-seed empties.
-            m_manager->seedScreenshots();
-            m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
         }
+        // Host path: batch caches already built in OverviewHost::openAll.
     }
 
     setGeometry(m->geometry);
     rebuildCards();
-    // Bottom strip starts as the space already live on the desktop.
     m_originSpace = m->currentIndex;
-    rebuildWindowPreviews();
-
+    m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
     m_open = true;
     m_closePending = false;
     m_pendingCommit = -1;
-    m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
 
     show();
     setWindowOpacity(1.0);
@@ -253,6 +248,10 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
             ::SetFocus(h);
         }
     }
+
+    // Build the bottom strip AFTER the widget is shown so viewport width/height
+    // match later rebuilds (drag/hover) — fixes size mismatch on first open.
+    rebuildWindowPreviews();
 
     playEnterAnimation();
 }
@@ -452,8 +451,13 @@ void OverviewWindow::rebuildWindowPreviews()
     }
     m_windowPreviews.clear();
 
-    // --- Collect real window rects for the previewed space ---
-    const int idx = m->currentIndex;
+    // Bottom strip follows the UI selection (hover/arrows), not only the live space.
+    int idx = m_selected;
+    if (idx < 0 || idx >= m->spaces.size())
+        idx = m->currentIndex;
+    if (idx < 0 || idx >= m->spaces.size())
+        idx = 0;
+
     struct Item {
         HWND hwnd = nullptr;
         int pw = 0;
@@ -486,13 +490,25 @@ void OverviewWindow::rebuildWindowPreviews()
         return;
     }
 
-    // --- Available strip area ---
+    // --- Available strip area: prefer live viewport; force layout if not shown yet ---
+    if (m_windowScroll) {
+        m_windowScroll->ensurePolished();
+        if (m_windowScroll->layout())
+            m_windowScroll->layout()->activate();
+    }
     int availW = m_windowScroll ? m_windowScroll->viewport()->width() : 0;
     int availH = m_windowScroll ? m_windowScroll->viewport()->height() : 0;
     if (availW < 200 || availH < 80) {
-        availW = m->geometry.width() > 0 ? m->geometry.width() - 72 : 1200;
-        // Prefer a taller strip so more windows fit without scrolling.
-        availH = m->geometry.height() > 0 ? std::max(240, m->geometry.height() / 3) : 320;
+        // Not laid out yet — derive from the scroll area itself, not monitor/3,
+        // so pre-show and post-show paths stay closer.
+        if (m_windowScroll && m_windowScroll->width() >= 200)
+            availW = m_windowScroll->width() - m_windowScroll->frameWidth() * 2;
+        else
+            availW = m->geometry.width() > 0 ? m->geometry.width() - 72 : 1200;
+        if (m_windowScroll && m_windowScroll->height() >= 80)
+            availH = m_windowScroll->height() - m_windowScroll->frameWidth() * 2;
+        else
+            availH = m->geometry.height() > 0 ? std::max(240, m->geometry.height() / 3) : 320;
     }
     const int gap = 14;
 
@@ -598,8 +614,8 @@ void OverviewWindow::rebuildWindowPreviews()
 
         auto *tile = new WindowPreviewWidget(m_windowHost);
         tile->setImageBoxSize(QSize(bw, bh));
-        // Capture already caps to (bw, bh) keeping aspect; box uses the same window aspect.
-        QImage shot = thumbs::capture(it.hwnd, QSize(bw, bh));
+        // One cached image per HWND — scaled copy for this tile only.
+        QImage shot = thumbs::windowShot(it.hwnd, QSize(bw, bh));
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
         row->addWidget(tile, 0, Qt::AlignTop);
         m_windowPreviews.push_back(tile);

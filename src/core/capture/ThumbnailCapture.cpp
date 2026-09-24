@@ -115,6 +115,22 @@ QImage loadWallpaperImage()
 
 namespace thumbs {
 
+namespace {
+// One shared full-window image per HWND. windowShot scales this on demand.
+QHash<HWND, QImage> g_windowShots;
+
+QImage scaleToFit(const QImage &src, const QSize &maxSize)
+{
+    if (src.isNull())
+        return {};
+    if (!maxSize.isValid() || maxSize.isEmpty())
+        return src;
+    if (src.width() <= maxSize.width() && src.height() <= maxSize.height())
+        return src;
+    return src.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
+} // namespace
+
 QImage capture(HWND hwnd, const QSize &maxSize)
 {
     if (!hwnd || !::IsWindow(hwnd))
@@ -161,6 +177,41 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
         img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     return img;
+}
+
+QImage windowShot(HWND hwnd, const QSize &maxSize)
+{
+    if (!hwnd || !::IsWindow(hwnd) || ::IsIconic(hwnd)) {
+        if (hwnd)
+            g_windowShots.remove(hwnd);
+        return {};
+    }
+    auto it = g_windowShots.constFind(hwnd);
+    if (it == g_windowShots.constEnd() || it->isNull()) {
+        // Capture once at full window size (no maxSize) — the single source image.
+        QImage full = capture(hwnd, QSize());
+        if (full.isNull())
+            return {};
+        g_windowShots.insert(hwnd, full);
+        return scaleToFit(full, maxSize);
+    }
+    return scaleToFit(it.value(), maxSize);
+}
+
+void invalidateWindow(HWND hwnd)
+{
+    if (hwnd)
+        g_windowShots.remove(hwnd);
+}
+
+void clearWindowCache()
+{
+    g_windowShots.clear();
+}
+
+int windowCacheCount()
+{
+    return int(g_windowShots.size());
 }
 
 QImage captureMonitor(const RECT &physRect, const QSize &maxSize)

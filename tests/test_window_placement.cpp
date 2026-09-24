@@ -129,7 +129,7 @@ private slots:
         if (!w.isOpen())
             QSKIP("overview did not open");
 
-        // Bottom strip = windows of the *current* space only (live preview).
+        // Bottom strip = windows of the *selected* space (starts as current).
         int expected = 0;
         const int cur = m->currentIndex;
         if (cur >= 0 && cur < m->spaces.size()) {
@@ -139,18 +139,18 @@ private slots:
         }
         QCOMPARE(w.windowPreviewCount(), expected);
 
-        // Hover/preview another space → strip follows that space.
+        // Hover/preview another space → strip follows selection, desktop does NOT switch.
         if (m->spaces.size() > 1 && w.cardCount() > 1) {
             const int other = (cur + 1) % m->spaces.size();
             QVERIFY(w.previewSpace(other));
-            QCOMPARE(m->currentIndex, other);
+            QCOMPARE(m->currentIndex, cur); // UI-only: live space unchanged
             QCOMPARE(w.selectedIndex(), other);
             int expectedOther = 0;
             for (HWND h : m->spaces[other].windows)
                 if (::IsWindow(h) && !::IsIconic(h))
                     ++expectedOther;
             QCOMPARE(w.windowPreviewCount(), expectedOther);
-            // Composite screenshot for the previewed space is available.
+            // Composite screenshot for the previewed space is available (batch-built on open).
             QVERIFY(!m->spaces[other].screenshot.isNull());
         }
 
@@ -159,7 +159,40 @@ private slots:
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
     }
 
-    void previewAndCancelRestoresOrigin()
+    void openBuildsAllSpacePreviews()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        // Wipe so open must rebuild every space.
+        for (Space &sp : m->spaces)
+            sp.screenshot = QImage();
+
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen())
+            QSKIP("overview did not open");
+
+        for (int i = 0; i < m->spaces.size(); ++i)
+            QVERIFY2(!m->spaces[i].screenshot.isNull(),
+                     qPrintable(QStringLiteral("space %1 missing after open").arg(i)));
+
+        // Hover must NOT rebuild — only display the cached image (same shared buffer).
+        const QImage before = m->spaces[0].screenshot;
+        QVERIFY(!before.isNull());
+        if (m->spaces.size() > 1) {
+            QVERIFY(w.previewSpace(1));
+            QVERIFY(w.previewSpace(0));
+        }
+        QVERIFY(!m->spaces[0].screenshot.isNull());
+        QCOMPARE(m->spaces[0].screenshot.size(), before.size());
+        QCOMPARE(m->spaces[0].screenshot.constBits(), before.constBits());
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void previewAndCancelKeepsOriginOnDesktop()
     {
         SpaceManager sm;
         OverviewWindow w(&sm);
@@ -174,14 +207,50 @@ private slots:
         if (m->spaces.size() > 1) {
             const int other = (origin + 1) % m->spaces.size();
             QVERIFY(w.previewSpace(other));
-            QCOMPARE(m->currentIndex, other);
+            // Soft preview only — monitor must stay on origin until click.
+            QCOMPARE(m->currentIndex, origin);
+            QCOMPARE(w.selectedIndex(), other);
         }
 
-        w.closeOverview(false); // cancel → restore origin on desktop
+        w.closeOverview(false);
         QCOMPARE(m->currentIndex, origin);
 
         for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void placeKeepsCurrentSpace()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        const int origin = m->currentIndex;
+
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"place-stay",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 400, 300,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, origin));
+
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen())
+            QSKIP("overview did not open");
+
+        const int dest = (origin + 1) % m->spaces.size();
+        QVERIFY(w.placeWindowInSpace(hwnd, dest));
+        // Desktop stays on origin after drop.
+        QCOMPARE(m->currentIndex, origin);
+        QCOMPARE(sm.spaceOfWindow(hwnd), dest);
+        QCOMPARE(w.selectedIndex(), origin);
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+
+        sm.untrackWindow(hwnd);
+        ::cloak::set(hwnd, false);
+        ::DestroyWindow(hwnd);
     }
 
     void proportionalPreviewSizesPreserveAspect()

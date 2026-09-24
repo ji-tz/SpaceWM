@@ -14,7 +14,7 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
   - 所有显示器**同时**打开总览，各屏展示自己的 spaces；
   - 顶部 space 条：点击切换、接收拖放；
   - 底部窗口预览：按真实窗口宽高比缩放，可拖到任意 space 卡片完成归位；
-  - 悬停 / 键盘移动时**实时预览桌面**（真实切换 + 合成截图刷新卡片）。
+  - 悬停 / 键盘仅总览内预览（不切桌面），**点击才正式切换**；拖入窗口不跳到目标 space。
 - **最大化窗口独占 space**：最大化窗口绑定独立 space，拒收其它窗口混入。
 - **全局热键**：`RegisterHotKey` + 原生事件过滤。
 - **切换动画**：方向性半透明 flash，不逐帧抓屏。
@@ -35,16 +35,16 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 | **独占 space** | exclusive space · `Space::exclusiveWindow` | 绑定了单个最大化窗口的 space。会改名为该窗口标题，且拒收其它窗口拖入。 |
 | **总览** | overview · `OverviewHost` / `OverviewWindow` | Mission Control 式全屏界面。默认所有 monitor **同时**打开，每屏一个 `OverviewWindow`，展示该屏自己的 spaces。 |
 | **space 预览（卡片图）** | space preview · `Space::screenshot` · `SpaceCardWidget` | 总览**顶部 space 条**上每个 space 卡片里的缩略图。**一律渲染**（不 BitBlt）：壁纸铺满画布 + 各窗口按 Z 序 `PrintWindow` 合成。总览打开时也安全（不会截到自己）。 |
-| **space 预览（实时桌面）** | live preview · `SpaceManager::previewSpace` | 总览中悬停/键盘移动时，**真实桌面**立刻 cloak/uncloak 到目标 space 的行为（不是只改卡片图）。 |
+| **space 预览（总览内 UI）** | soft preview · `OverviewWindow::previewSpace` | 总览中悬停/方向键：只高亮卡片、刷新底部窗口条与卡片图，**不切换**真实 monitor space。点击 / `Enter` 才 `switchSpace`。 |
 | **window 预览（底部 tile）** | window preview · `WindowPreviewWidget` | 总览**底部**每个窗口一块可拖拽缩略图。按真实窗口宽高比布局；拖到顶部 space 卡片上表示“把该窗口移入该 space”。 |
 | **cloak** | cloak · `CloakController` | 隐藏窗口但不销毁。只允许恢复**本进程曾 hide 过**的窗口，绝不 `ShowWindow` 未藏过的 shell 窗口。 |
 | **space 切换** | switch space · `SpaceManager::switchSpace` | 把某 monitor 的当前 space 改为另一个，并 cloak/uncloak。热键 `Ctrl+Alt+←/→`、`1–4` 走这条路径。 |
-| **放入 / 归位** | place window · `OverviewWindow::placeWindowInSpace` | 在总览里把窗口指派到某个 space（拖放或 API）。会同步桌面、刷新目标与**源** space 的卡片图。 |
+| **放入 / 归位** | place window · `OverviewWindow::placeWindowInSpace` | 在总览里把窗口指派到某个 space（拖放或 API）。**停留在当前 space**，只刷新目标与源卡片/底部列表。 |
 
 **容易说混的两对：**
 
 1. **space 预览** vs **window 预览**：前者是顶部“这一格桌面长什么样”；后者是底部“这个窗口长什么样、可拖走”。
-2. **卡片上的图** vs **live 预览**：前者是静态缩略图（截图/合成）；后者是悬停时真实桌面的即时切换。
+2. **卡片上的图** vs **总览内预览**：前者是静态缩略图；后者是悬停时底部窗口条与高亮的切换，不碰真实桌面。
 
 ## 快捷键
 
@@ -55,7 +55,7 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 | `Ctrl+Alt+Space` | 打开 / 关闭总览（所有屏同时） |
 | `Ctrl+Alt+1` ~ `Ctrl+Alt+4` | 跳转到光标所在屏的第 N 个 space |
 
-总览内：单击卡片 / `Enter` 切换该屏，`Esc` 取消（恢复进入总览前的 space），悬停卡片实时预览，拖动底部窗口预览到卡片可移动窗口。
+总览内：单击卡片 / `Enter` 才切换该屏，`Esc` 取消，悬停仅在总览内预览，拖动底部窗口预览到卡片可移动窗口（停留在当前 space）。
 
 ## 构建
 
@@ -95,7 +95,7 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 | `test_space_card` | 卡片宽高比、紧凑模式、拖放 |
 | `test_overview` | 单屏总览开关、按键、快速连开 |
 | `test_overview_host` | 多屏同时总览 |
-| `test_window_placement` | 拖入 space、live 预览、底部预览比例 |
+| `test_window_placement` | 拖入 space、总览内预览、底部预览比例 |
 | `test_flash_overlay` | 切换 flash 动画 |
 
 新增 / 修改功能必须同步测试，详见 [`agent.md` §2](agent.md)。

@@ -63,12 +63,18 @@ public:
     // Delegates to rebuildSpaceScreenshot — space previews are render-only.
     void captureSpaceScreenshot(HMONITOR hmon, int index);
 
-    // Composite wallpaper (full-bleed) + window PrintWindows in Z-order.
-    // Always safe while the overview overlay is up (does not BitBlt desktop).
+    // Composite wallpaper (full-bleed) + cached window shots in Z-order.
+    // Call only when that space's membership changes (or once on overview open).
     void rebuildSpaceScreenshot(HMONITOR hmon, int index);
 
-    // Ensure every space has a rendered preview (current re-rendered; empties filled).
+    // Overview entry: rebuild EVERY space on EVERY monitor once, then cache.
+    void buildAllSpacePreviews();
+
+    // Fill null screenshots only (cheap). Prefer buildAllSpacePreviews on open.
     void seedScreenshots();
+
+    // Ensure every managed window has a cached windowShot (overview entry).
+    void warmWindowShots();
 
 signals:
     void spaceChanged(quint64 hmon, int index);
