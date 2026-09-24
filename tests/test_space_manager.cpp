@@ -30,15 +30,14 @@ private slots:
         }
     }
 
-    void hasMonitorsAndFourSpaces()
+    void hasMonitorsAndOneSpace()
     {
         SpaceManager sm;
-        auto *list = new QVector<MonitorSpaces *>(); // avoid leak confusion — use stack
-        delete list;
         const auto mons = sm.monitors();
         QVERIFY(!mons.isEmpty());
         auto *m = mons.first();
-        QCOMPARE(m->spaces.size(), 4);
+        // Cold start: one space per monitor; nothing is loaded from disk.
+        QCOMPARE(m->spaces.size(), 1);
         QCOMPARE(m->currentIndex, 0);
         QVERIFY(!m->spaces[0].name.isEmpty());
     }
@@ -47,6 +46,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
         m->currentIndex = 0;
 
         QSignalSpy spy(&sm, &SpaceManager::spaceChanged);
@@ -76,6 +76,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 3);
         m->currentIndex = 0;
         sm.setOverviewOpen(true);
 
@@ -104,6 +105,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
         const int monW = m->physRect.right - m->physRect.left;
         const int monH = m->physRect.bottom - m->physRect.top;
         QVERIFY(monW > 0 && monH > 0);
@@ -140,6 +142,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 4);
 
         HWND back = ::CreateWindowExW(
             0, L"STATIC", L"z-back",
@@ -186,6 +189,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 4);
         m->currentIndex = 0;
 
         QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 2));
@@ -215,6 +219,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 3);
         m->currentIndex = 0;
 
         QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 1));
@@ -235,6 +240,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
         const QString nameBefore = m->spaces[1].name;
 
         // Second window (own-process → only used via assignWindow directly).
@@ -279,6 +285,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
 
         QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
         QVERIFY(sm.switchSpace(m->hmon, 1, false));
@@ -297,6 +304,7 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 3);
         m->currentIndex = 0;
         sm.setOverviewOpen(true);
 
@@ -332,6 +340,13 @@ private slots:
     }
 
 private:
+    // Grow the monitor to at least n spaces (cold start is 1 — issue #8).
+    static void ensureSpaces(SpaceManager &sm, MonitorSpaces *m, int n)
+    {
+        while (m->spaces.size() < n)
+            sm.addSpace(m->hmon);
+    }
+
     HWND m_hwnd = nullptr;
 };
 

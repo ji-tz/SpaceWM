@@ -461,8 +461,11 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        // Cold start is 1 space (issue #8) — grow to 3 for the 0 → 2 move.
+        while (m->spaces.size() < 3)
+            QVERIFY(sm.addSpace(m->hmon));
         const int n = m->spaces.size();
-        QVERIFY(n >= 2);
+        QVERIFY(n >= 3);
 
         HWND hwnd = ::CreateWindowExW(
             0, L"STATIC", L"reorder-w",
@@ -637,6 +640,9 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
+        // Cold start is 1 space (issue #8) — grow for the assign to index 2.
+        while (m->spaces.size() < 3)
+            QVERIFY(sm.addSpace(m->hmon));
         HWND hwnd = ::CreateWindowExW(
             0, L"STATIC", L"move-refresh-test",
             WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240,

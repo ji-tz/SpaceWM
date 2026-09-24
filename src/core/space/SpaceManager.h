@@ -105,5 +105,7 @@ private:
 
     bool m_overviewOpen = false;
     bool m_animationEnabled = true;
-    int m_defaultSpaceCount = 4;
+    // Cold start: every monitor begins with exactly one space (issue #8).
+    // Space lists are never persisted — added spaces are session-only.
+    int m_defaultSpaceCount = 1;
 };
