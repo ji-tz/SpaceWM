@@ -1,4 +1,4 @@
-#include "CloakController.h"
+#include "core/window/CloakController.h"
 
 #include <dwmapi.h>
 #include <inspectable.h>

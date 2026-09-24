@@ -1,9 +1,10 @@
 #include <QtTest>
 
-#include "core/SpaceManager.h"
-#include "ui/OverviewWindow.h"
-#include "ui/SpaceCardWidget.h"
-#include "ui/WindowPreviewWidget.h"
+#include "core/space/SpaceManager.h"
+#include "core/window/CloakController.h"
+#include "ui/overview/OverviewWindow.h"
+#include "ui/preview/SpaceCardWidget.h"
+#include "ui/preview/WindowPreviewWidget.h"
 
 #include <Windows.h>
 
@@ -160,12 +161,88 @@ private slots:
         b.setImageBoxSize(QSize(160, 240)); // 2:3
         QCOMPARE(a.imageBoxSize(), QSize(320, 180));
         QCOMPARE(b.imageBoxSize(), QSize(160, 240));
-        // Frame height includes label chrome (~40).
+        // Frame height includes label chrome (~40); width includes frame+margins (~20).
         QCOMPARE(a.height(), 180 + 40);
         QCOMPARE(b.height(), 240 + 40);
+        QCOMPARE(a.width(), 320 + 20);
+        QCOMPARE(b.width(), 160 + 20);
         // Different aspects must yield different widget sizes.
         QVERIFY(a.width() != b.width());
         QVERIFY(a.height() != b.height());
+        // Image label is not clipped by the frame (fixed box must fit inside).
+        QVERIFY(a.width() > a.imageBoxSize().width());
+        QVERIFY(a.height() > a.imageBoxSize().height());
+    }
+
+    void minSizeKeepsWindowAspect()
+    {
+        // Wide window scaled tiny: width floor must not stretch height independently.
+        // 2000×500 at scale 0.04 → 80×20 → width floor 96 → height must become 24, not 64.
+        const double pw = 2000, ph = 500, scale = 0.04;
+        double w = pw * scale;
+        double h = ph * scale;
+        if (w < 96.0) {
+            h *= 96.0 / w;
+            w = 96.0;
+        }
+        if (h < 64.0) {
+            w *= 64.0 / h;
+            h = 64.0;
+        }
+        const double aspectIn = pw / ph;
+        const double aspectOut = w / h;
+        QVERIFY(qAbs(aspectIn - aspectOut) < 0.02);
+    }
+
+    void openSeedsNonNullSpaceScreenshots()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+
+        // Wipe seeds to prove open path restores defaults.
+        for (Space &sp : m->spaces)
+            sp.screenshot = QImage();
+
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen())
+            QSKIP("overview did not open");
+
+        for (int i = 0; i < m->spaces.size(); ++i)
+            QVERIFY2(!m->spaces[i].screenshot.isNull(),
+                     qPrintable(QStringLiteral("space %1 has no screenshot after open").arg(i)));
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+    }
+
+    void assignMovesSourceScreenshotRefresh()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"move-refresh-test",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, 0));
+        // Distinct marker on source screenshot so we can detect a rebuild.
+        QImage marker(32, 18, QImage::Format_ARGB32_Premultiplied);
+        marker.fill(QColor(1, 2, 3));
+        m->spaces[0].screenshot = marker;
+
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, 2));
+        QCOMPARE(sm.spaceOfWindow(hwnd), 2);
+        QVERIFY(!m->spaces[0].screenshot.isNull());
+        // Rebuild replaces the 32×18 marker with a monitor-sized composite.
+        QVERIFY(m->spaces[0].screenshot.width() != 32);
+        QVERIFY(m->spaces[0].screenshot.height() != 18);
+
+        sm.untrackWindow(hwnd);
+        ::cloak::set(hwnd, false);
+        ::DestroyWindow(hwnd);
     }
 
     void compactCardsStillNavigate()

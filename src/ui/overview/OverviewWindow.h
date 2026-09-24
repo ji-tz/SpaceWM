@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../core/SpaceManager.h"
+#include "core/space/SpaceManager.h"
 
 #include <QWidget>
 #include <Windows.h>

@@ -1,6 +1,6 @@
 #include "OverviewHost.h"
 
-#include "../core/MonitorInfo.h"
+#include "core/monitor/MonitorInfo.h"
 
 #include <QTimer>
 
@@ -8,6 +8,20 @@ OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
     : QObject(parent)
     , m_manager(manager)
 {
+}
+
+OverviewHost::~OverviewHost()
+{
+    // Panels are raw QWidget* (not QObject-parented). Destroy them here so
+    // pending timers/singleShots cannot outlive SpaceManager after the host dies.
+    for (OverviewWindow *w : std::as_const(m_panels)) {
+        if (!w)
+            continue;
+        w->forceHide();
+        delete w;
+    }
+    m_panels.clear();
+    m_active = nullptr;
 }
 
 bool OverviewHost::isOpen() const

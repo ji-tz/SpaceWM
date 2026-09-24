@@ -1,6 +1,6 @@
 #include <QtTest>
 
-#include "ui/SpaceCardWidget.h"
+#include "ui/preview/SpaceCardWidget.h"
 
 class TestSpaceCard : public QObject {
     Q_OBJECT

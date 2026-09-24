@@ -3,14 +3,14 @@
 #include <QSharedMemory>
 #include <QTimer>
 
-#include "core/CloakController.h"
-#include "core/SpaceManager.h"
-#include "core/WindowTracker.h"
+#include "core/space/SpaceManager.h"
+#include "core/window/CloakController.h"
+#include "core/window/WindowTracker.h"
 #include "hotkeys/HotkeyManager.h"
-#include "ui/OverviewHost.h"
-#include "ui/OverviewWindow.h"
-#include "ui/SwitchFlashOverlay.h"
-#include "ui/TrayIcon.h"
+#include "ui/effects/SwitchFlashOverlay.h"
+#include "ui/overview/OverviewHost.h"
+#include "ui/overview/OverviewWindow.h"
+#include "ui/tray/TrayIcon.h"
 
 #include <Windows.h>
 

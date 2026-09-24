@@ -1,4 +1,4 @@
-#include "WindowPreviewWidget.h"
+#include "ui/preview/WindowPreviewWidget.h"
 
 #include <QApplication>
 #include <QDataStream>
@@ -23,6 +23,7 @@ WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
     setCursor(Qt::OpenHandCursor);
 
     auto *root = new QVBoxLayout(this);
+    // Budget must match setImageBoxSize: frame(4) + margins(16) + spacing(6) + title(14) = 40.
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(6);
 
@@ -36,6 +37,7 @@ WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
     m_label->setStyleSheet(QStringLiteral(
         "QLabel { color: #e8e8f0; font-size: 12px; border: none; background: transparent; }"));
     m_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_label->setFixedHeight(14);
     root->addWidget(m_label);
 
     setStyleSheet(QStringLiteral(
@@ -58,8 +60,9 @@ void WindowPreviewWidget::setImageBoxSize(const QSize &imageBox)
     m_box = QSize(w, h);
     if (m_imageLabel)
         m_imageLabel->setFixedSize(m_box);
-    // Frame + padding + label row.
-    setFixedSize(m_box.width() + 16, m_box.height() + 40);
+    // QFrame stylesheet border is 2px each side — include it so the image box isn't clipped.
+    // width: frame(4) + margins(16) = 20; height: frame(4) + margins(16) + spacing(6) + title(14) = 40.
+    setFixedSize(m_box.width() + 20, m_box.height() + 40);
     applyPixmap();
 }
 

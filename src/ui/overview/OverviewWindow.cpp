@@ -1,15 +1,16 @@
 #include "OverviewWindow.h"
 
-#include "SpaceCardWidget.h"
-#include "WindowPreviewWidget.h"
-#include "../core/ThumbnailCapture.h"
-#include "../core/WindowTracker.h"
+#include "ui/preview/SpaceCardWidget.h"
+#include "ui/preview/WindowPreviewWidget.h"
+#include "core/capture/ThumbnailCapture.h"
+#include "core/window/WindowTracker.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QColor>
 #include <QPropertyAnimation>
 #include <QScrollArea>
 #include <QScreen>
@@ -125,17 +126,31 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     // Exclusive space rejects other windows (assignWindow enforces this).
     if (!m_manager->canAssignToSpace(m_hmon, spaceIndex, hwnd))
         return false;
+
+    // Source space/monitor before the move so we can refresh the vacated card.
+    const int srcSpace = m_manager->spaceOfWindow(hwnd);
+    HMONITOR srcMon = m_manager->ownerMonitorOf(hwnd);
+
     if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex))
         return false;
 
-    // 1) Sync the real desktop to that space first (windows show/hide).
+    // 1) Sync the real desktop to the destination (windows show/hide).
     previewSpace(spaceIndex);
 
-    // 2) Composite a fresh card image and push it onto the strip.
+    // 2) Composite a fresh card image for the destination.
     refreshCardScreenshot(spaceIndex);
+
+    // 3) Source space lost a window — assignWindow already rebuilt its screenshot;
+    //    push that image onto the source card so the strip stays in sync.
+    if (srcSpace >= 0 && (srcMon != m_hmon || srcSpace != spaceIndex)) {
+        if (srcMon == m_hmon || !srcMon)
+            refreshCardScreenshot(srcSpace);
+        // Other monitors' panels pull the rebuilt shot on their next open/preview.
+    }
+
     refreshCardBadges();
 
-    // 3) Bottom strip = windows of the previewed space only.
+    // 4) Bottom strip = windows of the previewed space only.
     rebuildWindowPreviews();
     setSelected(spaceIndex);
 
@@ -195,6 +210,8 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
             m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
             m_manager->setOverviewOpen(true);
         } else {
+            // Host already set overviewOpen → BitBlt is a no-op; still re-seed empties.
+            m_manager->seedScreenshots();
             m_manager->captureSpaceScreenshot(hmon, m->currentIndex);
         }
     }
@@ -363,6 +380,10 @@ void OverviewWindow::rebuildCards()
         QImage shot = m->spaces[i].screenshot;
         if (shot.isNull())
             shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+        if (shot.isNull()) {
+            shot = QImage(640, 360, QImage::Format_ARGB32_Premultiplied);
+            shot.fill(QColor(32, 36, 48));
+        }
         card->setScreenshot(shot);
 
         connect(card, &SpaceCardWidget::activated, this, [this](int idx) {
@@ -389,6 +410,18 @@ void OverviewWindow::rebuildCards()
     }
     m_cardRow->addStretch(1);
     setSelected(m_cards.isEmpty() ? -1 : current);
+
+    // Cards may still have zero preview size before layout — re-apply once shown.
+    // Context object (`this`) cancels the timer if the panel is destroyed first.
+    QTimer::singleShot(0, this, [this]() {
+        if (!m_manager || !m_hmon)
+            return;
+        auto *m = m_manager->monitorOf(m_hmon);
+        if (!m)
+            return;
+        for (int i = 0; i < m_cards.size() && i < m->spaces.size(); ++i)
+            refreshCardScreenshot(i);
+    });
 }
 
 void OverviewWindow::rebuildWindowPreviews()
@@ -448,27 +481,6 @@ void OverviewWindow::rebuildWindowPreviews()
     }
     const int gap = 14;
 
-    auto shelfTotalHeight = [&](double scale) -> int {
-        int x = 0;
-        int rowH = 0;
-        int total = 0;
-        for (const Item &it : items) {
-            const int tw = std::max(1, int(std::lround(it.pw * scale)));
-            const int th = std::max(1, int(std::lround(it.ph * scale)));
-            const int cellW = tw + gap;
-            const int cellH = th + gap;
-            if (x > 0 && x + cellW > availW) {
-                total += rowH;
-                x = 0;
-                rowH = 0;
-            }
-            x += cellW;
-            rowH = std::max(rowH, cellH);
-        }
-        total += rowH;
-        return total;
-    };
-
     // Larger tiles first → less waste on the last row (排满).
     std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
         return qint64(a.pw) * a.ph > qint64(b.pw) * b.ph;
@@ -478,12 +490,44 @@ void OverviewWindow::rebuildWindowPreviews()
     for (const Item &it : items)
         maxPw = std::max(maxPw, it.pw);
 
+    // Tile size at a given scale: keep real window aspect, then floor without stretching.
+    auto tileSize = [&](const Item &it, double scale) -> QSize {
+        double w = double(it.pw) * scale;
+        double h = double(it.ph) * scale;
+        if (w < 96.0) {
+            h *= 96.0 / w;
+            w = 96.0;
+        }
+        if (h < 64.0) {
+            w *= 64.0 / h;
+            h = 64.0;
+        }
+        return QSize(std::max(96, int(std::lround(w))),
+                     std::max(64, int(std::lround(h))));
+    };
+
     double lo = 0.02;
     double hi = std::min(4.0, double(availW) / double(maxPw));
     double best = lo;
     for (int iter = 0; iter < 24; ++iter) {
         const double mid = (lo + hi) * 0.5;
-        if (shelfTotalHeight(mid) <= availH) {
+        int x = 0;
+        int rowH = 0;
+        int total = 0;
+        for (const Item &it : items) {
+            const QSize ts = tileSize(it, mid);
+            const int cellW = ts.width() + gap;
+            const int cellH = ts.height() + gap;
+            if (x > 0 && x + cellW > availW) {
+                total += rowH;
+                x = 0;
+                rowH = 0;
+            }
+            x += cellW;
+            rowH = std::max(rowH, cellH);
+        }
+        total += rowH;
+        if (total <= availH) {
             best = mid;
             lo = mid;
         } else {
@@ -511,8 +555,9 @@ void OverviewWindow::rebuildWindowPreviews()
     };
 
     for (const Item &it : items) {
-        const int bw = std::max(96, int(std::lround(it.pw * scale)));
-        const int bh = std::max(64, int(std::lround(it.ph * scale)));
+        const QSize ts = tileSize(it, scale);
+        const int bw = ts.width();
+        const int bh = ts.height();
         const int cellW = bw + gap;
 
         if (x > 0 && x + cellW > availW) {
@@ -526,6 +571,7 @@ void OverviewWindow::rebuildWindowPreviews()
 
         auto *tile = new WindowPreviewWidget(m_windowHost);
         tile->setImageBoxSize(QSize(bw, bh));
+        // Capture already caps to (bw, bh) keeping aspect; box uses the same window aspect.
         QImage shot = thumbs::capture(it.hwnd, QSize(bw, bh));
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
         row->addWidget(tile, 0, Qt::AlignTop);
@@ -555,6 +601,10 @@ void OverviewWindow::refreshCardScreenshot(int index)
     QImage shot = m->spaces[index].screenshot;
     if (shot.isNull())
         shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+    if (shot.isNull()) {
+        shot = QImage(640, 360, QImage::Format_ARGB32_Premultiplied);
+        shot.fill(QColor(32, 36, 48));
+    }
     m_cards[index]->setScreenshot(shot);
 }
 

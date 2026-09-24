@@ -1,6 +1,6 @@
 #include <QtTest>
 
-#include "core/WindowTracker.h"
+#include "core/window/WindowTracker.h"
 
 #include <Windows.h>
 

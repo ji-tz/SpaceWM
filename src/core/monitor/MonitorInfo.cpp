@@ -1,4 +1,4 @@
-#include "MonitorInfo.h"
+#include "core/monitor/MonitorInfo.h"
 
 #include <shellscalingapi.h>
 

@@ -23,6 +23,29 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 - **单实例**：`QSharedMemory` 防止重复挂钩热键。
 - **可移植运行时**：`lib/` 已入库（Qt DLL + 插件 + MSVC CRT），克隆即可运行，无需本机安装 Qt。
 
+## 术语
+
+沟通与文档统一用下列表述，避免歧义。
+
+| 术语 | 英文 / 代码标识 | 含义 |
+|------|-----------------|------|
+| **显示器** | monitor · `MonitorSpaces` / `MonitorInfo` | 一块物理（或系统枚举出的）屏幕。每块 monitor **独立**维护自己的 space 列表与当前 space，互不影响。 |
+| **space** | space · `Space` | 某一块 monitor 上的一个“虚拟桌面槽位”。默认 4 个。同一 space 内的窗口一起显示/隐藏；非当前 space 的窗口被 cloak，不销毁。**不是** Windows 系统虚拟桌面。 |
+| **窗口** | window · `HWND` / `WindowTracker` | 托管的顶层应用窗口。由 `WindowTracker` 发现；用 `HWND` 标识；归某个 `(monitor, space)` 所有。最小化窗口、本进程窗口、shell 窗口不纳入管理。 |
+| **独占 space** | exclusive space · `Space::exclusiveWindow` | 绑定了单个最大化窗口的 space。会改名为该窗口标题，且拒收其它窗口拖入。 |
+| **总览** | overview · `OverviewHost` / `OverviewWindow` | Mission Control 式全屏界面。默认所有 monitor **同时**打开，每屏一个 `OverviewWindow`，展示该屏自己的 spaces。 |
+| **space 预览（卡片图）** | space preview · `Space::screenshot` · `SpaceCardWidget` | 总览**顶部 space 条**上每个 space 卡片里的缩略图。**一律渲染**（不 BitBlt）：壁纸铺满画布 + 各窗口按 Z 序 `PrintWindow` 合成。总览打开时也安全（不会截到自己）。 |
+| **space 预览（实时桌面）** | live preview · `SpaceManager::previewSpace` | 总览中悬停/键盘移动时，**真实桌面**立刻 cloak/uncloak 到目标 space 的行为（不是只改卡片图）。 |
+| **window 预览（底部 tile）** | window preview · `WindowPreviewWidget` | 总览**底部**每个窗口一块可拖拽缩略图。按真实窗口宽高比布局；拖到顶部 space 卡片上表示“把该窗口移入该 space”。 |
+| **cloak** | cloak · `CloakController` | 隐藏窗口但不销毁。只允许恢复**本进程曾 hide 过**的窗口，绝不 `ShowWindow` 未藏过的 shell 窗口。 |
+| **space 切换** | switch space · `SpaceManager::switchSpace` | 把某 monitor 的当前 space 改为另一个，并 cloak/uncloak。热键 `Ctrl+Alt+←/→`、`1–4` 走这条路径。 |
+| **放入 / 归位** | place window · `OverviewWindow::placeWindowInSpace` | 在总览里把窗口指派到某个 space（拖放或 API）。会同步桌面、刷新目标与**源** space 的卡片图。 |
+
+**容易说混的两对：**
+
+1. **space 预览** vs **window 预览**：前者是顶部“这一格桌面长什么样”；后者是底部“这个窗口长什么样、可拖走”。
+2. **卡片上的图** vs **live 预览**：前者是静态缩略图（截图/合成）；后者是悬停时真实桌面的即时切换。
+
 ## 快捷键
 
 | 快捷键 | 动作 |
@@ -111,10 +134,17 @@ SpaceWM/
 ├── scripts/              # 测试脚本、Windows Sandbox 启用
 ├── src/
 │   ├── main.cpp          # 装配：DPI、单实例、信号连接、热键、托盘
-│   ├── core/             # SpaceManager / Cloak / WindowTracker / Monitor / Thumbnail
+│   ├── core/
+│   │   ├── space/        # Space 类型 + SpaceManager（per-monitor 虚拟桌面）
+│   │   ├── monitor/      # MonitorInfo（枚举 / DPI 几何）
+│   │   ├── window/       # WindowTracker + CloakController（发现 / 隐藏）
+│   │   └── capture/      # ThumbnailCapture（截图 / 壁纸兜底）
 │   ├── hotkeys/          # HotkeyManager
-│   └── ui/               # OverviewHost / OverviewWindow / SpaceCard /
-│                         # WindowPreview / SwitchFlash / TrayIcon
+│   └── ui/
+│       ├── overview/     # OverviewHost + OverviewWindow（Mission Control）
+│       ├── preview/      # SpaceCardWidget + WindowPreviewWidget（预览框）
+│       ├── effects/      # SwitchFlashOverlay（切换动画）
+│       └── tray/         # TrayIcon
 └── tests/                # Qt Test + CTest（每功能域一个二进制）
 ```
 

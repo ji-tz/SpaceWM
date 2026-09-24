@@ -1,8 +1,8 @@
 #include <QtTest>
 
-#include "core/CloakController.h"
-#include "core/SpaceManager.h"
-#include "core/WindowTracker.h"
+#include "core/window/CloakController.h"
+#include "core/space/SpaceManager.h"
+#include "core/window/WindowTracker.h"
 
 #include <Windows.h>
 
@@ -100,6 +100,88 @@ private slots:
         QCOMPARE(m->currentIndex, 0);
     }
 
+    void renderedPreviewMatchesMonitorAspect()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        const int monW = m->physRect.right - m->physRect.left;
+        const int monH = m->physRect.bottom - m->physRect.top;
+        QVERIFY(monW > 0 && monH > 0);
+
+        sm.setOverviewOpen(true);
+        // captureSpaceScreenshot is render-only (no BitBlt / overview-safe).
+        sm.captureSpaceScreenshot(m->hmon, 1);
+        const QImage &img = m->spaces[1].screenshot;
+        QVERIFY(!img.isNull());
+        QVERIFY(img.width() <= 640);
+        QVERIFY(img.height() <= 360);
+
+        const double monAspect = double(monW) / double(monH);
+        const double imgAspect = double(img.width()) / double(img.height());
+        QVERIFY2(qAbs(monAspect - imgAspect) < 0.05,
+                 qPrintable(QStringLiteral("mon=%1 img=%2 (%3x%4)")
+                                .arg(monAspect, 0, 'f', 3)
+                                .arg(imgAspect, 0, 'f', 3)
+                                .arg(img.width())
+                                .arg(img.height())));
+
+        // Seed fills empties via render as well.
+        for (Space &sp : m->spaces)
+            sp.screenshot = QImage();
+        sm.seedScreenshots();
+        for (int i = 0; i < m->spaces.size(); ++i)
+            QVERIFY2(!m->spaces[i].screenshot.isNull(),
+                     qPrintable(QStringLiteral("space %1 not seeded").arg(i)));
+
+        sm.setOverviewOpen(false);
+    }
+
+    void renderedPreviewUsesWindowZOrder()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+
+        HWND back = ::CreateWindowExW(
+            0, L"STATIC", L"z-back",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, 280, 180,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND front = ::CreateWindowExW(
+            0, L"STATIC", L"z-front",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100, 280, 180,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(back && front);
+        // Ensure front is above back in real Z-order.
+        ::SetWindowPos(front, HWND_TOP, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ::Sleep(30);
+
+        QVERIFY(sm.assignWindow(back, m->hmon, 3));
+        QVERIFY(sm.assignWindow(front, m->hmon, 3));
+        sm.setOverviewOpen(true);
+        sm.rebuildSpaceScreenshot(m->hmon, 3);
+
+        const Space &sp = m->spaces[3];
+        QCOMPARE(sp.windows.size(), 2);
+        QVERIFY(!sp.zOrder.isEmpty());
+        // zOrder is top → bottom: front window must be first.
+        QCOMPARE(sp.zOrder.first(), front);
+        QCOMPARE(sp.zOrder.last(), back);
+        QVERIFY(!sp.screenshot.isNull());
+        // Canvas is monitor-aspect, not a letterboxed 640×360.
+        const int monW = m->physRect.right - m->physRect.left;
+        const int monH = m->physRect.bottom - m->physRect.top;
+        QVERIFY(qAbs(double(sp.screenshot.width()) / sp.screenshot.height()
+                     - double(monW) / monH) < 0.05);
+
+        sm.setOverviewOpen(false);
+        sm.untrackWindow(back);
+        sm.untrackWindow(front);
+        ::cloak::set(back, false);
+        ::cloak::set(front, false);
+        ::DestroyWindow(back);
+        ::DestroyWindow(front);
+    }
+
     void assignAndQueryOwnership()
     {
         SpaceManager sm;
@@ -126,6 +208,26 @@ private slots:
         sm.untrackWindow(m_hwnd);
         QCOMPARE(sm.spaceOfWindow(m_hwnd), -1);
         QVERIFY(sm.ownerMonitorOf(m_hwnd) == nullptr);
+        ::cloak::set(m_hwnd, false);
+    }
+
+    void movingWindowRebuildsSourceScreenshot()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        m->currentIndex = 0;
+
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 1));
+        QImage marker(16, 9, QImage::Format_ARGB32_Premultiplied);
+        marker.fill(QColor(9, 9, 9));
+        m->spaces[1].screenshot = marker;
+
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 2));
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 2);
+        QVERIFY(!m->spaces[1].screenshot.isNull());
+        QVERIFY(m->spaces[1].screenshot.size() != marker.size());
+
+        sm.untrackWindow(m_hwnd);
         ::cloak::set(m_hwnd, false);
     }
 

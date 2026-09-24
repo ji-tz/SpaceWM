@@ -51,21 +51,26 @@ cmd /c "`"$vcvars`" && cmake --build D:\workspace\SpaceWM\build --parallel && ct
 
 | 功能模块 | 源码 | 测试 |
 |----------|------|------|
-| Cloak 多后端（DWM / ShowWindow / 只恢复自己藏过的） | `core/CloakController.*` | `tests/test_cloak.cpp` |
-| 显示器枚举 / 逻辑 DPI 几何 / physRect | `core/MonitorInfo.*` | `tests/test_monitors.cpp` |
-| Per-monitor space 切换、归属、Z 序、截图 seed | `core/SpaceManager.*` | `tests/test_space_manager.cpp` |
-| 窗口发现 / 本进程排除 / 最小化排除 | `core/WindowTracker.*` | `tests/test_window_tracker.cpp` |
-| 整屏截图 / 壁纸兜底 / 窗口 PrintWindow | `core/ThumbnailCapture.*` | `tests/test_thumbnail.cpp` |
+| Cloak 多后端（DWM / ShowWindow / 只恢复自己藏过的） | `core/window/CloakController.*` | `tests/test_cloak.cpp` |
+| 显示器枚举 / 逻辑 DPI 几何 / physRect | `core/monitor/MonitorInfo.*` | `tests/test_monitors.cpp` |
+| Per-monitor space 切换、归属、Z 序、截图 seed | `core/space/SpaceManager.*`（类型 `core/space/Space.h`） | `tests/test_space_manager.cpp` |
+| 窗口发现 / 本进程排除 / 最小化排除 | `core/window/WindowTracker.*` | `tests/test_window_tracker.cpp` |
+| 整屏截图 / 壁纸兜底 / 窗口 PrintWindow | `core/capture/ThumbnailCapture.*` | `tests/test_thumbnail.cpp` |
 | 全局热键 LL hook | `hotkeys/HotkeyManager.*` | `tests/test_hotkeys.cpp` |
-| Space 卡片、竖屏真实宽高比、无 “No preview” | `ui/SpaceCardWidget.*` | `tests/test_space_card.cpp` |
-| 单屏 overview 开关 / 空卡片按键 / 快速连开 | `ui/OverviewWindow.*` | `tests/test_overview.cpp` |
-| **多屏同时 overview（Mission Control 式）** | `ui/OverviewHost.*` | `tests/test_overview_host.cpp` |
-| **窗口拖入 space（顶部 space 条 + 底部窗口预览）** | `ui/WindowPreviewWidget.*` + `OverviewWindow` drop | `tests/test_window_placement.cpp` |
-| **悬停/键盘 live 预览桌面 + 底部只显示该 space 窗口 + 合成截图** | `SpaceManager::previewSpace/rebuildSpaceScreenshot` + `OverviewWindow::previewSpace` | `tests/test_space_manager.cpp` · `tests/test_window_placement.cpp` |
+| Space 卡片、竖屏真实宽高比、无 “No preview” | `ui/preview/SpaceCardWidget.*` | `tests/test_space_card.cpp` |
+| 单屏 overview 开关 / 空卡片按键 / 快速连开 | `ui/overview/OverviewWindow.*` | `tests/test_overview.cpp` |
+| **多屏同时 overview（Mission Control 式）** | `ui/overview/OverviewHost.*` | `tests/test_overview_host.cpp` |
+| **窗口拖入 space（顶部 space 条 + 底部窗口预览）** | `ui/preview/WindowPreviewWidget.*` + `OverviewWindow` drop | `tests/test_window_placement.cpp` |
+| **窗口移出 space 后源卡片/截图同步刷新** | `SpaceManager::assignWindow` → `rebuildSpaceScreenshot(prev)` + `OverviewWindow::placeWindowInSpace` | `tests/test_space_manager.cpp` · `tests/test_window_placement.cpp` |
+| **打开 overview 时缺省 space 预览必有图** | `seedScreenshots` + `OverviewWindow::openOnMonitor`/`rebuildCards` 兜底链 | `tests/test_window_placement.cpp` |
+| **悬停/键盘 live 预览桌面 + 底部只显示该 space 窗口 + 渲染合成截图** | `SpaceManager::previewSpace/rebuildSpaceScreenshot`（壁纸铺满 + 窗口 Z 序 PrintWindow，**不用 BitBlt**） | `tests/test_space_manager.cpp` · `tests/test_window_placement.cpp` |
+| **space 预览全部渲染（含背景/Z 序）** | `rebuildSpaceScreenshot` + `captureSpaceScreenshot` 委托 + `thumbs::wallpaperFilled` | `tests/test_space_manager.cpp` |
+| **窗口缩略图全尺寸 PrintWindow 再缩放** | `ThumbnailCapture::capture`（禁止预缩小 DC） | `tests/test_thumbnail.cpp` |
 | **最大化窗口独占 space（绑定改名、拒收其它窗口）** | `Space::exclusiveWindow` + `assignWindow`/`canAssignToSpace` | `tests/test_space_manager.cpp` |
-| **底部预览按真实窗口宽高比缩放** | `WindowPreviewWidget::setImageBoxSize` + `OverviewWindow::rebuildWindowPreviews` | `tests/test_window_placement.cpp` |
-| 切换 flash 动画 | `ui/SwitchFlashOverlay.*` | `tests/test_flash_overlay.cpp` |
-| 托盘 | `ui/TrayIcon.*` | （可选；UI 弱依赖，暂无独立 test） |
+| **底部预览按真实窗口宽高比缩放** | `WindowPreviewWidget::setImageBoxSize` + `OverviewWindow::rebuildWindowPreviews`（min-floor 保持 aspect） | `tests/test_window_placement.cpp` |
+| **窗口缩略图全窗捕获（非 PW_CLIENTONLY）** | `ThumbnailCapture::capture` | `tests/test_thumbnail.cpp` |
+| 切换 flash 动画 | `ui/effects/SwitchFlashOverlay.*` | `tests/test_flash_overlay.cpp` |
+| 托盘 | `ui/tray/TrayIcon.*` | （可选；UI 弱依赖，暂无独立 test） |
 | 主程序装配 `main.cpp` | `src/main.cpp` | （集成路径靠手动 + 上述单测） |
 
 ### 2.3 新增 test 的步骤

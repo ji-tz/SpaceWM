@@ -1,7 +1,7 @@
 #include <QtTest>
 
-#include "core/SpaceManager.h"
-#include "ui/OverviewWindow.h"
+#include "core/space/SpaceManager.h"
+#include "ui/overview/OverviewWindow.h"
 
 #include <Windows.h>
 

@@ -17,30 +17,31 @@ endif()
 # Core library (no main) — shared by the app and the test binaries.
 # ---------------------------------------------------------------------------
 add_library(spacewm_core STATIC
-  src/core/CloakController.h
-  src/core/CloakController.cpp
-  src/core/MonitorInfo.h
-  src/core/MonitorInfo.cpp
-  src/core/WindowTracker.h
-  src/core/WindowTracker.cpp
-  src/core/SpaceManager.h
-  src/core/SpaceManager.cpp
-  src/core/ThumbnailCapture.h
-  src/core/ThumbnailCapture.cpp
+  src/core/space/Space.h
+  src/core/space/SpaceManager.h
+  src/core/space/SpaceManager.cpp
+  src/core/monitor/MonitorInfo.h
+  src/core/monitor/MonitorInfo.cpp
+  src/core/window/CloakController.h
+  src/core/window/CloakController.cpp
+  src/core/window/WindowTracker.h
+  src/core/window/WindowTracker.cpp
+  src/core/capture/ThumbnailCapture.h
+  src/core/capture/ThumbnailCapture.cpp
   src/hotkeys/HotkeyManager.h
   src/hotkeys/HotkeyManager.cpp
-  src/ui/OverviewWindow.h
-  src/ui/OverviewWindow.cpp
-  src/ui/OverviewHost.h
-  src/ui/OverviewHost.cpp
-  src/ui/SpaceCardWidget.h
-  src/ui/SpaceCardWidget.cpp
-  src/ui/WindowPreviewWidget.h
-  src/ui/WindowPreviewWidget.cpp
-  src/ui/SwitchFlashOverlay.h
-  src/ui/SwitchFlashOverlay.cpp
-  src/ui/TrayIcon.h
-  src/ui/TrayIcon.cpp
+  src/ui/overview/OverviewWindow.h
+  src/ui/overview/OverviewWindow.cpp
+  src/ui/overview/OverviewHost.h
+  src/ui/overview/OverviewHost.cpp
+  src/ui/preview/SpaceCardWidget.h
+  src/ui/preview/SpaceCardWidget.cpp
+  src/ui/preview/WindowPreviewWidget.h
+  src/ui/preview/WindowPreviewWidget.cpp
+  src/ui/effects/SwitchFlashOverlay.h
+  src/ui/effects/SwitchFlashOverlay.cpp
+  src/ui/tray/TrayIcon.h
+  src/ui/tray/TrayIcon.cpp
 )
 
 target_include_directories(spacewm_core PUBLIC src)

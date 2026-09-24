@@ -1,4 +1,4 @@
-#include "WindowTracker.h"
+#include "core/window/WindowTracker.h"
 
 #include <QSet>
 

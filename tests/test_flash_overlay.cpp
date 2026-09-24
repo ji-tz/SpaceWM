@@ -1,6 +1,6 @@
 #include <QtTest>
 
-#include "ui/SwitchFlashOverlay.h"
+#include "ui/effects/SwitchFlashOverlay.h"
 
 class TestFlashOverlay : public QObject {
     Q_OBJECT

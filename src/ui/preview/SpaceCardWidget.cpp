@@ -1,5 +1,5 @@
-#include "SpaceCardWidget.h"
-#include "WindowPreviewWidget.h"
+#include "ui/preview/SpaceCardWidget.h"
+#include "ui/preview/WindowPreviewWidget.h"
 
 #include <QDataStream>
 #include <QDragEnterEvent>

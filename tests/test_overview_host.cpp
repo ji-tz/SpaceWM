@@ -1,8 +1,8 @@
 #include <QtTest>
 
-#include "core/SpaceManager.h"
-#include "ui/OverviewHost.h"
-#include "ui/OverviewWindow.h"
+#include "core/space/SpaceManager.h"
+#include "ui/overview/OverviewHost.h"
+#include "ui/overview/OverviewWindow.h"
 
 #include <Windows.h>
 
@@ -40,6 +40,9 @@ private slots:
 
         QVERIFY(host.activePanel() != nullptr);
         QVERIFY(host.activePanel()->isOpen());
+
+        host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 3000);
     }
 
     void closeAllExitsEveryMonitorTogether()

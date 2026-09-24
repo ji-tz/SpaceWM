@@ -1,6 +1,6 @@
 #include <QtTest>
 
-#include "core/MonitorInfo.h"
+#include "core/monitor/MonitorInfo.h"
 
 class TestMonitors : public QObject {
     Q_OBJECT

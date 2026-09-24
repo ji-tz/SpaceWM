@@ -1,6 +1,6 @@
 #include <QtTest>
 
-#include "core/CloakController.h"
+#include "core/window/CloakController.h"
 
 #include <Windows.h>
 

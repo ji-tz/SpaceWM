@@ -1,6 +1,7 @@
 #pragma once
 
-#include "MonitorInfo.h"
+#include "Space.h"
+#include "core/monitor/MonitorInfo.h"
 
 #include <QHash>
 #include <QImage>
@@ -8,35 +9,6 @@
 #include <QSet>
 #include <QVector>
 #include <Windows.h>
-
-// Per-monitor independent spaces.
-//
-// State model (kept entirely in this process — Windows has no native API for it):
-//   monitor -> currentSpaceIndex
-//   monitor -> spaces[i] -> set of HWND + last screenshot
-//
-// Display model: windows not in the current space of their monitor are cloaked.
-// Switching a space on monitor M only cloaks/uncloaks windows on M.
-struct Space {
-    QString name;
-    QSet<HWND> windows;
-    // Top → bottom HWND order captured when this space was last visible.
-    QVector<HWND> zOrder;
-    // Last full-monitor screenshot while this space was visible.
-    QImage screenshot;
-    // Non-null when bound to a single maximized window (exclusive space).
-    // Other windows must not be assigned into this space.
-    HWND exclusiveWindow = nullptr;
-};
-
-struct MonitorSpaces {
-    HMONITOR hmon = nullptr;
-    RECT physRect{};
-    QRect geometry;       // Qt logical
-    QString deviceName;
-    int currentIndex = 0;
-    QVector<Space> spaces;
-};
 
 class SpaceManager : public QObject {
     Q_OBJECT
@@ -87,14 +59,15 @@ public:
 
     void setAnimationEnabled(bool on) { m_animationEnabled = on; }
 
-    // Snapshot the monitor into space[index].screenshot (call while space is visible).
+    // Snapshot the monitor into space[index].screenshot.
+    // Delegates to rebuildSpaceScreenshot — space previews are render-only.
     void captureSpaceScreenshot(HMONITOR hmon, int index);
 
-    // Composite wallpaper + window PrintWindows into space[index].screenshot.
-    // Safe while the overview overlay covers the screen (does not BitBlt desktop).
+    // Composite wallpaper (full-bleed) + window PrintWindows in Z-order.
+    // Always safe while the overview overlay is up (does not BitBlt desktop).
     void rebuildSpaceScreenshot(HMONITOR hmon, int index);
 
-    // Fill empty space previews with desktop wallpaper / live shot (cold start).
+    // Ensure every space has a rendered preview (current re-rendered; empties filled).
     void seedScreenshots();
 
 signals:

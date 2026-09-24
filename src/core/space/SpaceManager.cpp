@@ -1,8 +1,8 @@
 #include "SpaceManager.h"
 
-#include "CloakController.h"
-#include "ThumbnailCapture.h"
-#include "WindowTracker.h"
+#include "core/window/CloakController.h"
+#include "core/capture/ThumbnailCapture.h"
+#include "core/window/WindowTracker.h"
 
 #include <QCoreApplication>
 #include <QColor>
@@ -11,6 +11,7 @@
 #include <QPoint>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 QString defaultSpaceName(int index)
@@ -133,21 +134,10 @@ QString SpaceManager::spaceName(HMONITOR hmon, int index) const
 
 void SpaceManager::captureSpaceScreenshot(HMONITOR hmon, int index)
 {
-    auto *m = monitorOf(hmon);
-    if (!m || index < 0 || index >= m->spaces.size())
-        return;
-    const int w = m->physRect.right - m->physRect.left;
-    const int h = m->physRect.bottom - m->physRect.top;
-    if (w <= 0 || h <= 0)
-        return;
-    // While overview is open, BitBlt would capture our own overlay — skip.
-    if (m_overviewOpen)
-        return;
-    QImage shot = thumbs::captureMonitor(m->physRect, QSize(640, 360));
-    if (shot.isNull())
-        shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
-    if (!shot.isNull())
-        m->spaces[index].screenshot = shot;
+    // Space previews are render-only (wallpaper + window composite). BitBlt is
+    // never used for cards: overview would capture itself, and hidden spaces
+    // have no on-screen pixels to sample.
+    rebuildSpaceScreenshot(hmon, index);
 }
 
 void SpaceManager::seedScreenshots()
@@ -159,30 +149,10 @@ void SpaceManager::seedScreenshots()
         if (w <= 0 || h <= 0)
             continue;
 
-        // One desktop-level shot for every empty space (cold boot).
-        QImage seed;
-        for (const Space &sp : m.spaces) {
-            if (!sp.screenshot.isNull()) {
-                seed = sp.screenshot;
-                break;
-            }
-        }
-        if (seed.isNull()) {
-            seed = thumbs::desktopWallpaper(m.physRect, QSize(640, 360));
-            if (seed.isNull() && !m_overviewOpen)
-                seed = thumbs::captureMonitor(m.physRect, QSize(640, 360));
-        }
-
-        // Current space: live shot if possible (desktop / windows).
-        if (!m_overviewOpen) {
-            QImage live = thumbs::captureMonitor(m.physRect, QSize(640, 360));
-            if (!live.isNull() && m.currentIndex >= 0 && m.currentIndex < m.spaces.size())
-                m.spaces[m.currentIndex].screenshot = live;
-        }
-
-        for (Space &sp : m.spaces) {
-            if (sp.screenshot.isNull() && !seed.isNull())
-                sp.screenshot = seed;
+        for (int i = 0; i < m.spaces.size(); ++i) {
+            // Always re-render current; fill empties for the rest.
+            if (i == m.currentIndex || m.spaces[i].screenshot.isNull())
+                rebuildSpaceScreenshot(m.hmon, i);
         }
     }
 }
@@ -220,7 +190,7 @@ bool SpaceManager::previewSpace(HMONITOR hmon, int index)
     m->currentIndex = index;
     applyVisibility(hmon);
 
-    // Composite screenshot (overview overlay is up — never BitBlt the screen).
+    // Rendered composite (wallpaper + windows in Z-order) — never BitBlt.
     rebuildSpaceScreenshot(hmon, index);
 
     if (changed)
@@ -238,19 +208,52 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
     if (monW <= 0 || monH <= 0)
         return;
 
-    QImage canvas = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
-    if (canvas.isNull()) {
-        canvas = QImage(640, 360, QImage::Format_ARGB32_Premultiplied);
+    Space &sp = m->spaces[index];
+
+    // Canvas matches monitor aspect, fitted into 640×360.
+    const double monAspect = double(monW) / double(monH);
+    int cw = 640;
+    int ch = int(std::lround(cw / monAspect));
+    if (ch > 360 || ch <= 0) {
+        ch = 360;
+        cw = int(std::lround(ch * monAspect));
+        if (cw <= 0)
+            cw = 640;
+    }
+
+    // Background: wallpaper (or solid) filling the ENTIRE canvas — no letterbox gaps.
+    QImage canvas = thumbs::wallpaperFilled(m->physRect, QSize(cw, ch));
+    if (canvas.isNull() || canvas.width() != cw || canvas.height() != ch) {
+        canvas = QImage(cw, ch, QImage::Format_ARGB32_Premultiplied);
         canvas.fill(QColor(32, 36, 48));
     }
 
-    // Scale factor physical monitor → canvas.
-    const double sx = double(canvas.width()) / monW;
-    const double sy = double(canvas.height()) / monH;
+    const double sx = double(cw) / monW;
+    const double sy = double(ch) / monH;
+
+    // Z-order: EnumWindows is top → bottom; paint bottom first so top stays on top.
+    QVector<HWND> ordered;
+    ordered.reserve(int(sp.windows.size()));
+    struct Ctx {
+        const QSet<HWND> *set;
+        QVector<HWND> *out;
+    } ctx{&sp.windows, &ordered};
+    ::EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+        auto *c = reinterpret_cast<Ctx *>(lp);
+        if (c->set->contains(hwnd))
+            c->out->push_back(hwnd);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    for (HWND hwnd : sp.windows) {
+        if (!ordered.contains(hwnd))
+            ordered.push_back(hwnd);
+    }
+    sp.zOrder = ordered; // cache top → bottom
 
     QPainter painter(&canvas);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    for (HWND hwnd : m->spaces[index].windows) {
+    for (int i = ordered.size() - 1; i >= 0; --i) {
+        const HWND hwnd = ordered[i];
         if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
             continue;
         RECT wr{};
@@ -260,15 +263,20 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
         const int wh = wr.bottom - wr.top;
         if (ww <= 0 || wh <= 0)
             continue;
-        QImage shot = thumbs::capture(hwnd, QSize(qMax(1, int(ww * sx)), qMax(1, int(wh * sy))));
+        const int dw = qMax(1, int(std::lround(ww * sx)));
+        const int dh = qMax(1, int(std::lround(wh * sy)));
+        // Capture at full window aspect then force exact on-canvas box (same sx/sy).
+        QImage shot = thumbs::capture(hwnd, QSize(dw, dh));
         if (shot.isNull())
             continue;
-        const int x = int((wr.left - m->physRect.left) * sx);
-        const int y = int((wr.top - m->physRect.top) * sy);
+        if (shot.width() != dw || shot.height() != dh)
+            shot = shot.scaled(dw, dh, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        const int x = int(std::lround((wr.left - m->physRect.left) * sx));
+        const int y = int(std::lround((wr.top - m->physRect.top) * sy));
         painter.drawImage(QPoint(x, y), shot);
     }
     painter.end();
-    m->spaces[index].screenshot = canvas;
+    sp.screenshot = canvas;
 }
 
 bool SpaceManager::isMaximizedWindow(HWND hwnd)
@@ -319,10 +327,14 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
         return false;
 
     // If leaving an exclusive space, unbind it (restore default name).
+    int prevSpace = -1;
+    HMONITOR prevMon = nullptr;
     if (m_owner.contains(hwnd)) {
         const auto prev = m_owner.value(hwnd);
         if (auto *pm = monitorOf(reinterpret_cast<HMONITOR>(prev.hmon));
             pm && prev.space >= 0 && prev.space < pm->spaces.size()) {
+            prevSpace = prev.space;
+            prevMon = pm->hmon;
             Space &oldSp = pm->spaces[prev.space];
             oldSp.windows.remove(hwnd);
             if (oldSp.exclusiveWindow == hwnd) {
@@ -370,6 +382,11 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
 
     const bool shouldHide = (spaceIndex != m->currentIndex);
     cloakWindow(hwnd, shouldHide);
+
+    // Source space lost a window — refresh its cached screenshot so cards stay in sync.
+    if (prevSpace >= 0 && prevMon && (prevMon != hmon || prevSpace != spaceIndex))
+        rebuildSpaceScreenshot(prevMon, prevSpace);
+
     return true;
 }
 

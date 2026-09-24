@@ -10,6 +10,7 @@ class OverviewHost : public QObject {
     Q_OBJECT
 public:
     explicit OverviewHost(SpaceManager *manager, QObject *parent = nullptr);
+    ~OverviewHost() override;
 
     bool isOpen() const;
     void openAll();

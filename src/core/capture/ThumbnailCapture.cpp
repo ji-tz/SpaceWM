@@ -1,4 +1,4 @@
-#include "ThumbnailCapture.h"
+#include "core/capture/ThumbnailCapture.h"
 
 #include <QPainter>
 #include <QFileInfo>
@@ -35,6 +35,32 @@ QImage gdiToImage(HDC hdc, HBITMAP bmp, int w, int h)
     return img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }
 
+// Center-crop (or pass through) so wallpaper fills exactly w×h without stretching.
+QImage fillExact(QImage img, int w, int h)
+{
+    if (img.isNull() || w <= 0 || h <= 0)
+        return {};
+    if (img.width() == w && img.height() == h)
+        return img;
+    QImage covered = img.scaled(w, h, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    if (covered.width() == w && covered.height() == h)
+        return covered;
+    const int x = std::max(0, (covered.width() - w) / 2);
+    const int y = std::max(0, (covered.height() - h) / 2);
+    return covered.copy(x, y, std::min(w, covered.width()), std::min(h, covered.height()));
+}
+
+QImage loadWallpaperImage()
+{
+    wchar_t path[MAX_PATH]{};
+    if (::SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) && path[0]) {
+        QImage img(QString::fromWCharArray(path));
+        if (!img.isNull())
+            return img;
+    }
+    return {};
+}
+
 } // namespace
 
 namespace thumbs {
@@ -49,26 +75,18 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     RECT rc{};
     if (!::GetWindowRect(hwnd, &rc))
         return {};
-    int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
-    if (w <= 0 || h <= 0)
-        return {};
-
-    const int capW = 960;
-    const int capH = 540;
-    if (w > capW || h > capH) {
-        const double s = std::min(double(capW) / w, double(capH) / h);
-        w = int(w * s);
-        h = int(h * s);
-    }
-    if (w <= 0 || h <= 0)
+    // Always render into a FULL-window bitmap. PrintWindow draws 1:1 into the DC;
+    // a pre-shrunk DC only captures the top-left corner (clipped / wrong content).
+    const int fullW = rc.right - rc.left;
+    const int fullH = rc.bottom - rc.top;
+    if (fullW <= 0 || fullH <= 0)
         return {};
 
     HDC screen = ::GetDC(nullptr);
     if (!screen)
         return {};
     HDC mem = ::CreateCompatibleDC(screen);
-    HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+    HBITMAP bmp = ::CreateCompatibleBitmap(screen, fullW, fullH);
     if (!mem || !bmp) {
         if (bmp) ::DeleteObject(bmp);
         if (mem) ::DeleteDC(mem);
@@ -77,11 +95,11 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     }
     HGDIOBJ old = ::SelectObject(mem, bmp);
 
-    const BOOL ok = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT | PW_CLIENTONLY);
+    const BOOL ok = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
     if (!ok)
-        ::BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY);
+        ::BitBlt(mem, 0, 0, fullW, fullH, screen, rc.left, rc.top, SRCCOPY);
 
-    QImage img = gdiToImage(mem, bmp, w, h);
+    QImage img = gdiToImage(mem, bmp, fullW, fullH);
 
     ::SelectObject(mem, old);
     ::DeleteObject(bmp);
@@ -136,18 +154,15 @@ QImage captureMonitor(const RECT &physRect, const QSize &maxSize)
 
 QImage desktopWallpaper(const RECT &physRect, const QSize &maxSize)
 {
-    wchar_t path[MAX_PATH]{};
-    if (::SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) && path[0]) {
-        QImage img(QString::fromWCharArray(path));
-        if (!img.isNull()) {
-            const int w = physRect.right - physRect.left;
-            const int h = physRect.bottom - physRect.top;
-            if (w > 0 && h > 0)
-                img = img.scaled(w, h, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-            if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
-                img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            return img;
-        }
+    QImage img = loadWallpaperImage();
+    if (!img.isNull()) {
+        const int w = physRect.right - physRect.left;
+        const int h = physRect.bottom - physRect.top;
+        if (w > 0 && h > 0)
+            img = fillExact(img, w, h);
+        if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
+            img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return img;
     }
     // Fallback: solid desktop-like fill so cards never show "No preview".
     const int w = maxSize.width() > 0 ? maxSize.width() : 640;
@@ -157,12 +172,24 @@ QImage desktopWallpaper(const RECT &physRect, const QSize &maxSize)
     return flat;
 }
 
+// Wallpaper scaled to EXACTly canvas size. physRect reserved for future
+// per-monitor wallpaper APIs; size comes from canvas (monitor-aspect).
+QImage wallpaperFilled(const RECT &physRect, const QSize &canvas)
+{
+    Q_UNUSED(physRect);
+    const int w = canvas.width() > 0 ? canvas.width() : 640;
+    const int h = canvas.height() > 0 ? canvas.height() : 360;
+    QImage img = loadWallpaperImage();
+    if (!img.isNull())
+        return fillExact(img, w, h);
+    QImage flat(w, h, QImage::Format_ARGB32_Premultiplied);
+    flat.fill(QColor(32, 36, 48));
+    return flat;
+}
+
 QImage spacePreview(const RECT &physRect, const QSize &maxSize)
 {
-    QImage shot = captureMonitor(physRect, maxSize);
-    if (!shot.isNull())
-        return shot;
-    return desktopWallpaper(physRect, maxSize);
+    return wallpaperFilled(physRect, maxSize.isValid() ? maxSize : QSize(640, 360));
 }
 
 } // namespace thumbs
