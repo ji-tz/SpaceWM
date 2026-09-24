@@ -1,6 +1,8 @@
 #include "core/capture/ThumbnailCapture.h"
 
 #include <QPainter>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 
 #include <algorithm>
@@ -43,22 +45,70 @@ QImage fillExact(QImage img, int w, int h)
     if (img.width() == w && img.height() == h)
         return img;
     QImage covered = img.scaled(w, h, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    if (covered.isNull())
+        return {};
     if (covered.width() == w && covered.height() == h)
         return covered;
     const int x = std::max(0, (covered.width() - w) / 2);
     const int y = std::max(0, (covered.height() - h) / 2);
-    return covered.copy(x, y, std::min(w, covered.width()), std::min(h, covered.height()));
+    const int cw = std::min(w, covered.width());
+    const int ch = std::min(h, covered.height());
+    if (cw <= 0 || ch <= 0)
+        return {};
+    return covered.copy(x, y, cw, ch);
+}
+
+QString registryWallpaperPath()
+{
+    HKEY key = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return {};
+    wchar_t buf[MAX_PATH]{};
+    DWORD size = DWORD(sizeof(buf) - sizeof(wchar_t));
+    DWORD type = 0;
+    const LSTATUS st = ::RegQueryValueExW(key, L"Wallpaper", nullptr, &type,
+                                          reinterpret_cast<LPBYTE>(buf), &size);
+    ::RegCloseKey(key);
+    if (st != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) || !buf[0])
+        return {};
+    return QString::fromWCharArray(buf);
+}
+
+QString transcodedWallpaperPath()
+{
+    // What Explorer actually paints: JPEG/PNG re-encode of HEIC/slideshow sources.
+    const QString appData = QString::fromLocal8Bit(qgetenv("APPDATA"));
+    if (appData.isEmpty())
+        return {};
+    return appData + QStringLiteral("/Microsoft/Windows/Themes/TranscodedWallpaper");
+}
+
+QImage tryLoadImagePath(const QString &path)
+{
+    if (path.isEmpty())
+        return {};
+    const QFileInfo fi(path);
+    if (!fi.exists() || !fi.isFile() || fi.size() <= 0)
+        return {};
+    QImage img(path);
+    return img.isNull() ? QImage() : img;
 }
 
 QImage loadWallpaperImage()
 {
+    // 1) SPI — may be HEIC (often unloadable without a Qt HEIC plugin).
     wchar_t path[MAX_PATH]{};
     if (::SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) && path[0]) {
-        QImage img(QString::fromWCharArray(path));
+        QImage img = tryLoadImagePath(QString::fromWCharArray(path));
         if (!img.isNull())
             return img;
     }
-    return {};
+    // 2) Transcoded wallpaper — always a raster format Windows can display.
+    QImage transcoded = tryLoadImagePath(transcodedWallpaperPath());
+    if (!transcoded.isNull())
+        return transcoded;
+    // 3) Registry Wallpaper value (same as SPI in most cases, still try).
+    return tryLoadImagePath(registryWallpaperPath());
 }
 
 } // namespace

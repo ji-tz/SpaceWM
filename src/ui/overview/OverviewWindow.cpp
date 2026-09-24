@@ -113,6 +113,20 @@ QString OverviewWindow::windowTitle(HWND hwnd) const
     return t;
 }
 
+QSize OverviewWindow::windowPreviewBoxSize(int i) const
+{
+    if (i < 0 || i >= m_windowPreviews.size() || !m_windowPreviews[i])
+        return {};
+    return m_windowPreviews[i]->imageBoxSize();
+}
+
+HWND OverviewWindow::windowPreviewHandle(int i) const
+{
+    if (i < 0 || i >= m_windowPreviews.size() || !m_windowPreviews[i])
+        return nullptr;
+    return m_windowPreviews[i]->windowHandle();
+}
+
 bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
 {
     if (!m_manager || !hwnd || !m_hmon)
@@ -477,7 +491,8 @@ void OverviewWindow::rebuildWindowPreviews()
     int availH = m_windowScroll ? m_windowScroll->viewport()->height() : 0;
     if (availW < 200 || availH < 80) {
         availW = m->geometry.width() > 0 ? m->geometry.width() - 72 : 1200;
-        availH = 240;
+        // Prefer a taller strip so more windows fit without scrolling.
+        availH = m->geometry.height() > 0 ? std::max(240, m->geometry.height() / 3) : 320;
     }
     const int gap = 14;
 
@@ -487,35 +502,34 @@ void OverviewWindow::rebuildWindowPreviews()
     });
 
     int maxPw = 1;
-    for (const Item &it : items)
+    int maxPh = 1;
+    for (const Item &it : items) {
         maxPw = std::max(maxPw, it.pw);
+        maxPh = std::max(maxPh, it.ph);
+    }
 
-    // Tile size at a given scale: keep real window aspect, then floor without stretching.
+    // Uniform scale ≤ 1.0 so a tile is never larger than the real window.
+    // Readable floor lifts scale a bit but is also capped by real size.
     auto tileSize = [&](const Item &it, double scale) -> QSize {
-        double w = double(it.pw) * scale;
-        double h = double(it.ph) * scale;
-        if (w < 96.0) {
-            h *= 96.0 / w;
-            w = 96.0;
-        }
-        if (h < 64.0) {
-            w *= 64.0 / h;
-            h = 64.0;
-        }
-        return QSize(std::max(96, int(std::lround(w))),
-                     std::max(64, int(std::lround(h))));
+        const double pw = std::max(1, it.pw);
+        const double ph = std::max(1, it.ph);
+        double s = std::min(std::max(scale, 0.02), 1.0);
+        // Raise s until min edge is met — but never past 1.0 (real size).
+        const double sMinW = 96.0 / pw;
+        const double sMinH = 64.0 / ph;
+        s = std::max(s, std::min(1.0, std::max(sMinW, sMinH)));
+        s = std::min(s, 1.0);
+        const int w = std::max(1, std::min(it.pw, int(std::lround(pw * s))));
+        const int h = std::max(1, std::min(it.ph, int(std::lround(ph * s))));
+        return QSize(w, h);
     };
 
-    double lo = 0.02;
-    double hi = std::min(4.0, double(availW) / double(maxPw));
-    double best = lo;
-    for (int iter = 0; iter < 24; ++iter) {
-        const double mid = (lo + hi) * 0.5;
+    auto shelfFits = [&](double scale) -> bool {
         int x = 0;
         int rowH = 0;
         int total = 0;
         for (const Item &it : items) {
-            const QSize ts = tileSize(it, mid);
+            const QSize ts = tileSize(it, scale);
             const int cellW = ts.width() + gap;
             const int cellH = ts.height() + gap;
             if (x > 0 && x + cellW > availW) {
@@ -527,11 +541,24 @@ void OverviewWindow::rebuildWindowPreviews()
             rowH = std::max(rowH, cellH);
         }
         total += rowH;
-        if (total <= availH) {
-            best = mid;
-            lo = mid;
-        } else {
-            hi = mid;
+        return total <= availH;
+    };
+
+    // Never upscale: upper bound is 1.0 (and at most one widest tile per row).
+    double lo = 0.02;
+    double hi = 1.0;
+    double best = lo;
+    if (shelfFits(hi)) {
+        best = hi;
+    } else {
+        for (int iter = 0; iter < 24; ++iter) {
+            const double mid = (lo + hi) * 0.5;
+            if (shelfFits(mid)) {
+                best = mid;
+                lo = mid;
+            } else {
+                hi = mid;
+            }
         }
     }
     double scale = best;

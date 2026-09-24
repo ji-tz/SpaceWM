@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <unordered_map>
+#include <vector>
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "ole32.lib")
@@ -298,6 +299,26 @@ Backend lastBackend()
 int hiddenCount()
 {
     return static_cast<int>(g_hidden.size());
+}
+
+int showAllHidden()
+{
+    // set(hwnd, false) mutates g_hidden — snapshot keys first.
+    std::vector<HWND> keys;
+    keys.reserve(g_hidden.size());
+    for (const auto &kv : g_hidden)
+        keys.push_back(kv.first);
+
+    int restored = 0;
+    for (HWND hwnd : keys) {
+        if (!::IsWindow(hwnd)) {
+            forget(hwnd);
+            continue;
+        }
+        if (set(hwnd, false))
+            ++restored;
+    }
+    return restored;
 }
 
 } // namespace cloak

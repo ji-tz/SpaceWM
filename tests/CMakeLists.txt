@@ -7,6 +7,7 @@ set(SPACEWM_TEST_NAMES
   test_window_tracker
   test_thumbnail
   test_hotkeys
+  test_settings
   test_space_card
   test_overview
   test_overview_host

@@ -2,6 +2,7 @@
 
 #include "core/space/SpaceManager.h"
 
+#include <QSize>
 #include <QWidget>
 #include <Windows.h>
 
@@ -40,6 +41,9 @@ public:
     int selectedIndex() const { return m_selected; }
     int cardCount() const { return m_cards.size(); }
     int windowPreviewCount() const { return m_windowPreviews.size(); }
+    // Image box / hwnd of the i-th bottom tile (tests: never exceed real size).
+    QSize windowPreviewBoxSize(int i) const;
+    HWND windowPreviewHandle(int i) const;
 
     // Mission Control: drop hwnd onto space index (public for tests).
     bool placeWindowInSpace(HWND hwnd, int spaceIndex);

@@ -11,6 +11,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 const char *WindowPreviewWidget::kMimeType = "application/x-spacewm-hwnd";
 
@@ -126,19 +127,64 @@ void WindowPreviewWidget::startDrag()
     ds << quint64(m_hwnd);
     mime->setData(kMimeType, payload);
 
+    // Ghost: compact “screen thumbnail” (not the full tile), 80% opacity.
+    const QSize kDragThumbMax(240, 150);
     QPixmap pm;
     if (!m_image.isNull())
-        pm = QPixmap::fromImage(m_image).scaled(m_box, Qt::KeepAspectRatio,
-                                                Qt::SmoothTransformation);
+        pm = QPixmap::fromImage(m_image);
     if (pm.isNull())
-        pm = grab().scaled(m_box, Qt::KeepAspectRatio);
+        pm = grab();
+
+    QSize thumbSize = pm.size();
+    thumbSize.scale(kDragThumbMax, Qt::KeepAspectRatio);
+    if (thumbSize.width() > 0 && thumbSize.height() > 0)
+        pm = pm.scaled(thumbSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+    if (!pm.isNull()) {
+        QImage img = pm.toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QImage faded(img.size(), QImage::Format_ARGB32_Premultiplied);
+        faded.fill(Qt::transparent);
+        {
+            QPainter p(&faded);
+            p.setOpacity(0.8);
+            p.drawImage(0, 0, img);
+        }
+        pm = QPixmap::fromImage(faded);
+    }
 
     auto *drag = new QDrag(this);
     drag->setMimeData(mime);
-    if (!pm.isNull())
+    if (!pm.isNull()) {
         drag->setPixmap(pm);
+        // Ghost sticks to the press point, not the pixmap top-left corner.
+        const QPoint imageTopLeft = m_imageLabel ? m_imageLabel->pos() : QPoint(0, 0);
+        drag->setHotSpot(mapPressToHotSpot(m_pressPos, imageTopLeft, m_box, pm.size()));
+    }
     emit dragStarted(reinterpret_cast<quint64>(m_hwnd));
     drag->exec(Qt::CopyAction);
+}
+
+QPoint WindowPreviewWidget::mapPressToHotSpot(const QPoint &pressInWidget,
+                                              const QPoint &imageTopLeftInWidget,
+                                              const QSize &box,
+                                              const QSize &pixmapSize)
+{
+    if (pixmapSize.width() <= 0 || pixmapSize.height() <= 0)
+        return QPoint(0, 0);
+
+    const double bx = double(pressInWidget.x() - imageTopLeftInWidget.x());
+    const double by = double(pressInWidget.y() - imageTopLeftInWidget.y());
+
+    // Image box → actual pixmap (KeepAspectRatio may letterbox inside the box).
+    double hx = bx;
+    double hy = by;
+    if (box.width() > 0 && box.height() > 0) {
+        hx = bx * double(pixmapSize.width()) / double(box.width());
+        hy = by * double(pixmapSize.height()) / double(box.height());
+    }
+
+    return QPoint(std::clamp(int(std::lround(hx)), 0, pixmapSize.width() - 1),
+                  std::clamp(int(std::lround(hy)), 0, pixmapSize.height() - 1));
 }
 
 void WindowPreviewWidget::paintEvent(QPaintEvent *event)

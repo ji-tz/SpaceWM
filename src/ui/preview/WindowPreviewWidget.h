@@ -2,6 +2,7 @@
 
 #include <QFrame>
 #include <QImage>
+#include <QPoint>
 #include <QSize>
 #include <Windows.h>
 
@@ -23,6 +24,14 @@ public:
 
     HWND windowHandle() const { return m_hwnd; }
     QString windowTitle() const { return m_title; }
+
+    // Press point (widget coords) → hotspot inside the drag pixmap (usually
+    // the image label, scaled to the actual pixmap size). Used by QDrag::setHotSpot
+    // so the ghost sticks to the click point, not the top-left corner.
+    static QPoint mapPressToHotSpot(const QPoint &pressInWidget,
+                                    const QPoint &imageTopLeftInWidget,
+                                    const QSize &box,
+                                    const QSize &pixmapSize);
 
 signals:
     void dragStarted(quint64 hwnd);

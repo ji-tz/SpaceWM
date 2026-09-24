@@ -10,6 +10,7 @@
 #include "ui/effects/SwitchFlashOverlay.h"
 #include "ui/overview/OverviewHost.h"
 #include "ui/overview/OverviewWindow.h"
+#include "ui/settings/SettingsDialog.h"
 #include "ui/tray/TrayIcon.h"
 
 #include <Windows.h>
@@ -54,6 +55,7 @@ int main(int argc, char *argv[])
     TrayIcon tray;
     SwitchFlashOverlay flash;
     OverviewHost overview(&manager);
+    SettingsDialog settings;
 
     // --- wire tracker -> manager ---
     QObject::connect(&tracker, &WindowTracker::windowCreated, &manager, [&](quint64 h) {
@@ -163,6 +165,18 @@ int main(int argc, char *argv[])
     });
 
     // --- tray ---
+    QObject::connect(&tray, &TrayIcon::settingsRequested, &app, [&]() {
+        settings.reload();
+        settings.show();
+        settings.raise();
+        settings.activateWindow();
+    });
+    QObject::connect(&settings, &SettingsDialog::settingsApplied, &app, [&]() {
+        if (!hotkeys.registerDefaults()) {
+            tray.showMessage(QObject::tr("SpaceWM"),
+                             QObject::tr("Some hotkeys failed to register (maybe in use)."));
+        }
+    });
     QObject::connect(&tray, &TrayIcon::overviewRequested, &app, openOverview);
     QObject::connect(&tray, &TrayIcon::nextSpaceRequested, &app, [&]() {
         HMONITOR h = monitors::fromCursor();
@@ -181,15 +195,14 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager, &SpaceManager::refreshMonitors);
     QObject::connect(&tray, &TrayIcon::quitRequested, &app, [&]() {
-        // Uncloak ONLY windows we hid; never show shell-hidden windows.
-        for (MonitorSpaces *m : manager.monitors()) {
-            for (int s = 0; s < m->spaces.size(); ++s) {
-                for (HWND hwnd : m->spaces[s].windows) {
-                    cloak::set(hwnd, false);
-                }
-            }
-        }
+        // Normal exit: bring back every window WE hid (all spaces / backends).
+        // Never shows windows we did not hide.
+        cloak::showAllHidden();
         app.quit();
+    });
+    // Safety net for any other normal quit path (e.g. future menu/exit hooks).
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
+        cloak::showAllHidden();
     });
 
     if (!hotkeys.registerDefaults()) {

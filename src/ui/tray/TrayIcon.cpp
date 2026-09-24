@@ -24,13 +24,15 @@ TrayIcon::TrayIcon(QObject *parent)
     m_menu->addAction(tr("Next space"), this, &TrayIcon::nextSpaceRequested);
     m_menu->addAction(tr("Previous space"), this, &TrayIcon::prevSpaceRequested);
     m_menu->addAction(tr("Refresh monitors"), this, &TrayIcon::refreshMonitorsRequested);
+    m_menu->addAction(tr("Settings…"), this, &TrayIcon::settingsRequested);
     m_menu->addSeparator();
     m_menu->addAction(tr("Quit"), this, &TrayIcon::quitRequested);
 
     m_tray->setContextMenu(m_menu);
     connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason r) {
+        // Left-click / double-click opens Settings (user request).
         if (r == QSystemTrayIcon::Trigger || r == QSystemTrayIcon::DoubleClick)
-            emit overviewRequested();
+            emit settingsRequested();
     });
 
     m_tray->show();

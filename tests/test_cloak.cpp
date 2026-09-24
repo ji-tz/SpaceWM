@@ -67,6 +67,26 @@ private slots:
         QVERIFY(!cloak::isCloaked(m_hwnd));
     }
 
+    void showAllHiddenRestoresOnlyOurs()
+    {
+        QVERIFY(cloak::set(m_hwnd, true));
+        QVERIFY(cloak::isCloaked(m_hwnd));
+        const int restored = cloak::showAllHidden();
+        QVERIFY(restored >= 1);
+        // Our window must be out of the hide set after restore-all.
+        QVERIFY(!cloak::isHiddenByUs(m_hwnd));
+        bool visible = false;
+        for (int i = 0; i < 50 && !visible; ++i) {
+            visible = !cloak::isCloaked(m_hwnd);
+            if (!visible)
+                ::Sleep(10);
+        }
+        QVERIFY(visible);
+        // Second call is a no-op (nothing left for us).
+        QCOMPARE(cloak::showAllHidden(), 0);
+        QCOMPARE(cloak::hiddenCount(), 0);
+    }
+
 private:
     HWND m_hwnd = nullptr;
 };

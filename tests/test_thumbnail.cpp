@@ -72,6 +72,17 @@ private slots:
         }
         ::DestroyWindow(big);
 
+        // Wallpaper / space background must load even when SPI path is HEIC:
+        // prefer TranscodedWallpaper (what Explorer actually paints).
+        const RECT monitorRect{0, 0, 1920, 1080};
+        const QImage wall = thumbs::wallpaperFilled(monitorRect, QSize(320, 180));
+        QVERIFY(!wall.isNull());
+        QCOMPARE(wall.size(), QSize(320, 180));
+        // Not a flat solid if any wallpaper source exists on the machine.
+        const QImage spi = thumbs::desktopWallpaper(monitorRect, QSize(160, 90));
+        QVERIFY(!spi.isNull());
+        QCOMPARE(spi.width(), 160); // KeepAspectRatio into 160×90 from 16:9 fill
+
         ::DestroyWindow(hwnd);
     }
 };

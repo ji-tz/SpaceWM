@@ -20,6 +20,7 @@ signals:
     void prevSpaceRequested();
     void quitRequested();
     void refreshMonitorsRequested();
+    void settingsRequested();
 
 private:
     QSystemTrayIcon *m_tray = nullptr;

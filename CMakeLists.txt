@@ -28,6 +28,8 @@ add_library(spacewm_core STATIC
   src/core/window/WindowTracker.cpp
   src/core/capture/ThumbnailCapture.h
   src/core/capture/ThumbnailCapture.cpp
+  src/core/settings/AppSettings.h
+  src/core/settings/AppSettings.cpp
   src/hotkeys/HotkeyManager.h
   src/hotkeys/HotkeyManager.cpp
   src/ui/overview/OverviewWindow.h
@@ -40,6 +42,8 @@ add_library(spacewm_core STATIC
   src/ui/preview/WindowPreviewWidget.cpp
   src/ui/effects/SwitchFlashOverlay.h
   src/ui/effects/SwitchFlashOverlay.cpp
+  src/ui/settings/SettingsDialog.h
+  src/ui/settings/SettingsDialog.cpp
   src/ui/tray/TrayIcon.h
   src/ui/tray/TrayIcon.cpp
 )
@@ -55,6 +59,7 @@ target_link_libraries(spacewm_core PUBLIC
   shell32
   ole32
   shcore
+  advapi32
 )
 
 target_compile_definitions(spacewm_core PUBLIC

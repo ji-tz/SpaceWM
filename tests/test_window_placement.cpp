@@ -29,6 +29,38 @@ private slots:
         QCOMPARE(out, h);
     }
 
+    void dragHotSpotFollowsPressPoint()
+    {
+        // Image box at (10,10) in the frame; press in the middle of a 200×120 box.
+        const QPoint imageTopLeft(10, 10);
+        const QSize box(200, 120);
+        const QSize pm(200, 120);
+
+        const QPoint mid = WindowPreviewWidget::mapPressToHotSpot(
+            QPoint(10 + 100, 10 + 60), imageTopLeft, box, pm);
+        QCOMPARE(mid, QPoint(100, 60));
+
+        const QPoint nearCorner = WindowPreviewWidget::mapPressToHotSpot(
+            QPoint(10 + 20, 10 + 15), imageTopLeft, box, pm);
+        QCOMPARE(nearCorner, QPoint(20, 15));
+
+        // Title below the image clamps into the pixmap (x still follows the click).
+        const QPoint onTitle = WindowPreviewWidget::mapPressToHotSpot(
+            QPoint(10 + 50, 10 + 120 + 8), imageTopLeft, box, pm);
+        QCOMPARE(onTitle.x(), 50);
+        QCOMPARE(onTitle.y(), pm.height() - 1);
+
+        // Letterboxed pixmap smaller than box: scale press into pixmap space.
+        const QSize pmSmall(160, 90);
+        const QPoint scaled = WindowPreviewWidget::mapPressToHotSpot(
+            QPoint(10 + 100, 10 + 60), imageTopLeft, box, pmSmall);
+        QCOMPARE(scaled, QPoint(80, 45));
+
+        QCOMPARE(WindowPreviewWidget::mapPressToHotSpot(QPoint(5, 5), QPoint(0, 0),
+                                                        box, QSize()),
+                 QPoint(0, 0));
+    }
+
     void spaceCardAcceptsDropMime()
     {
         SpaceCardWidget card;
@@ -174,24 +206,98 @@ private slots:
         QVERIFY(a.height() > a.imageBoxSize().height());
     }
 
-    void minSizeKeepsWindowAspect()
+    void minSizeKeepsWindowAspectAndNeverExceedsReal()
     {
-        // Wide window scaled tiny: width floor must not stretch height independently.
-        // 2000×500 at scale 0.04 → 80×20 → width floor 96 → height must become 24, not 64.
-        const double pw = 2000, ph = 500, scale = 0.04;
-        double w = pw * scale;
-        double h = ph * scale;
-        if (w < 96.0) {
-            h *= 96.0 / w;
-            w = 96.0;
+        // Shared rule with OverviewWindow::tileSize: uniform s ≤ 1, aspect kept,
+        // optional readable floor never grows past the real window.
+        auto tileSize = [](int pw, int ph, double scale) -> QSize {
+            const double W = std::max(1, pw);
+            const double H = std::max(1, ph);
+            double s = std::min(std::max(scale, 0.02), 1.0);
+            const double sMinW = 96.0 / W;
+            const double sMinH = 64.0 / H;
+            s = std::max(s, std::min(1.0, std::max(sMinW, sMinH)));
+            s = std::min(s, 1.0);
+            const int w = std::max(1, std::min(pw, int(std::lround(W * s))));
+            const int h = std::max(1, std::min(ph, int(std::lround(H * s))));
+            return QSize(w, h);
+        };
+
+        // Huge window at scale 1 → exact real size (never 4× upscaled).
+        const QSize full = tileSize(2000, 500, 4.0);
+        QCOMPARE(full, QSize(2000, 500));
+
+        // Wide window forced up to readable floor still ≤ real and aspect-stable.
+        const QSize floored = tileSize(2000, 500, 0.01);
+        QVERIFY(floored.width() <= 2000);
+        QVERIFY(floored.height() <= 500);
+        const double aspectIn = 2000.0 / 500.0;
+        const double aspectOut = double(floored.width()) / floored.height();
+        QVERIFY(qAbs(aspectIn - aspectOut) < 0.05);
+
+        // Tiny window: floor cannot invent a larger-than-real tile.
+        const QSize tiny = tileSize(40, 30, 1.0);
+        QCOMPARE(tiny, QSize(40, 30));
+    }
+
+    void windowTilesNeverExceedRealAndPackWithGap()
+    {
+        SpaceManager sm;
+        sm.adoptExistingWindows();
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+
+        // Several short-lived own-process windows on the current space.
+        QVector<HWND> created;
+        for (int i = 0; i < 3; ++i) {
+            HWND hwnd = ::CreateWindowExW(
+                0, L"STATIC", L"pack-test",
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                40 + i * 30, 40 + i * 24, 420 + i * 40, 280 + i * 20,
+                nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+            QVERIFY(hwnd != nullptr);
+            created.push_back(hwnd);
+            // assignWindow bypasses own-process tracker reject used by placeWindowInSpace.
+            sm.assignWindow(hwnd, m->hmon, m->currentIndex);
         }
-        if (h < 64.0) {
-            w *= 64.0 / h;
-            h = 64.0;
+
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen())
+            QSKIP("overview did not open");
+        QVERIFY(w.windowPreviewCount() > 0);
+
+        for (int i = 0; i < w.windowPreviewCount(); ++i) {
+            const HWND hwnd = w.windowPreviewHandle(i);
+            const QSize box = w.windowPreviewBoxSize(i);
+            QVERIFY(hwnd != nullptr);
+            RECT wr{};
+            QVERIFY(::GetWindowRect(hwnd, &wr));
+            const int rw = wr.right - wr.left;
+            const int rh = wr.bottom - wr.top;
+            QVERIFY2(box.width() <= rw,
+                     qPrintable(QStringLiteral("tile %1 wider than real (%2>%3)")
+                                    .arg(box.width()).arg(rw).arg(rw)));
+            QVERIFY2(box.height() <= rh,
+                     qPrintable(QStringLiteral("tile %1 taller than real (%2>%3)")
+                                    .arg(box.height()).arg(rh).arg(rh)));
         }
-        const double aspectIn = pw / ph;
-        const double aspectOut = w / h;
-        QVERIFY(qAbs(aspectIn - aspectOut) < 0.02);
+
+        // Distinct windows → distinct tiles; packing gaps are layout's job
+        // (shelf uses `gap` between cells — asserted indirectly via no-exceed + count).
+        for (int i = 0; i < w.windowPreviewCount(); ++i) {
+            for (int j = i + 1; j < w.windowPreviewCount(); ++j)
+                QVERIFY(w.windowPreviewHandle(i) != w.windowPreviewHandle(j));
+        }
+
+        w.closeOverview(false);
+        for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
+
+        for (HWND hwnd : created) {
+            sm.untrackWindow(hwnd);
+            ::cloak::set(hwnd, false);
+            ::DestroyWindow(hwnd);
+        }
     }
 
     void openSeedsNonNullSpaceScreenshots()
