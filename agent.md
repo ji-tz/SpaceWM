@@ -102,7 +102,7 @@ HotkeyManager  → WH_KEYBOARD_LL（Ctrl+Alt+←/→/Space/1-4）
 
 ## 4. Git
 
-- `build/`、`lib/`、`.vs/` 等不提交。  
+- **`build/` 不提交**（本地生成）；**`lib/` 提交**（可移植运行时）；`.vs/` 等不提交。  
 - Commit 前：全量 test 通过。  
 - 信息格式：`<type>: <summary>`（fix/feat/test/chore）。
 
