@@ -203,6 +203,15 @@ int main(int argc, char *argv[])
 
     // Initial adoption of open windows.
     manager.adoptExistingWindows();
+    {
+        int tracked = 0;
+        for (MonitorSpaces *m : manager.monitors())
+            for (const Space &sp : m->spaces)
+                tracked += int(sp.windows.size());
+        tray.showMessage(QObject::tr("SpaceWM"),
+                         QObject::tr("Tracking %1 window(s). Ctrl+Alt+←/→ switch, Ctrl+Alt+Space overview.")
+                             .arg(tracked));
+    }
 
     {
         auto *m = manager.monitorFromCursor();

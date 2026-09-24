@@ -233,17 +233,18 @@ QVector<HWND> SpaceManager::windowsOn(HMONITOR hmon, int spaceIndex) const
         return {};
     QVector<HWND> out;
     out.reserve(int(m->spaces[spaceIndex].windows.size()));
+    // Include windows we hid ourselves (IsWindowVisible is false then).
     for (HWND h : m->spaces[spaceIndex].windows)
-        if (::IsWindow(h) && ::IsWindowVisible(h))
+        if (::IsWindow(h))
             out.push_back(h);
-    // Prefer Z-order top-to-bottom for overview aesthetics.
+    // Prefer Z-order top-to-bottom for overview aesthetics (include windows we hid).
     QVector<HWND> zordered;
     zordered.reserve(out.size());
     for (HWND h : WindowTracker::snapshotManageableWindows()) {
         if (out.contains(h))
             zordered.push_back(h);
     }
-    // Include any tracked windows missing from the snapshot (edge cases).
+    // snapshot skips own-process and may skip hidden-untracked; append rest.
     for (HWND h : out)
         if (!zordered.contains(h))
             zordered.push_back(h);

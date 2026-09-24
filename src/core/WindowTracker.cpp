@@ -110,12 +110,16 @@ QVector<HWND> WindowTracker::snapshotManageableWindows()
 
 bool WindowTracker::isManageable(HWND hwnd)
 {
-    if (!hwnd || !::IsWindow(hwnd) || !::IsWindowVisible(hwnd))
+    if (!hwnd || !::IsWindow(hwnd))
         return false;
+    // Hidden windows are still manageable if they are top-level roots —
+    // we may have hid them via ShowWindow fallback for space switching.
     if (::GetAncestor(hwnd, GA_ROOT) != hwnd)
         return false;
     if (hasNoTaskbarIcon(hwnd))
         return false;
+    // Shell-cloaked by system VD: leave alone unless we already track it
+    // (caller may re-check). For discovery, skip.
     if (isCloakedByShell(hwnd))
         return false;
 
@@ -129,7 +133,7 @@ bool WindowTracker::isManageable(HWND hwnd)
         QStringLiteral("Shell_SecondaryTrayWnd"),
         QStringLiteral("NotifyIconOverflowWindow"),
         QStringLiteral("Windows.UI.Core.CoreWindow"),
-        QStringLiteral("ApplicationFrameWindow"), // handled carefully below
+        QStringLiteral("ApplicationFrameWindow"),
         QStringLiteral("SysListView32"),
         QStringLiteral("SysHeader32"),
         QStringLiteral("ToolTips_Class32"),
@@ -138,7 +142,6 @@ bool WindowTracker::isManageable(HWND hwnd)
     };
     const QString name = QString::fromWCharArray(cls);
     if (banned.contains(name)) {
-        // Keep ApplicationFrameWindow only if it has a real title (UWP host).
         if (name == QLatin1String("ApplicationFrameWindow")) {
             wchar_t title[256]{};
             ::GetWindowTextW(hwnd, title, 256);
@@ -149,18 +152,25 @@ bool WindowTracker::isManageable(HWND hwnd)
         }
     }
 
-    // Skip minimized-to-tray style layered ghosts with empty rect.
     RECT rc{};
     if (!::GetWindowRect(hwnd, &rc))
         return false;
     if (rc.right - rc.left <= 0 || rc.bottom - rc.top <= 0)
         return false;
 
-    // Skip our own process.
     DWORD pid = 0;
     ::GetWindowThreadProcessId(hwnd, &pid);
     if (pid == ::GetCurrentProcessId())
         return false;
+
+    // Require either currently visible, or has a title (so we can re-show
+    // windows we hid for spaces without treating random ghosts as apps).
+    if (!::IsWindowVisible(hwnd)) {
+        wchar_t title[8]{};
+        ::GetWindowTextW(hwnd, title, 8);
+        if (title[0] == L'\0')
+            return false;
+    }
 
     return true;
 }
