@@ -1,37 +1,45 @@
 name: CI
 
+# 分支模型：feat/fix/hotfix/* -> dev -> release -> main
 on:
   push:
-    branches: [main]
+    branches: [main, release, dev, 'feat/**', 'fix/**', 'hotfix/**']
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, release, dev]
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# contents: write only needed by the tag → GitHub Release step; fork PRs
-# automatically get a read-only token.
+# contents: write  —— 打包产物 / 发 Release / 把截图发布到 ci-assets 分支（PR 事件也需要）
+# pull-requests: write —— sticky 评论
 permissions:
   contents: write
+  pull-requests: write
+
+env:
+  QT_VERSION: '6.8.3'
+  QT_ARCH: win64_msvc2022_64
 
 jobs:
+  # ───────────────────────────────────────────────────────────────
+  # 1. 编译 + 单测（远端唯一的测试环境）
+  #    job name 必须与 ruleset 里的 required status check context 完全一致
+  # ───────────────────────────────────────────────────────────────
   build-test:
-    name: Build and test (Windows / MSVC / Qt 6.8.3)
+    name: Build & Test (Windows/Qt)
     runs-on: windows-latest
     timeout-minutes: 45
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
+          version: ${{ env.QT_VERSION }}
+          arch: ${{ env.QT_ARCH }}
           cache: true
 
       - name: Setup MSVC
@@ -45,19 +53,25 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      # offscreen 平台：GUI 单测（含 test_visual_capture 截图测试）无需桌面会话
+      - name: Test (ctest + JUnit)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ctest --test-dir build --output-on-failure --timeout 60 --output-junit junit.xml
 
-      - name: Upload test log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-output
-          path: build/Testing/Temporary/
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Collect diagnostics (TR/EH logs)
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
+          foreach ($p in @('TR/trace.log', 'EH/error.log')) {
+            if (Test-Path $p) { Copy-Item $p diagnostics/ -Force }
+          }
+          Copy-Item build/Testing/Temporary/* diagnostics/ -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Recurse -Filter *.log | Where-Object { $_.FullName -notlike '*\diagnostics\*' } |
+            Select-Object -First 20 | ForEach-Object { Copy-Item $_.FullName "diagnostics/$($_.Name)" -Force }
 
-      # Portable package: SpaceWM.exe + lib/ runtime (Qt DLLs, plugins, CRT).
       - name: Package portable zip
         shell: pwsh
         run: |
@@ -68,16 +82,21 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath SpaceWM-win64.zip -Force
           Get-Item SpaceWM-win64.zip | Select-Object Name, Length
 
-      - name: Upload portable package artifact
+      - name: Upload artifacts (build / screenshots / diagnostics)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SpaceWM-win64
-          path: SpaceWM-win64.zip
-          if-no-files-found: error
+          name: spacewm-ci
+          path: |
+            build/SpaceWM.exe
+            artifacts/screenshots/**
+            junit.xml
+            diagnostics/**
+            SpaceWM-win64.zip
+          if-no-files-found: warn
           retention-days: 30
 
-      # tag push (v*) → GitHub Release with the zip attached.
-      - name: GitHub Release
+      - name: GitHub Release (tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
@@ -85,8 +104,134 @@ jobs:
         run: |
           gh release view "$env:GITHUB_REF_NAME" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "$env:GITHUB_REF_NAME" SpaceWM-win64.zip `
-              --title "$env:GITHUB_REF_NAME" --generate-notes
+            gh release create "$env:GITHUB_REF_NAME" SpaceWM-win64.zip --title "$env:GITHUB_REF_NAME" --generate-notes
           } else {
             gh release upload "$env:GITHUB_REF_NAME" SpaceWM-win64.zip --clobber
           }
+
+  # ───────────────────────────────────────────────────────────────
+  # 2. 代码风格
+  # ───────────────────────────────────────────────────────────────
+  lint:
+    name: Lint / Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 先只做提醒，不作为必过检查：代码目前还没跑过 clang-format，
+    # 等 `clang-format -i src/**` 的格式化 PR 合进来，再把它加进 required status checks。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format check
+        uses: jidicula/clang-format-action@v4.14.0
+        with:
+          clang-format-version: '18'
+          check-path: 'src'
+          exclude-regex: '(^lib/|^build/)'
+
+  # ───────────────────────────────────────────────────────────────
+  # 3. 截图 → ci-assets 分支 → PR sticky 评论
+  #    依赖 build-test 产出的 artifacts/screenshots/
+  # ───────────────────────────────────────────────────────────────
+  visual:
+    name: Visual Screenshots
+    needs: build-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download screenshots + junit
+        uses: actions/download-artifact@v4
+        with:
+          name: spacewm-ci
+          path: ci-out
+
+      - name: Collect report dir
+        run: |
+          mkdir -p report
+          cp -r ci-out/artifacts/screenshots/* report/ 2>/dev/null || echo "no screenshots produced"
+          cp ci-out/junit.xml report/ 2>/dev/null || true
+          ls -la report/ || true
+
+      - name: Publish screenshots to ci-assets branch
+        if: hashFiles('report/*.png') != ''
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: ci-assets
+          destination_dir: runs/${{ github.run_id }}
+          publish_dir: report
+          keep_files: true
+
+      - name: Build report markdown
+        run: |
+          python3 .github/scripts/build_visual_report.py \
+            --dir report \
+            --out report/report.md \
+            --run-id "${{ github.run_id }}" \
+            --sha "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-report
+          path: report/
+          retention-days: 30
+
+      - name: Comment PR (sticky, updated in place)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          IMAGE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/ci-assets/runs/${{ github.run_id }}
+          BUILD_RESULT: ${{ needs.build-test.result }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { commentVisualReport } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/comment_visual_report.js'
+            );
+            await commentVisualReport({
+              github,
+              context,
+              artifactName: 'visual-report',
+              imageBaseUrl: process.env.IMAGE_BASE_URL,
+              buildResult: process.env.BUILD_RESULT,
+            });
+
+  # ───────────────────────────────────────────────────────────────
+  # 4. 可选：真实桌面截图（runner 桌面会话不保证，失败不拦）
+  # ───────────────────────────────────────────────────────────────
+  desktop-screenshot:
+    name: Desktop Screenshot (optional)
+    needs: build-test
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: spacewm-ci
+          path: ci-out
+      - name: Run app and capture desktop
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path shots | Out-Null
+          Copy-Item ci-out/build/SpaceWM.exe shots/
+          Copy-Item lib/* shots/ -Recurse
+          $p = Start-Process -FilePath shots/SpaceWM.exe -PassThru
+          Start-Sleep -Seconds 8
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
+          $bmp.Save("shots/desktop.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Stop-Process -Id $p.Id -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-screenshot
+          path: shots/
+          retention-days: 14
