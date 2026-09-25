@@ -39,6 +39,13 @@ public:
     int spaceOfWindow(HWND hwnd) const;
     HMONITOR ownerMonitorOf(HWND hwnd) const;
 
+    // Exclusive spaces (issue #1) — opt-in, per-space, explicit gesture.
+    void setExclusiveSpacesEnabled(bool on);
+    bool exclusiveSpacesEnabled() const { return m_exclusiveSpacesEnabled; }
+    bool setSpaceExclusive(HMONITOR hmon, int index, bool on);
+    bool isSpaceExclusive(HMONITOR hmon, int index) const;
+    bool spaceAcceptsWindow(HMONITOR hmon, int index, HWND hwnd) const;
+
     void adoptExistingWindows();
     void applyVisibility(HMONITOR hmon);
 
@@ -93,6 +100,10 @@ signals:
     void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex);
     // A space's screenshot was re-rendered — overview cards should reload it.
     void spacePreviewInvalidated(quint64 hmon, int spaceIndex);
+    // A space's exclusive flag toggled (or was auto-cleared).
+    void spaceExclusiveChanged(quint64 hmon, int spaceIndex, bool exclusive);
+    // assignWindow refused a window because the target space is exclusive.
+    void assignRejected(quint64 hmon, int spaceIndex, quint64 hwnd);
 
 private:
     void ensureMonitor(HMONITOR hmon);
@@ -105,6 +116,7 @@ private:
 
     bool m_overviewOpen = false;
     bool m_animationEnabled = true;
+    bool m_exclusiveSpacesEnabled = false;
     // Cold start: every monitor begins with exactly one space (issue #8).
     // Space lists are never persisted — added spaces are session-only.
     int m_defaultSpaceCount = 1;

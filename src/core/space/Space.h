@@ -22,6 +22,9 @@ struct Space {
     QVector<HWND> zOrder;
     // Last rendered preview: wallpaper full-bleed + windows in Z-order (not a BitBlt).
     QImage screenshot;
+    // Exclusive space (issue #1): only ever holds its single bound window.
+    // Opt-in via overview right-click; only honored when the global switch is on.
+    bool exclusive = false;
 };
 
 struct MonitorSpaces {

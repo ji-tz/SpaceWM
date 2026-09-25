@@ -135,6 +135,36 @@ private slots:
         QVERIFY(!card.isRemoveBadgeShown());
     }
 
+    void exclusiveBadgeToggles()
+    {
+        SpaceCardWidget card;
+        card.setSpace(0, QStringLiteral("Ex"), false);
+        QVERIFY(!card.isExclusive());
+        card.setExclusive(true);
+        QVERIFY(card.isExclusive());
+        card.setExclusive(true); // idempotent
+        QVERIFY(card.isExclusive());
+        card.setExclusive(false);
+        QVERIFY(!card.isExclusive());
+    }
+
+    void rightClickEmitsContextMenu()
+    {
+        SpaceCardWidget card;
+        card.setSpace(2, QStringLiteral("Right"), false);
+        QSignalSpy spy(&card, &SpaceCardWidget::contextMenuRequested);
+        QSignalSpy activated(&card, &SpaceCardWidget::activated);
+
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(15, 15),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        QApplication::sendEvent(&card, &press);
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toInt(), 2);
+        QVERIFY(!spy.first().at(1).toPoint().isNull());
+        QCOMPARE(activated.count(), 0);
+    }
+
     void leaveDoesNotCrash()
     {
         SpaceCardWidget card;

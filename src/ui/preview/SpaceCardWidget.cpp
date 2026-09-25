@@ -203,6 +203,14 @@ void SpaceCardWidget::setHighlighted(bool on)
     update();
 }
 
+void SpaceCardWidget::setExclusive(bool on)
+{
+    if (m_exclusive == on)
+        return;
+    m_exclusive = on;
+    update();
+}
+
 void SpaceCardWidget::setRemovable(bool on)
 {
     if (m_removable == on)
@@ -250,6 +258,26 @@ QRect SpaceCardWidget::removeBadgeRect() const
 void SpaceCardWidget::paintEvent(QPaintEvent *event)
 {
     QFrame::paintEvent(event);
+
+    // Exclusive badge (issue #1): small amber lock in the top-left corner.
+    if (m_exclusive) {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const int s = m_compact ? 18 : 22;
+        const QRect r(6, 6, s, s);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 193, 7, 230));
+        p.drawRoundedRect(r, s / 3.0, s / 3.0);
+        // Lock glyph: shackle arc + solid body.
+        p.setPen(QPen(QColor(40, 40, 40), 2));
+        p.setBrush(Qt::NoBrush);
+        const int cx = r.center().x();
+        const int bodyTop = r.top() + s * 2 / 5;
+        p.drawArc(QRect(cx - s / 4, r.top() + 2, s / 2, s / 2), 0, 180 * 16);
+        p.setBrush(QColor(40, 40, 40));
+        p.drawRect(QRect(cx - s / 4, bodyTop, s / 2, r.bottom() - bodyTop));
+    }
+
     if (!m_removable || !m_removeShown)
         return;
     QPainter p(this);
@@ -331,6 +359,11 @@ void SpaceCardWidget::dropEvent(QDropEvent *event)
 
 void SpaceCardWidget::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::RightButton) {
+        emit contextMenuRequested(m_index, event->globalPosition().toPoint());
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton && m_removable && m_removeShown
         && removeBadgeRect().contains(event->pos())) {
         // Badge press: do not arm card activation.

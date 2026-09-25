@@ -106,6 +106,19 @@ void AppSettings::setAutoStart(bool on)
     emit changed();
 }
 
+bool AppSettings::exclusiveSpaces() const
+{
+    QSettings s(kOrg, kApp);
+    return s.value(QStringLiteral("general/exclusiveSpaces"), false).toBool();
+}
+
+void AppSettings::setExclusiveSpaces(bool on)
+{
+    QSettings s(kOrg, kApp);
+    s.setValue(QStringLiteral("general/exclusiveSpaces"), on);
+    emit changed();
+}
+
 bool AppSettings::applyAutoStartRegistry(bool enable)
 {
     HKEY key = nullptr;

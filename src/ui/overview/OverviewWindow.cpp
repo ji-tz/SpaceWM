@@ -8,6 +8,7 @@
 #include "core/window/WindowTracker.h"
 
 #include <QEvent>
+#include <QAction>
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -15,6 +16,7 @@
 #include <QLabel>
 #include <QColor>
 #include <QLayout>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPropertyAnimation>
 #include <QScrollArea>
@@ -54,6 +56,15 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
                 refreshCardScreenshot(i);
             rebuildWindowPreviews();
         });
+        // Exclusive flag toggled (right-click or auto-unbind) → sync card badges.
+        connect(m_manager, &SpaceManager::spaceExclusiveChanged, this,
+                [this](quint64 hmon, int spaceIndex) {
+                    if (!m_open || !m_hmon || hmon != quint64(m_hmon))
+                        return;
+                    if (spaceIndex >= 0 && spaceIndex < m_cards.size())
+                        m_cards[spaceIndex]->setExclusive(
+                            m_manager->isSpaceExclusive(m_hmon, spaceIndex));
+                });
         // New/moved window on this monitor → refresh bottom strip (taskbar launches etc.).
         connect(m_manager, &SpaceManager::windowTracked, this, [this](quint64 hwnd) {
             if (!m_open || !m_hmon || !m_manager)
@@ -91,6 +102,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     m_hint->setStyleSheet(QStringLiteral(
         "QLabel { color: rgba(255,255,255,140); font-size: 13px; "
         "background: transparent; border: none; }"));
+    m_defaultHint = m_hint->text();
     v->addWidget(m_hint);
 
     // --- Top: space strip ---
@@ -190,6 +202,12 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     auto *m = m_manager->monitorOf(m_hmon);
     if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
         return false;
+
+    // Exclusive space refuses windows that are not its bound member.
+    if (!m_manager->spaceAcceptsWindow(m_hmon, spaceIndex, hwnd)) {
+        showHint(tr("This space is exclusive — it cannot accept another window."));
+        return false;
+    }
 
     if (!m_manager->trackWindow(hwnd))
         return false;
@@ -496,6 +514,12 @@ void OverviewWindow::rebuildCards()
         card->setScreenshot(shot);
         // All spaces with >1 total: × after 2s hover (empty spaces merge windows too).
         card->setRemovable(m->spaces.size() > 1);
+        card->setExclusive(m_manager ? m_manager->isSpaceExclusive(m_hmon, i) : false);
+
+        connect(card, &SpaceCardWidget::contextMenuRequested, this,
+                [this](int spaceIndex, const QPoint &globalPos) {
+                    showContextMenu(spaceIndex, globalPos);
+                });
 
         connect(card, &SpaceCardWidget::activated, this, [this](int idx) {
             if (!m_open)
@@ -777,6 +801,7 @@ void OverviewWindow::refreshCardBadges()
         const bool isCurrent = (i == m->currentIndex);
         m_cards[i]->setSpace(i, m->spaces[i].name, isCurrent);
         m_cards[i]->setHighlighted(i == m_selected);
+        m_cards[i]->setExclusive(m_manager ? m_manager->isSpaceExclusive(m_hmon, i) : false);
     }
 }
 
@@ -804,6 +829,44 @@ void OverviewWindow::setSelected(int index)
     m_selected = index;
     for (int i = 0; i < m_cards.size(); ++i)
         m_cards[i]->setHighlighted(i == index);
+}
+
+void OverviewWindow::showHint(const QString &text)
+{
+    if (!m_hint)
+        return;
+    m_hint->setText(text);
+    const QString def = m_defaultHint;
+    QTimer::singleShot(3000, this, [this, def]() {
+        if (m_hint)
+            m_hint->setText(def);
+    });
+}
+
+void OverviewWindow::showContextMenu(int spaceIndex, const QPoint &globalPos)
+{
+    if (!m_open || !m_manager || !m_hmon)
+        return;
+    auto *m = m_manager->monitorOf(m_hmon);
+    if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
+        return;
+
+    QMenu menu(this);
+    QAction *exclusive = menu.addAction(tr("Exclusive space (one window)"));
+    exclusive->setCheckable(true);
+    exclusive->setChecked(m_manager->isSpaceExclusive(m_hmon, spaceIndex));
+    exclusive->setEnabled(m_manager->exclusiveSpacesEnabled());
+
+    QAction *chosen = menu.exec(globalPos);
+    if (chosen != exclusive)
+        return;
+
+    const bool want = exclusive->isChecked();
+    if (!m_manager->setSpaceExclusive(m_hmon, spaceIndex, want)) {
+        showHint(tr("Could not make this space exclusive (too many windows)."));
+        return;
+    }
+    refreshCardBadges();
 }
 
 void OverviewWindow::keyPressEvent(QKeyEvent *event)

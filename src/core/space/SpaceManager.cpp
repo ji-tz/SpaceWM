@@ -358,6 +358,12 @@ bool SpaceManager::removeSpace(HMONITOR hmon, int index)
     removed.windows.clear();
     removed.zOrder.clear();
 
+    // Merge wins: an exclusive keep space that now holds >1 window unbinds.
+    if (keep.exclusive && keep.windows.size() > 1) {
+        keep.exclusive = false;
+        emit spaceExclusiveChanged(reinterpret_cast<quint64>(hmon), dest, false);
+    }
+
     m->spaces.remove(index);
 
     // Fix currentIndex after removal.
@@ -427,6 +433,13 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
     if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size() || !hwnd)
         return false;
 
+    // Exclusive target refuses any window that is not already its bound member.
+    if (!spaceAcceptsWindow(hmon, spaceIndex, hwnd)) {
+        emit assignRejected(reinterpret_cast<quint64>(hmon), spaceIndex,
+                            reinterpret_cast<quint64>(hwnd));
+        return false;
+    }
+
     // Leave previous space if any (refresh vacated card later).
     int prevSpace = -1;
     HMONITOR prevMon = nullptr;
@@ -437,6 +450,13 @@ bool SpaceManager::assignWindow(HWND hwnd, HMONITOR hmon, int spaceIndex)
             prevSpace = prev.space;
             prevMon = pm->hmon;
             pm->spaces[prev.space].windows.remove(hwnd);
+            // Moving the bound window OUT of an exclusive source unbinds it.
+            if (pm->spaces[prev.space].exclusive
+                && (pm->hmon != hmon || prev.space != spaceIndex)) {
+                pm->spaces[prev.space].exclusive = false;
+                emit spaceExclusiveChanged(reinterpret_cast<quint64>(pm->hmon),
+                                           prev.space, false);
+            }
         }
     }
 
@@ -459,6 +479,66 @@ int SpaceManager::spaceOfWindow(HWND hwnd) const
 {
     auto it = m_owner.constFind(hwnd);
     return it == m_owner.constEnd() ? -1 : it.value().space;
+}
+
+void SpaceManager::setExclusiveSpacesEnabled(bool on)
+{
+    if (m_exclusiveSpacesEnabled == on)
+        return;
+    m_exclusiveSpacesEnabled = on;
+    // Disabling clears every exclusive flag so behavior matches the old model.
+    if (!on) {
+        for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+            MonitorSpaces &mon = it.value();
+            for (int i = 0; i < mon.spaces.size(); ++i) {
+                if (mon.spaces[i].exclusive) {
+                    mon.spaces[i].exclusive = false;
+                    emit spaceExclusiveChanged(reinterpret_cast<quint64>(mon.hmon), i, false);
+                }
+            }
+        }
+    }
+}
+
+bool SpaceManager::setSpaceExclusive(HMONITOR hmon, int index, bool on)
+{
+    auto *m = monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return false;
+    if (on && !m_exclusiveSpacesEnabled)
+        return false;
+
+    Space &sp = m->spaces[index];
+    if (sp.exclusive == on)
+        return true;
+    if (on && sp.windows.size() > 1)
+        return false;
+
+    sp.exclusive = on;
+    emit spaceExclusiveChanged(reinterpret_cast<quint64>(hmon), index, on);
+    return true;
+}
+
+bool SpaceManager::isSpaceExclusive(HMONITOR hmon, int index) const
+{
+    auto *self = const_cast<SpaceManager *>(this);
+    auto *m = self->monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return false;
+    return m->spaces[index].exclusive;
+}
+
+bool SpaceManager::spaceAcceptsWindow(HMONITOR hmon, int index, HWND hwnd) const
+{
+    auto *self = const_cast<SpaceManager *>(this);
+    auto *m = self->monitorOf(hmon);
+    if (!m || index < 0 || index >= m->spaces.size())
+        return false;
+    const Space &sp = m->spaces[index];
+    if (!sp.exclusive)
+        return true;
+    // Exclusive: accept only the bound member — empty (first assign) or itself.
+    return sp.windows.isEmpty() || sp.windows.contains(hwnd);
 }
 
 HMONITOR SpaceManager::ownerMonitorOf(HWND hwnd) const
@@ -599,6 +679,12 @@ void SpaceManager::untrackWindow(HWND hwnd)
     if (auto *m = monitorOf(reinterpret_cast<HMONITOR>(owner.hmon))) {
         if (owner.space >= 0 && owner.space < m->spaces.size()) {
             m->spaces[owner.space].windows.remove(hwnd);
+            // Exclusive space that emptied on untrack unbinds itself.
+            if (m->spaces[owner.space].exclusive && m->spaces[owner.space].windows.isEmpty()) {
+                m->spaces[owner.space].exclusive = false;
+                emit spaceExclusiveChanged(reinterpret_cast<quint64>(m->hmon),
+                                           owner.space, false);
+            }
             // Membership changed → repaint that space only.
             rebuildSpaceScreenshot(reinterpret_cast<HMONITOR>(owner.hmon), owner.space);
         }

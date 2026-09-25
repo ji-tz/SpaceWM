@@ -89,6 +89,8 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     auto *genLayout = new QVBoxLayout(genPage);
     m_autoStart = new QCheckBox(tr("Start when Windows starts"), genPage);
     genLayout->addWidget(m_autoStart);
+    m_exclusiveSpaces = new QCheckBox(tr("Exclusive spaces (one window per space)"), genPage);
+    genLayout->addWidget(m_exclusiveSpaces);
     genLayout->addStretch(1);
     tabs->addTab(genPage, tr("General"));
 
@@ -118,6 +120,7 @@ void SettingsDialog::reload()
     m_preset->setCurrentIndex(idx >= 0 ? idx : 0);
     loadHotkeyRows();
     m_autoStart->setChecked(s.autoStart());
+    m_exclusiveSpaces->setChecked(s.exclusiveSpaces());
 }
 
 void SettingsDialog::loadHotkeyRows()
@@ -238,6 +241,7 @@ void SettingsDialog::applyAndSave(bool close)
     }
 
     s.setAutoStart(m_autoStart->isChecked());
+    s.setExclusiveSpaces(m_exclusiveSpaces->isChecked());
 
     emit settingsApplied();
 }
