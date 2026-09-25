@@ -11,7 +11,7 @@
 // Bindings are configurable (including Win-combos that occupy system shortcuts).
 class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     Q_OBJECT
-public:
+  public:
     enum Action {
         SwitchPrevSpace = 1,
         SwitchNextSpace = 2,
@@ -26,7 +26,7 @@ public:
         int action = 0;
         UINT modifiers = 0; // MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN
         UINT vk = 0;
-        QString sequence;   // portable QKeySequence text (UI / settings)
+        QString sequence; // portable QKeySequence text (UI / settings)
     };
 
     // Pure LL-hook policy for the physical Win key (unit-tested).
@@ -64,17 +64,16 @@ public:
     //   foreignModifierHeld — Ctrl/Alt/Shift down (e.g. Ctrl+Win with no trigger)
     // Swallow both cases so Windows does not open the Start/Windows menu;
     // plain Win tap still injects down+up so Start keeps working.
-    static WinUpDecision winKeyUpDecision(bool deferredNotForwarded,
-                                          bool chordKeyAte,
+    static WinUpDecision winKeyUpDecision(bool deferredNotForwarded, bool chordKeyAte,
                                           bool foreignModifierHeld);
 
     // native filter
     bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override;
 
-signals:
+  signals:
     void actionTriggered(int action);
 
-private:
+  private:
     struct BindingInternal {
         int id = 0;
         UINT modifiers = 0;

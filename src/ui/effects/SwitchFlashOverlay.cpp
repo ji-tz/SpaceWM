@@ -5,8 +5,8 @@
 #include <QTimer>
 
 SwitchFlashOverlay::SwitchFlashOverlay(QWidget *parent)
-    : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool | Qt::WindowTransparentForInput
-              | Qt::WindowDoesNotAcceptFocus | Qt::WindowStaysOnTopHint)
+    : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool | Qt::WindowTransparentForInput |
+                          Qt::WindowDoesNotAcceptFocus | Qt::WindowStaysOnTopHint)
 {
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_ShowWithoutActivating, true);

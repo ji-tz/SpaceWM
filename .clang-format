@@ -1,0 +1,25 @@
+# SpaceWM 代码格式规范（clang-format 18）
+# 这份配置是按现有代码风格反推出来的：改动面最小（48 个文件里 43 个、8860 行里 671 行），
+# 且经验证**只动空白**（注释不重排、include 不排序、不拆字符串），逻辑零改动。
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterNamespace: false
+  AfterControlStatement: false
+  AfterFunction: true
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  SplitEmptyFunction: false
+PointerAlignment: Right
+SortIncludes: false
+BreakStringLiterals: false
+ReflowComments: false
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: Never
+AllowShortFunctionsOnASingleLine: Inline

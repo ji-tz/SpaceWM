@@ -9,7 +9,7 @@ class QTimer;
 // cheap "slide/fade" cue without capturing the framebuffer every frame.
 class SwitchFlashOverlay : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit SwitchFlashOverlay(QWidget *parent = nullptr);
 
     // Play a short directional flash on the given monitor geometry.
@@ -18,10 +18,10 @@ public:
 
     bool isPlaying() const { return m_playing; }
 
-protected:
+  protected:
     void paintEvent(QPaintEvent *event) override;
 
-private:
+  private:
     void start(int direction);
 
     bool m_playing = false;

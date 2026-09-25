@@ -4,7 +4,7 @@
 
 class TestSpaceCard : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void setSpaceUpdatesLabels()
     {
         SpaceCardWidget card;
@@ -18,7 +18,7 @@ private slots:
         SpaceCardWidget card;
         card.setSpace(0, QStringLiteral("S1"), false);
         card.setHighlighted(true);
-        card.setHighlighted(true);  // idempotent
+        card.setHighlighted(true); // idempotent
         card.setHighlighted(false);
         card.setHighlighted(false);
         QVERIFY(true);
@@ -34,7 +34,7 @@ private slots:
         // Null must not wipe the image / show "No preview".
         card.setScreenshot(QImage());
         card.setThumbnails({});
-        card.setThumbnails({ QImage() });
+        card.setThumbnails({QImage()});
         QVERIFY(true);
     }
 
@@ -53,7 +53,7 @@ private slots:
         SpaceCardWidget card;
         QImage img(64, 32, QImage::Format_ARGB32_Premultiplied);
         img.fill(Qt::blue);
-        card.setThumbnails({ img, img, img, img, img });
+        card.setThumbnails({img, img, img, img, img});
         QVERIFY(true);
     }
 
@@ -64,11 +64,11 @@ private slots:
         QSignalSpy spy(&card, &SpaceCardWidget::activated);
 
         // Activation fires on release (press+release without drag / badge).
-        QMouseEvent press(QEvent::MouseButtonPress, QPointF(10, 10),
-                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(10, 10), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
         QApplication::sendEvent(&card, &press);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(10, 10),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(10, 10), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(&card, &release);
         QCOMPARE(spy.count(), 1);
         QCOMPARE(spy.first().at(0).toInt(), 1);
@@ -89,11 +89,11 @@ private slots:
         QVERIFY(card.isRemoveBadgeShown());
 
         const QPoint c = card.removeBadge().center();
-        QMouseEvent press(QEvent::MouseButtonPress, QPointF(c),
-                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(c), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
         QApplication::sendEvent(&card, &press);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(c),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(c), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
         QApplication::sendEvent(&card, &release);
 
         QCOMPARE(removed.count(), 1);

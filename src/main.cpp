@@ -84,11 +84,10 @@ int main(int argc, char *argv[])
     QWinEventNotifier *quitNotifier = nullptr;
     if (quitEvent) {
         quitNotifier = new QWinEventNotifier(quitEvent, &app);
-        QObject::connect(quitNotifier, &QWinEventNotifier::activated, &app,
-                         [&app]() {
-                             cloak::showAllHidden();
-                             app.quit();
-                         });
+        QObject::connect(quitNotifier, &QWinEventNotifier::activated, &app, [&app]() {
+            cloak::showAllHidden();
+            app.quit();
+        });
     }
 
     SpaceManager manager;
@@ -100,12 +99,10 @@ int main(int argc, char *argv[])
     SettingsDialog settings;
 
     // --- wire tracker -> manager ---
-    QObject::connect(&tracker, &WindowTracker::windowCreated, &manager, [&](quint64 h) {
-        manager.trackWindow(reinterpret_cast<HWND>(h));
-    });
-    QObject::connect(&tracker, &WindowTracker::windowDestroyed, &manager, [&](quint64 h) {
-        manager.untrackWindow(reinterpret_cast<HWND>(h));
-    });
+    QObject::connect(&tracker, &WindowTracker::windowCreated, &manager,
+                     [&](quint64 h) { manager.trackWindow(reinterpret_cast<HWND>(h)); });
+    QObject::connect(&tracker, &WindowTracker::windowDestroyed, &manager,
+                     [&](quint64 h) { manager.untrackWindow(reinterpret_cast<HWND>(h)); });
     // When a window moves across monitors, re-home it to the new monitor's current space.
     QObject::connect(&tracker, &WindowTracker::windowMoved, &manager, [&](quint64 h) {
         HWND hwnd = reinterpret_cast<HWND>(h);
@@ -145,8 +142,7 @@ int main(int argc, char *argv[])
             return;
         if (ownedSpace < 0)
             manager.trackWindow(hwnd);
-        if (manager.ownerMonitorOf(hwnd) != mon
-            || manager.spaceOfWindow(hwnd) != m->currentIndex)
+        if (manager.ownerMonitorOf(hwnd) != mon || manager.spaceOfWindow(hwnd) != m->currentIndex)
             manager.assignWindow(hwnd, mon, m->currentIndex);
 
         // Leave preview; stay on the real current space with the app shown.
@@ -154,25 +150,22 @@ int main(int argc, char *argv[])
     });
 
     // Display change
-    QObject::connect(&app, &QGuiApplication::screenAdded, &manager, [&]() {
-        manager.refreshMonitors();
-    });
-    QObject::connect(&app, &QGuiApplication::screenRemoved, &manager, [&]() {
-        manager.refreshMonitors();
-    });
+    QObject::connect(&app, &QGuiApplication::screenAdded, &manager,
+                     [&]() { manager.refreshMonitors(); });
+    QObject::connect(&app, &QGuiApplication::screenRemoved, &manager,
+                     [&]() { manager.refreshMonitors(); });
 
     // --- switch animation flash ---
     QObject::connect(&manager, &SpaceManager::requestSwitchAnimation, &flash,
                      [&](quint64 hmon, int from, int to) {
-        auto *m = manager.monitorOf(reinterpret_cast<HMONITOR>(hmon));
-        if (!m)
-            return;
-        const int dir = (to > from) ? 1 : -1;
-        flash.play(m->geometry, dir);
-    });
+                         auto *m = manager.monitorOf(reinterpret_cast<HMONITOR>(hmon));
+                         if (!m)
+                             return;
+                         const int dir = (to > from) ? 1 : -1;
+                         flash.play(m->geometry, dir);
+                     });
 
-    QObject::connect(&manager, &SpaceManager::spaceChanged, &tray,
-                     [&](quint64 hmon, int index) {
+    QObject::connect(&manager, &SpaceManager::spaceChanged, &tray, [&](quint64 hmon, int index) {
         auto *m = manager.monitorOf(reinterpret_cast<HMONITOR>(hmon));
         if (!m)
             return;
@@ -180,9 +173,7 @@ int main(int argc, char *argv[])
     });
 
     // --- overview: every monitor at once (Mission Control style) ---
-    auto openOverview = [&]() {
-        overview.openAll();
-    };
+    auto openOverview = [&]() { overview.openAll(); };
     auto toggleOverview = [&]() {
         if (overview.isOpen())
             overview.closeAll(false);
@@ -190,8 +181,7 @@ int main(int argc, char *argv[])
             overview.openAll();
     };
 
-    QObject::connect(&overview, &OverviewHost::spaceChosen, &manager,
-                     [&](quint64 hmon, int space) {
+    QObject::connect(&overview, &OverviewHost::spaceChosen, &manager, [&](quint64 hmon, int space) {
         manager.switchSpace(reinterpret_cast<HMONITOR>(hmon), space, /*animateHint=*/false);
     });
 
@@ -264,7 +254,8 @@ int main(int argc, char *argv[])
         const int n = int(m->spaces.size());
         manager.switchSpace(h, (m->currentIndex - 1 + n) % n, true);
     });
-    QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager, &SpaceManager::refreshMonitors);
+    QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager,
+                     &SpaceManager::refreshMonitors);
     QObject::connect(&tray, &TrayIcon::quitRequested, &app, [&]() {
         // Graceful quit: uncloak every window WE hid in this process.
         // Never shows windows we did not hide.
@@ -297,9 +288,10 @@ int main(int argc, char *argv[])
         for (MonitorSpaces *m : manager.monitors())
             for (const Space &sp : m->spaces)
                 tracked += int(sp.windows.size());
-        tray.showMessage(QObject::tr("SpaceWM"),
-                         QObject::tr("Tracking %1 window(s). Ctrl+Alt+←/→ switch, Ctrl+Alt+Space overview.")
-                             .arg(tracked));
+        tray.showMessage(
+            QObject::tr("SpaceWM"),
+            QObject::tr("Tracking %1 window(s). Ctrl+Alt+←/→ switch, Ctrl+Alt+Space overview.")
+                .arg(tracked));
     }
 
     {

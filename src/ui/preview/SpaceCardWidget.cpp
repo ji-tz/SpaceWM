@@ -123,9 +123,12 @@ void SpaceCardWidget::setCompact(bool compact)
         return;
     m_compact = compact;
     if (m_title)
-        m_title->setStyleSheet(compact
-            ? QStringLiteral("QLabel { color: #f0f0f0; font-size: 14px; font-weight: 600; border: none; background: transparent; }")
-            : QStringLiteral("QLabel { color: #f0f0f0; font-size: 16px; font-weight: 600; border: none; background: transparent; }"));
+        m_title->setStyleSheet(
+            compact
+                ? QStringLiteral(
+                      "QLabel { color: #f0f0f0; font-size: 14px; font-weight: 600; border: none; background: transparent; }")
+                : QStringLiteral(
+                      "QLabel { color: #f0f0f0; font-size: 16px; font-weight: 600; border: none; background: transparent; }"));
     applyAspectLayout();
     paintPixmap();
 }
@@ -149,9 +152,12 @@ void SpaceCardWidget::setSpace(int index, const QString &name, bool current)
     m_current = current;
     m_title->setText(name);
     m_badge->setText(current ? tr("CURRENT") : QString::number(index + 1));
-    m_badge->setStyleSheet(current
-        ? QStringLiteral("QLabel { color: #0b0b0f; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9px; background: #7aa2ff; border: none; }")
-        : QStringLiteral("QLabel { color: #c8c8d0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9px; background: rgba(255,255,255,30); border: none; }"));
+    m_badge->setStyleSheet(
+        current
+            ? QStringLiteral(
+                  "QLabel { color: #0b0b0f; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9px; background: #7aa2ff; border: none; }")
+            : QStringLiteral(
+                  "QLabel { color: #c8c8d0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9px; background: rgba(255,255,255,30); border: none; }"));
     setProperty("current", current);
     style()->unpolish(this);
     style()->polish(this);
@@ -331,8 +337,8 @@ void SpaceCardWidget::dropEvent(QDropEvent *event)
 
 void SpaceCardWidget::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton && m_removable && m_removeShown
-        && removeBadgeRect().contains(event->pos())) {
+    if (event->button() == Qt::LeftButton && m_removable && m_removeShown &&
+        removeBadgeRect().contains(event->pos())) {
         // Badge press: do not arm card activation.
         m_pressed = false;
         m_draggingReorder = false;
@@ -352,8 +358,8 @@ void SpaceCardWidget::mousePressEvent(QMouseEvent *event)
 void SpaceCardWidget::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_pressed && (event->buttons() & Qt::LeftButton)) {
-        if (!m_draggingReorder
-            && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
+        if (!m_draggingReorder &&
+            (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
             m_draggingReorder = true;
         }
         if (m_draggingReorder) {

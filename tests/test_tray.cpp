@@ -4,7 +4,7 @@
 
 class TestTray : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void constructsAndShows()
     {
         TrayIcon tray;

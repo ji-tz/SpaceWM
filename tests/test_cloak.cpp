@@ -7,14 +7,13 @@
 // Cloak is the primitive behind space switching: hide/show without destroying.
 class TestCloak : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void initTestCase()
     {
         // A plain overlapped window we control.
-        m_hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"SpaceWM cloak test",
-            WS_OVERLAPPEDWINDOW, 0, 0, 200, 100,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        m_hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"SpaceWM cloak test", WS_OVERLAPPEDWINDOW, 0, 0, 200,
+                              100, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(m_hwnd != nullptr);
         ::ShowWindow(m_hwnd, SW_SHOWNORMAL);
     }
@@ -87,7 +86,7 @@ private slots:
         QCOMPARE(cloak::hiddenCount(), 0);
     }
 
-private:
+  private:
     HWND m_hwnd = nullptr;
 };
 

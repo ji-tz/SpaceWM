@@ -6,16 +6,16 @@
 // QSettings-backed app preferences (hotkeys, general).
 class AppSettings : public QObject {
     Q_OBJECT
-public:
+  public:
     explicit AppSettings(QObject *parent = nullptr);
 
     // Hotkey sequences (QKeySequence portable text), e.g. "Ctrl+Alt+Left".
-    QString hotkey(int action) const;          // action = HotkeyManager::Action
+    QString hotkey(int action) const; // action = HotkeyManager::Action
     void setHotkey(int action, const QString &sequence);
     QString hotkeyOrDefault(int action) const; // never empty
 
     // "default" → Ctrl+Alt+…; "system" → Win+Tab / Ctrl+Win+←/→
-    QString hotkeyPreset() const;              // "default" | "system" | "custom"
+    QString hotkeyPreset() const; // "default" | "system" | "custom"
     void setHotkeyPreset(const QString &preset);
 
     bool autoStart() const;
@@ -25,9 +25,9 @@ public:
     static bool applyAutoStartRegistry(bool enable);
     static bool autoStartRegistryEnabled();
 
-signals:
+  signals:
     void changed();
 
-private:
+  private:
     void syncHotkeysFromPreset(const QString &preset);
 };

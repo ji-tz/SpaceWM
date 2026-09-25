@@ -4,7 +4,7 @@
 
 class TestFlashOverlay : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void emptyGeometryIsIgnored()
     {
         SwitchFlashOverlay o;
