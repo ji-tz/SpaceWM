@@ -12,7 +12,7 @@
 
 class SpaceManager : public QObject {
     Q_OBJECT
-public:
+  public:
     explicit SpaceManager(QObject *parent = nullptr);
 
     void refreshMonitors();
@@ -85,7 +85,7 @@ public:
     // Reorder: move space[from] to index[to] (drag in the strip).
     bool moveSpace(HMONITOR hmon, int from, int to);
 
-signals:
+  signals:
     void spaceChanged(quint64 hmon, int index);
     void monitorLayoutChanged();
     void windowTracked(quint64 hwnd);
@@ -94,13 +94,16 @@ signals:
     // A space's screenshot was re-rendered — overview cards should reload it.
     void spacePreviewInvalidated(quint64 hmon, int spaceIndex);
 
-private:
+  private:
     void ensureMonitor(HMONITOR hmon);
     void cloakWindow(HWND hwnd, bool hide);
     void placeNewWindow(HWND hwnd);
 
     QHash<quintptr, MonitorSpaces> m_monitors;
-    struct Owner { quintptr hmon = 0; int space = -1; };
+    struct Owner {
+        quintptr hmon = 0;
+        int space = -1;
+    };
     QHash<HWND, Owner> m_owner;
 
     bool m_overviewOpen = false;

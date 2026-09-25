@@ -5,7 +5,7 @@
 
 class TestHotkeys : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void constructsAndDestructsCleanly()
     {
         // Must not crash without / with app instance (QTEST_MAIN provides one).
@@ -47,10 +47,8 @@ private slots:
 
     void winKeyDownDefersOnlyWhenWinBindingsArmed()
     {
-        QCOMPARE(HotkeyManager::winKeyDownDecision(false),
-                 HotkeyManager::WinDownDecision::Pass);
-        QCOMPARE(HotkeyManager::winKeyDownDecision(true),
-                 HotkeyManager::WinDownDecision::Defer);
+        QCOMPARE(HotkeyManager::winKeyDownDecision(false), HotkeyManager::WinDownDecision::Pass);
+        QCOMPARE(HotkeyManager::winKeyDownDecision(true), HotkeyManager::WinDownDecision::Defer);
     }
 
     // System preset: Ctrl+Win without ←/→ must not complete a shell Win tap

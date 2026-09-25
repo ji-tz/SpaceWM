@@ -29,9 +29,9 @@ QString detectProjectRoot()
 {
     QString dir = QCoreApplication::applicationDirPath();
     for (int i = 0; i < 8 && !dir.isEmpty(); ++i) {
-        if (QFile::exists(dir + QStringLiteral("/AGENTS.md"))
-            && QFile::exists(dir + QStringLiteral("/CMakeLists.txt"))
-            && QDir(dir + QStringLiteral("/src")).exists()) {
+        if (QFile::exists(dir + QStringLiteral("/AGENTS.md")) &&
+            QFile::exists(dir + QStringLiteral("/CMakeLists.txt")) &&
+            QDir(dir + QStringLiteral("/src")).exists()) {
             return dir;
         }
         QDir d(dir);
@@ -87,9 +87,7 @@ void writeCrashLine(const char *kind, const char *detail)
 LONG WINAPI sehHandler(EXCEPTION_POINTERS *info)
 {
     char buf[128];
-    const DWORD code = info && info->ExceptionRecord
-                           ? info->ExceptionRecord->ExceptionCode
-                           : 0;
+    const DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
     std::snprintf(buf, sizeof(buf), "SEH exception=0x%08lX", static_cast<unsigned long>(code));
     writeCrashLine("SEH", buf);
     return EXCEPTION_EXECUTE_HANDLER;
@@ -123,25 +121,23 @@ bool init(const QString &dirOverride)
         spdlog::drop("spacewm-error");
 
         // TR: info+ → <root>/TR/trace.log (append — never wipe on re-init)
-        g_trace = spdlog::basic_logger_mt(
-            "spacewm-trace", (trDir + QStringLiteral("/trace.log")).toStdString(),
-            /*truncate=*/false);
+        g_trace = spdlog::basic_logger_mt("spacewm-trace",
+                                          (trDir + QStringLiteral("/trace.log")).toStdString(),
+                                          /*truncate=*/false);
         g_trace->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
         g_trace->set_level(spdlog::level::info);
         g_trace->flush_on(spdlog::level::info);
 
         // EH: warn+ → <root>/EH/error.log
-        g_error = spdlog::basic_logger_mt(
-            "spacewm-error", (ehDir + QStringLiteral("/error.log")).toStdString(),
-            /*truncate=*/false);
+        g_error = spdlog::basic_logger_mt("spacewm-error",
+                                          (ehDir + QStringLiteral("/error.log")).toStdString(),
+                                          /*truncate=*/false);
         g_error->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] %v");
         g_error->set_level(spdlog::level::warn);
         g_error->flush_on(spdlog::level::warn);
 
         spdlog::set_default_logger(g_trace);
-        g_trace->info("log init root={} TR={} EH={}",
-                      g_root.toStdString(),
-                      trDir.toStdString(),
+        g_trace->info("log init root={} TR={} EH={}", g_root.toStdString(), trDir.toStdString(),
                       ehDir.toStdString());
         return true;
     } catch (const std::exception &ex) {
@@ -234,11 +230,10 @@ void installCrashHandlers()
         return;
     g_crashInstalled = true;
     std::set_terminate(terminateHandler);
-    ::SetUnhandledExceptionFilter(
-        [](EXCEPTION_POINTERS *info) -> LONG {
-            sehHandler(info);
-            return EXCEPTION_EXECUTE_HANDLER;
-        });
+    ::SetUnhandledExceptionFilter([](EXCEPTION_POINTERS *info) -> LONG {
+        sehHandler(info);
+        return EXCEPTION_EXECUTE_HANDLER;
+    });
 }
 
 } // namespace spacelog

@@ -8,7 +8,7 @@
 // Mission Control style: one OverviewWindow per monitor, opened and closed together.
 class OverviewHost : public QObject {
     Q_OBJECT
-public:
+  public:
     explicit OverviewHost(SpaceManager *manager, QObject *parent = nullptr);
     ~OverviewHost() override;
 
@@ -22,11 +22,11 @@ public:
     // Synchronous hide of every panel (tests / emergency).
     void forceHideAll();
 
-signals:
+  signals:
     void spaceChosen(quint64 hmon, int spaceIndex);
     void allClosed();
 
-private:
+  private:
     void ensurePanels();
     void onPanelClosed(int chosen);
     void startExitAllAndFinish();

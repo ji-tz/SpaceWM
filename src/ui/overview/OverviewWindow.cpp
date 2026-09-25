@@ -28,8 +28,8 @@
 #include <cmath>
 
 OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
-    : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool)
-    , m_manager(manager)
+    : QWidget(parent, Qt::FramelessWindowHint | Qt::Tool),
+      m_manager(manager)
 {
     setAttribute(Qt::WA_DeleteOnClose, false);
     setObjectName(QStringLiteral("OverviewRoot"));
@@ -41,8 +41,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
                 [this](quint64 hmon, int spaceIndex) {
                     if (!m_open || !m_hmon || hmon != quint64(m_hmon))
                         return;
-                    if (spaceIndex >= 0 && spaceIndex < m_cards.size()
-                        && spaceIndex < m_manager->spaceCount(m_hmon))
+                    if (spaceIndex >= 0 && spaceIndex < m_cards.size() &&
+                        spaceIndex < m_manager->spaceCount(m_hmon))
                         refreshCardScreenshot(spaceIndex);
                     if (spaceIndex == m_selected)
                         rebuildWindowPreviews();
@@ -79,25 +79,24 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->setSpacing(14);
 
     m_header = new QLabel(m_root);
-    m_header->setStyleSheet(QStringLiteral(
-        "QLabel { color: #ffffff; font-size: 22px; font-weight: 700; "
-        "background: transparent; border: none; }"));
+    m_header->setStyleSheet(
+        QStringLiteral("QLabel { color: #ffffff; font-size: 22px; font-weight: 700; "
+                       "background: transparent; border: none; }"));
     v->addWidget(m_header);
 
-    m_hint = new QLabel(
-        tr("Hover a space to preview it here · click to switch · "
-           "drag windows below onto a space · ←/→ select · Enter confirm · Esc cancel"),
-        m_root);
-    m_hint->setStyleSheet(QStringLiteral(
-        "QLabel { color: rgba(255,255,255,140); font-size: 13px; "
-        "background: transparent; border: none; }"));
+    m_hint =
+        new QLabel(tr("Hover a space to preview it here · click to switch · "
+                      "drag windows below onto a space · ←/→ select · Enter confirm · Esc cancel"),
+                   m_root);
+    m_hint->setStyleSheet(QStringLiteral("QLabel { color: rgba(255,255,255,140); font-size: 13px; "
+                                         "background: transparent; border: none; }"));
     v->addWidget(m_hint);
 
     // --- Top: space strip ---
     auto *spaceLabel = new QLabel(tr("Spaces"), m_root);
-    spaceLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
-        "background: transparent; border: none; }"));
+    spaceLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
+                       "background: transparent; border: none; }"));
     v->addWidget(spaceLabel);
 
     m_spaceStripHost = new QWidget(m_root);
@@ -111,8 +110,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(m_spaceStripHost);
 
     m_addSpaceBtn = new AddSpaceButton(m_spaceStripHost);
-    connect(m_addSpaceBtn, &AddSpaceButton::addRequested, this,
-            [this]() { addSpaceFromStrip(); });
+    connect(m_addSpaceBtn, &AddSpaceButton::addRequested, this, [this]() { addSpaceFromStrip(); });
     connect(m_addSpaceBtn, &AddSpaceButton::windowDropped, this,
             [this](quint64 hwnd) { addSpaceAndPlaceWindow(hwnd); });
 
@@ -121,18 +119,16 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     m_holdTimer = new QTimer(this);
     m_holdTimer->setSingleShot(true);
     m_holdTimer->setInterval(m_holdMs);
-    connect(m_holdTimer, &QTimer::timeout, this, [this]() {
-        restoreStripToCurrentSpace();
-    });
+    connect(m_holdTimer, &QTimer::timeout, this, [this]() { restoreStripToCurrentSpace(); });
     installEventFilter(this);
     m_spaceStripHost->installEventFilter(this);
     // window scroll installed after creation below
 
     // --- Bottom: draggable windows ---
     auto *winLabel = new QLabel(tr("Windows in the previewed space — drag onto a space"), m_root);
-    winLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
-        "background: transparent; border: none; }"));
+    winLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
+                       "background: transparent; border: none; }"));
     v->addWidget(winLabel);
 
     m_windowScroll = new QScrollArea(m_root);
@@ -140,7 +136,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     m_windowScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_windowScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_windowScroll->setFrameShape(QFrame::NoFrame);
-    m_windowScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
+    m_windowScroll->setStyleSheet(
+        QStringLiteral("QScrollArea { background: transparent; border: none; }"));
 
     m_windowHost = new QWidget;
     m_windowHost->setStyleSheet(QStringLiteral("background: transparent;"));
@@ -154,9 +151,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(m_windowScroll, 1);
 
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
-    setStyleSheet(QStringLiteral(
-        "#OverviewRoot { background: rgba(8, 8, 12, 215); }"
-        "#OverviewPanel { background: transparent; }"));
+    setStyleSheet(QStringLiteral("#OverviewRoot { background: rgba(8, 8, 12, 215); }"
+                                 "#OverviewPanel { background: transparent; }"));
 }
 
 QString OverviewWindow::windowTitle(HWND hwnd) const
@@ -273,9 +269,7 @@ void OverviewWindow::pinToMonitorPhysically()
     // Pin to work area so the taskbar stays visible/clickable under the overlay.
     const RECT &r = mi.rcWork;
     if (HWND h = reinterpret_cast<HWND>(winId())) {
-        ::SetWindowPos(h, HWND_TOP,
-                       r.left, r.top,
-                       r.right - r.left, r.bottom - r.top,
+        ::SetWindowPos(h, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top,
                        SWP_NOACTIVATE);
     }
 }
@@ -342,8 +336,8 @@ void OverviewWindow::closeOverview(bool commit)
     if (!commit && m_manager && m_hmon) {
         // Cancel: put the real desktop back so hover previews don't stick.
         auto *m = m_manager->monitorOf(m_hmon);
-        if (m && m_originSpace >= 0 && m_originSpace < m->spaces.size()
-            && m->currentIndex != m_originSpace) {
+        if (m && m_originSpace >= 0 && m_originSpace < m->spaces.size() &&
+            m->currentIndex != m_originSpace) {
             m_manager->previewSpace(m_hmon, m_originSpace);
         }
     }
@@ -364,8 +358,7 @@ void OverviewWindow::closeOverview(bool commit)
             if (!::IsWindow(front))
                 return;
             // Only raise — never ShowWindow(SW_SHOW) for windows we did not hide.
-            ::SetWindowPos(front, HWND_TOP, 0, 0, 0, 0,
-                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            ::SetWindowPos(front, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             ::SetForegroundWindow(front);
         });
     } else {
@@ -482,9 +475,8 @@ void OverviewWindow::rebuildCards()
         auto *card = new SpaceCardWidget(m_root);
         card->setCompact(true); // top strip
         card->setSpace(i, m->spaces[i].name, i == current);
-        card->setMonitorAspect(
-            m->physRect.right - m->physRect.left,
-            m->physRect.bottom - m->physRect.top);
+        card->setMonitorAspect(m->physRect.right - m->physRect.left,
+                               m->physRect.bottom - m->physRect.top);
 
         QImage shot = m->spaces[i].screenshot;
         if (shot.isNull())
@@ -516,12 +508,11 @@ void OverviewWindow::rebuildCards()
             if (m_open)
                 armSoftPreviewHold();
         });
-        connect(card, &SpaceCardWidget::windowDropped, this,
-                [this](int spaceIndex, quint64 hwnd) {
-                    if (!m_open)
-                        return;
-                    placeWindowInSpace(reinterpret_cast<HWND>(hwnd), spaceIndex);
-                });
+        connect(card, &SpaceCardWidget::windowDropped, this, [this](int spaceIndex, quint64 hwnd) {
+            if (!m_open)
+                return;
+            placeWindowInSpace(reinterpret_cast<HWND>(hwnd), spaceIndex);
+        });
         connect(card, &SpaceCardWidget::removeRequested, this, [this](int idx) {
             if (!m_open || !m_manager || !m_hmon)
                 return;
@@ -623,9 +614,9 @@ void OverviewWindow::rebuildWindowPreviews()
     }
 
     if (items.isEmpty()) {
-        auto *empty = new QLabel(
-            idx >= 0 ? tr("No windows in this space") : tr("No windows on this display"),
-            m_windowHost);
+        auto *empty =
+            new QLabel(idx >= 0 ? tr("No windows in this space") : tr("No windows on this display"),
+                       m_windowHost);
         empty->setStyleSheet(QStringLiteral(
             "QLabel { color: rgba(255,255,255,100); font-size: 13px; background: transparent; border: none; }"));
         m_windowStack->addWidget(empty, 0, Qt::AlignLeft);
@@ -758,9 +749,8 @@ void OverviewWindow::rebuildWindowPreviews()
         // Full-resolution cached shot — tile scales once to physical pixels (DPR).
         QImage shot = thumbs::windowShot(it.hwnd);
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
-        connect(tile, &WindowPreviewWidget::activated, this, [this](quint64 h) {
-            activateWindowPreview(reinterpret_cast<HWND>(h));
-        });
+        connect(tile, &WindowPreviewWidget::activated, this,
+                [this](quint64 h) { activateWindowPreview(reinterpret_cast<HWND>(h)); });
         row->addWidget(tile, 0, Qt::AlignTop);
         m_windowPreviews.push_back(tile);
         x += cellW;
@@ -815,8 +805,8 @@ void OverviewWindow::keyPressEvent(QKeyEvent *event)
 
     const int n = m_cards.size();
     if (n <= 0) {
-        if (event->key() == Qt::Key_Escape || event->key() == Qt::Key_Return
-            || event->key() == Qt::Key_Enter) {
+        if (event->key() == Qt::Key_Escape || event->key() == Qt::Key_Return ||
+            event->key() == Qt::Key_Enter) {
             closeOverview(event->key() != Qt::Key_Escape);
             event->accept();
         } else {
@@ -922,9 +912,7 @@ bool OverviewWindow::addSpaceAndPlaceWindow(quint64 hwnd)
     const int last = m_manager->spaceCount(m_hmon) - 1;
     const bool placed = placeWindowInSpace(reinterpret_cast<HWND>(hwnd), last);
     // Stay on origin/current after place (placeWindowInSpace already keeps origin).
-    m_selected = m_manager->monitorOf(m_hmon)
-                     ? m_manager->monitorOf(m_hmon)->currentIndex
-                     : last;
+    m_selected = m_manager->monitorOf(m_hmon) ? m_manager->monitorOf(m_hmon)->currentIndex : last;
     rebuildCards();
     rebuildWindowPreviews();
     refreshCardBadges();
@@ -964,8 +952,8 @@ bool OverviewWindow::isKeepZoneWidget(QObject *w) const
         if (w == m_spaceStripHost || w == m_windowScroll || w == m_windowHost)
             return true;
         // Cards / tiles inside the strip or window scroll.
-        if (qobject_cast<SpaceCardWidget *>(w) || qobject_cast<WindowPreviewWidget *>(w)
-            || w == m_addSpaceBtn)
+        if (qobject_cast<SpaceCardWidget *>(w) || qobject_cast<WindowPreviewWidget *>(w) ||
+            w == m_addSpaceBtn)
             return true;
         w = w->parent();
     }

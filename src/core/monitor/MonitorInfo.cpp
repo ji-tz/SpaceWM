@@ -30,11 +30,9 @@ QRect toLogical(const RECT &phys, HMONITOR hmon)
 {
     const UINT dx = effectiveDpiX(hmon);
     const UINT dy = effectiveDpiY(hmon);
-    return QRect(
-        ::MulDiv(phys.left, 96, int(dx)),
-        ::MulDiv(phys.top, 96, int(dy)),
-        ::MulDiv(phys.right - phys.left, 96, int(dx)),
-        ::MulDiv(phys.bottom - phys.top, 96, int(dy)));
+    return QRect(::MulDiv(phys.left, 96, int(dx)), ::MulDiv(phys.top, 96, int(dy)),
+                 ::MulDiv(phys.right - phys.left, 96, int(dx)),
+                 ::MulDiv(phys.bottom - phys.top, 96, int(dy)));
 }
 
 BOOL CALLBACK enumProc(HMONITOR hmon, HDC, LPRECT, LPARAM data)
@@ -95,8 +93,8 @@ HMONITOR fromCursor()
 
 bool contains(const MonitorEntry &mon, POINT pt)
 {
-    return pt.x >= mon.physRect.left && pt.x < mon.physRect.right
-        && pt.y >= mon.physRect.top && pt.y < mon.physRect.bottom;
+    return pt.x >= mon.physRect.left && pt.x < mon.physRect.right && pt.y >= mon.physRect.top &&
+           pt.y < mon.physRect.bottom;
 }
 
 bool physRectOf(HMONITOR hmon, RECT *out)
@@ -160,8 +158,7 @@ QSize logicalWindowSize(HWND hwnd)
         return {};
     RECT wr{};
     // Prefer visible DWM frame (excludes invisible resize borders).
-    const HRESULT hr = ::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                                               &wr, sizeof(wr));
+    const HRESULT hr = ::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &wr, sizeof(wr));
     if (FAILED(hr) || (wr.right - wr.left) <= 0 || (wr.bottom - wr.top) <= 0) {
         if (!::GetWindowRect(hwnd, &wr))
             return {};

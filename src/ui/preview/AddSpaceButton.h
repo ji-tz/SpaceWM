@@ -6,17 +6,17 @@
 // to add a space and place that window into it.
 class AddSpaceButton : public QFrame {
     Q_OBJECT
-public:
+  public:
     explicit AddSpaceButton(QWidget *parent = nullptr);
 
     // Drop a window HWND onto + (used by dropEvent and unit tests).
     bool handleWindowDrop(quint64 hwnd);
 
-signals:
+  signals:
     void addRequested();
     void windowDropped(quint64 hwnd);
 
-protected:
+  protected:
     void mousePressEvent(QMouseEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
@@ -24,6 +24,6 @@ protected:
     void dropEvent(QDropEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
-private:
+  private:
     bool m_dropHover = false;
 };

@@ -6,7 +6,7 @@
 
 class TestSettings : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void sequenceRoundTrip()
     {
         HotkeyManager::Binding b;
@@ -24,10 +24,9 @@ private slots:
         QCOMPARE(HotkeyManager::systemSequence(HotkeyManager::ToggleOverview),
                  QStringLiteral("Win+Tab"));
         HotkeyManager::Binding b;
-        QVERIFY(HotkeyManager::sequenceToBinding(HotkeyManager::ToggleOverview,
-                                                 HotkeyManager::systemSequence(
-                                                     HotkeyManager::ToggleOverview),
-                                                 &b));
+        QVERIFY(HotkeyManager::sequenceToBinding(
+            HotkeyManager::ToggleOverview,
+            HotkeyManager::systemSequence(HotkeyManager::ToggleOverview), &b));
         QVERIFY(b.modifiers & MOD_WIN);
         QCOMPARE(b.vk, UINT(VK_TAB));
 
@@ -52,8 +51,7 @@ private slots:
         AppSettings s;
         s.setHotkeyPreset(QStringLiteral("system"));
         QCOMPARE(s.hotkeyPreset(), QStringLiteral("system"));
-        QCOMPARE(s.hotkeyOrDefault(HotkeyManager::ToggleOverview),
-                 QStringLiteral("Win+Tab"));
+        QCOMPARE(s.hotkeyOrDefault(HotkeyManager::ToggleOverview), QStringLiteral("Win+Tab"));
         QCOMPARE(s.hotkeyOrDefault(HotkeyManager::SwitchPrevSpace),
                  QStringLiteral("Ctrl+Win+Left"));
 
@@ -63,8 +61,7 @@ private slots:
 
         s.setHotkey(HotkeyManager::ToggleOverview, QStringLiteral("Ctrl+Alt+O"));
         s.setHotkeyPreset(QStringLiteral("custom"));
-        QCOMPARE(s.hotkeyOrDefault(HotkeyManager::ToggleOverview),
-                 QStringLiteral("Ctrl+Alt+O"));
+        QCOMPARE(s.hotkeyOrDefault(HotkeyManager::ToggleOverview), QStringLiteral("Ctrl+Alt+O"));
     }
 
     void hotkeyManagerLoadsSettings()

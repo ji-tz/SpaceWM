@@ -5,10 +5,9 @@
 #include <QTimer>
 
 OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
-    : QObject(parent)
-    , m_manager(manager)
-{
-}
+    : QObject(parent),
+      m_manager(manager)
+{}
 
 OverviewHost::~OverviewHost()
 {

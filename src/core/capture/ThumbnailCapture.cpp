@@ -65,13 +65,14 @@ QImage fillExact(QImage img, int w, int h)
 QString registryWallpaperPath()
 {
     HKEY key = nullptr;
-    if (::RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", 0, KEY_READ, &key) != ERROR_SUCCESS)
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", 0, KEY_READ, &key) !=
+        ERROR_SUCCESS)
         return {};
     wchar_t buf[MAX_PATH]{};
     DWORD size = DWORD(sizeof(buf) - sizeof(wchar_t));
     DWORD type = 0;
-    const LSTATUS st = ::RegQueryValueExW(key, L"Wallpaper", nullptr, &type,
-                                          reinterpret_cast<LPBYTE>(buf), &size);
+    const LSTATUS st =
+        ::RegQueryValueExW(key, L"Wallpaper", nullptr, &type, reinterpret_cast<LPBYTE>(buf), &size);
     ::RegCloseKey(key);
     if (st != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) || !buf[0])
         return {};
@@ -141,8 +142,7 @@ bool looksLikeFailedShot(const QImage &img)
 {
     if (img.isNull() || img.width() < 4 || img.height() < 4)
         return true;
-    const QImage s = img.scaled(16, 16, Qt::IgnoreAspectRatio,
-                                Qt::FastTransformation);
+    const QImage s = img.scaled(16, 16, Qt::IgnoreAspectRatio, Qt::FastTransformation);
     // "Black frame" failure mode: every sampled pixel stays near zero.
     // Any real (even blank-white) content exceeds this ceiling immediately.
     for (int y = 0; y < s.height(); ++y) {
@@ -179,14 +179,15 @@ QImage bitBltWindowFrame(const RECT &rc)
         bmp = ::CreateDIBSection(screen, &bi, BI_RGB, &bits, nullptr, 0);
     }
     if (!mem || !bmp || !bits) {
-        if (bmp) ::DeleteObject(bmp);
-        if (mem) ::DeleteDC(mem);
+        if (bmp)
+            ::DeleteObject(bmp);
+        if (mem)
+            ::DeleteDC(mem);
         ::ReleaseDC(nullptr, screen);
         return {};
     }
     HGDIOBJ old = ::SelectObject(mem, bmp);
-    const BOOL ok = ::BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top,
-                             SRCCOPY | CAPTUREBLT);
+    const BOOL ok = ::BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);
     QImage img;
     if (ok) {
         img = QImage(w, h, QImage::Format_ARGB32);
@@ -237,8 +238,10 @@ QImage capture(HWND hwnd, const QSize &maxSize)
         bmp = ::CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     }
     if (!mem || !bmp || !bits) {
-        if (bmp) ::DeleteObject(bmp);
-        if (mem) ::DeleteDC(mem);
+        if (bmp)
+            ::DeleteObject(bmp);
+        if (mem)
+            ::DeleteDC(mem);
         ::ReleaseDC(nullptr, screen);
         return {};
     }
@@ -275,14 +278,12 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     // Crop to visible DWM frame — GetWindowRect includes invisible resize
     // borders that show up as empty margins in the preview tile.
     RECT vis{};
-    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                                          &vis, sizeof(vis)))) {
+    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &vis, sizeof(vis)))) {
         const int x = vis.left - rc.left;
         const int y = vis.top - rc.top;
         const int w = vis.right - vis.left;
         const int h = vis.bottom - vis.top;
-        if (x >= 0 && y >= 0 && w > 0 && h > 0
-            && x + w <= img.width() && y + h <= img.height()) {
+        if (x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= img.width() && y + h <= img.height()) {
             img = img.copy(x, y, w, h);
         }
     }
@@ -345,16 +346,18 @@ QImage captureMonitor(const RECT &physRect, const QSize &maxSize)
     HDC mem = ::CreateCompatibleDC(screen);
     HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
     if (!mem || !bmp) {
-        if (bmp) ::DeleteObject(bmp);
-        if (mem) ::DeleteDC(mem);
+        if (bmp)
+            ::DeleteObject(bmp);
+        if (mem)
+            ::DeleteDC(mem);
         ::ReleaseDC(nullptr, screen);
         return {};
     }
     HGDIOBJ old = ::SelectObject(mem, bmp);
 
     // CAPTUREBLT includes layered windows.
-    const BOOL ok = ::BitBlt(mem, 0, 0, w, h, screen,
-                             physRect.left, physRect.top, SRCCOPY | CAPTUREBLT);
+    const BOOL ok =
+        ::BitBlt(mem, 0, 0, w, h, screen, physRect.left, physRect.top, SRCCOPY | CAPTUREBLT);
     QImage img;
     if (ok)
         img = gdiToImage(mem, bmp, w, h);
