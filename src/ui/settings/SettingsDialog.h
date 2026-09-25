@@ -44,4 +44,5 @@ private:
     QPushButton *m_captureButton = nullptr;
 
     QCheckBox *m_autoStart = nullptr;
+    QCheckBox *m_exclusiveSpaces = nullptr;
 };

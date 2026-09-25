@@ -92,6 +92,19 @@ private slots:
             QVERIFY(AppSettings::applyAutoStartRegistry(true));
     }
 
+    void exclusiveSpacesRoundTrip()
+    {
+        AppSettings s;
+        // Default is off.
+        QVERIFY(!s.exclusiveSpaces());
+
+        s.setExclusiveSpaces(true);
+        QVERIFY(s.exclusiveSpaces());
+
+        s.setExclusiveSpaces(false);
+        QVERIFY(!s.exclusiveSpaces());
+    }
+
     void settingsDialogConstructsAndReloads()
     {
         SettingsDialog dlg;

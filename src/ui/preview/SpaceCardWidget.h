@@ -21,6 +21,9 @@ public:
     void setScreenshot(const QImage &image);
     void setThumbnails(const QVector<QImage> &images);
     void setHighlighted(bool on);
+    // Exclusive-space badge (issue #1): a small lock shown top-left.
+    void setExclusive(bool on);
+    bool isExclusive() const { return m_exclusive; }
     // Top strip uses smaller budget so a row of spaces fits.
     void setCompact(bool compact);
     // Whether the × badge may appear at all (Overview disables when only 1 space).
@@ -52,6 +55,8 @@ signals:
     void removeRequested(int spaceIndex);
     // Drag-to-reorder: user dragged this card onto target index.
     void reorderRequested(int from, int to);
+    // Right-click on the card body (context menu for exclusive space, etc.).
+    void contextMenuRequested(int spaceIndex, QPoint globalPos);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -84,6 +89,7 @@ private:
     bool m_removable = false;
     bool m_hovered = false;
     bool m_removeShown = false;
+    bool m_exclusive = false;
     bool m_pressed = false;
     bool m_draggingReorder = false;
     int m_revealDelayMs = 2000;

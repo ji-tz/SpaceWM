@@ -21,6 +21,9 @@ public:
     bool autoStart() const;
     void setAutoStart(bool on);
 
+    bool exclusiveSpaces() const;
+    void setExclusiveSpaces(bool on);
+
     // Write HKCU\...\Run entry. Returns false if registry write failed.
     static bool applyAutoStartRegistry(bool enable);
     static bool autoStartRegistryEnabled();

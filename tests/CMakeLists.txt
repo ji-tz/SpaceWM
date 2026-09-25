@@ -15,6 +15,7 @@ set(SPACEWM_TEST_NAMES
   test_window_placement
   test_flash_overlay
   test_tray
+  test_exclusive_space
 )
 
 set(SPACEWM_TEST_EXES "")

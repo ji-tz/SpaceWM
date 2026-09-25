@@ -86,6 +86,8 @@ private:
     void refreshCardBadges();
     void refreshCardScreenshot(int index);
     void setSelected(int index);
+    void showContextMenu(int spaceIndex, const QPoint &globalPos);
+    void showHint(const QString &text);
     void cancelAnimations();
     void playEnterAnimation();
     void playExitAnimation();
@@ -120,6 +122,7 @@ private:
     QWidget *m_root = nullptr;
     QLabel *m_header = nullptr;
     QLabel *m_hint = nullptr;
+    QString m_defaultHint;
     QHBoxLayout *m_cardRow = nullptr;
     QWidget *m_spaceStripHost = nullptr;
     AddSpaceButton *m_addSpaceBtn = nullptr;

@@ -6,6 +6,7 @@
 
 #include "core/space/SpaceManager.h"
 #include "core/log/Log.h"
+#include "core/settings/AppSettings.h"
 #include "core/window/CloakController.h"
 #include "core/window/WindowTracker.h"
 #include "hotkeys/HotkeyManager.h"
@@ -98,6 +99,9 @@ int main(int argc, char *argv[])
     SwitchFlashOverlay flash;
     OverviewHost overview(&manager);
     SettingsDialog settings;
+    AppSettings prefs;
+
+    manager.setExclusiveSpacesEnabled(prefs.exclusiveSpaces());
 
     // --- wire tracker -> manager ---
     QObject::connect(&tracker, &WindowTracker::windowCreated, &manager, [&](quint64 h) {
@@ -243,6 +247,7 @@ int main(int argc, char *argv[])
         settings.activateWindow();
     });
     QObject::connect(&settings, &SettingsDialog::settingsApplied, &app, [&]() {
+        manager.setExclusiveSpacesEnabled(prefs.exclusiveSpaces());
         if (!hotkeys.registerDefaults()) {
             tray.showMessage(QObject::tr("SpaceWM"),
                              QObject::tr("Some hotkeys failed to register (maybe in use)."));
