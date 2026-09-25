@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -10,6 +11,11 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# contents: write only needed by the tag → GitHub Release step; fork PRs
+# automatically get a read-only token.
+permissions:
+  contents: write
 
 jobs:
   build-test:
@@ -50,3 +56,37 @@ jobs:
           path: build/Testing/Temporary/
           if-no-files-found: ignore
           retention-days: 7
+
+      # Portable package: SpaceWM.exe + lib/ runtime (Qt DLLs, plugins, CRT).
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $stage = "SpaceWM-win64"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item build/SpaceWM.exe $stage/
+          Copy-Item lib/* $stage/ -Recurse
+          Compress-Archive -Path "$stage/*" -DestinationPath SpaceWM-win64.zip -Force
+          Get-Item SpaceWM-win64.zip | Select-Object Name, Length
+
+      - name: Upload portable package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpaceWM-win64
+          path: SpaceWM-win64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      # tag push (v*) → GitHub Release with the zip attached.
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:GITHUB_REF_NAME" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:GITHUB_REF_NAME" SpaceWM-win64.zip `
+              --title "$env:GITHUB_REF_NAME" --generate-notes
+          } else {
+            gh release upload "$env:GITHUB_REF_NAME" SpaceWM-win64.zip --clobber
+          }

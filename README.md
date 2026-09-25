@@ -6,9 +6,14 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 
 > 本仓库的开发与测试契约见 [`AGENTS.md`](AGENTS.md)（改代码前必读）。运行日志：**TR** → `TR/trace.log`，**EH** → `EH/error.log`（仓库根目录下，spdlog，见 `AGENTS.md` §0）。
 
+## 下载
+
+- **[Releases 最新版本](https://github.com/ji-tz/SpaceWM/releases/latest)**：`SpaceWM-win64.zip`（便携版，解压后直接运行 `SpaceWM.exe`，运行时已在包内）。
+- 每次 `main` 构建通过后，也可在 [Actions · CI](https://github.com/ji-tz/SpaceWM/actions/workflows/ci.yml) 最近一次成功运行的 **Artifacts** 中下载 `SpaceWM-win64`。
+
 ## 功能
 
-- **按显示器独立的 Spaces**：每块屏幕默认 4 个 space，互不干扰；切换只作用于光标所在屏。
+- **按显示器独立的 Spaces**：每块屏幕默认 1 个 space（用总览里的 **+** 按需添加，退出后不保留），互不干扰；切换只作用于光标所在屏。
 - **窗口隐藏不销毁**：非当前 space 的窗口被 cloak（多后端：Immersive View / DWM 属性 / `ShowWindow`），退出或恢复时**只显示本进程藏过的窗口**，绝不碰 shell 窗口。
 - **Mission Control 式总览**（`Ctrl+Alt+Space`）：
   - 所有显示器**同时**打开总览，各屏展示自己的 spaces；
@@ -29,7 +34,7 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 | 术语 | 英文 / 代码标识 | 含义 |
 |------|-----------------|------|
 | **显示器** | monitor · `MonitorSpaces` / `MonitorInfo` | 一块物理（或系统枚举出的）屏幕。每块 monitor **独立**维护自己的 space 列表与当前 space，互不影响。 |
-| **space** | space · `Space` | 某一块 monitor 上的一个“虚拟桌面槽位”。默认 4 个。同一 space 内的窗口一起显示/隐藏；非当前 space 的窗口被 cloak，不销毁。**不是** Windows 系统虚拟桌面。 |
+| **space** | space · `Space` | 某一块 monitor 上的一个“虚拟桌面槽位”。启动默认 1 个，会话内可增删（不持久化）。同一 space 内的窗口一起显示/隐藏；非当前 space 的窗口被 cloak，不销毁。**不是** Windows 系统虚拟桌面。 |
 | **窗口** | window · `HWND` / `WindowTracker` | 托管的顶层应用窗口。由 `WindowTracker` 发现；用 `HWND` 标识；归某个 `(monitor, space)` 所有。最小化窗口、本进程窗口、shell 窗口不纳入管理。 |
 | **总览** | overview · `OverviewHost` / `OverviewWindow` | Mission Control 式全屏界面。默认所有 monitor **同时**打开，每屏一个 `OverviewWindow`，展示该屏自己的 spaces。 |
 | **space 预览（卡片图）** | space preview · `Space::screenshot` · `SpaceCardWidget` | 总览**顶部 space 条**上每个 space 卡片里的缩略图。**一律渲染**（不 BitBlt）：壁纸铺满画布 + 各窗口按 Z 序 `PrintWindow` 合成。总览打开时也安全（不会截到自己）。 |
