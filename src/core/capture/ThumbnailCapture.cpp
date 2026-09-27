@@ -5,6 +5,8 @@
 #include <QPainter>
 #include <QDir>
 #include <QFile>
+
+#include <chrono>
 #include <QFileInfo>
 
 #include <dwmapi.h>
@@ -103,19 +105,44 @@ QImage tryLoadImagePath(const QString &path)
 
 QImage loadWallpaperImage()
 {
+    // Decode ONCE per process: TranscodedWallpaper is a full-size JPEG/PNG
+    // (tens of MB) — a cold read + decode under disk contention costs
+    // hundreds of ms, and card/seed fallbacks used to pay it every call.
+    // Process-lifetime cache is fine: wallpaper changes need an app restart
+    // to show up in previews anyway (next open refreshes shots, not this).
+    static QImage cached;
+    static bool tried = false;
+    if (tried)
+        return cached;
+    tried = true;
+
+    const auto t0 = std::chrono::steady_clock::now();
     // 1) SPI — may be HEIC (often unloadable without a Qt HEIC plugin).
     wchar_t path[MAX_PATH]{};
     if (::SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) && path[0]) {
         QImage img = tryLoadImagePath(QString::fromWCharArray(path));
         if (!img.isNull())
-            return img;
+            cached = img;
     }
     // 2) Transcoded wallpaper — always a raster format Windows can display.
-    QImage transcoded = tryLoadImagePath(transcodedWallpaperPath());
-    if (!transcoded.isNull())
-        return transcoded;
+    if (cached.isNull()) {
+        QImage transcoded = tryLoadImagePath(transcodedWallpaperPath());
+        if (!transcoded.isNull())
+            cached = transcoded;
+    }
     // 3) Registry Wallpaper value (same as SPI in most cases, still try).
-    return tryLoadImagePath(registryWallpaperPath());
+    if (cached.isNull())
+        cached = tryLoadImagePath(registryWallpaperPath());
+
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
+            .count();
+    if (ms > 20)
+        spacelog::info(QStringLiteral("wallpaper decoded in %1ms (%2x%3)")
+                           .arg(ms)
+                           .arg(cached.width())
+                           .arg(cached.height()));
+    return cached;
 }
 
 } // namespace
