@@ -327,6 +327,37 @@ private slots:
         QCOMPARE(sm.monitors().size(), before);
     }
 
+    // Committing the CURRENT space (clicking its card right after open) must
+    // still re-apply cloak: overview warm uncloaks every managed window and a
+    // same-index switch used to early-return without applyVisibility — the
+    // desktop then flashed off-space windows when the mask went away.
+    void switchSameIndexStillRecloaks()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
+        m->currentIndex = 0;
+
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"same-index recloak",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 70, 70, 260, 160,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, 1)); // lives on the OTHER space
+
+        // Simulate overview warm: visible although it belongs elsewhere.
+        ::cloak::set(hwnd, false);
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(hwnd), 1500);
+
+        // Same-index switch: returns false (no switch) but must recloak.
+        QVERIFY(!sm.switchSpace(m->hmon, 0, false));
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(hwnd), 1500);
+
+        ::cloak::set(hwnd, false);
+        sm.untrackWindow(hwnd);
+        ::DestroyWindow(hwnd);
+    }
+
     void rebuildEmitsSpacePreviewInvalidated()
     {
         SpaceManager sm;

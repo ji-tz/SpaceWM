@@ -18,6 +18,12 @@ bool isCloaked(HWND hwnd);
 // True only if SpaceWM's ShowWindow backend currently hides this HWND.
 bool isHiddenByUs(HWND hwnd);
 
+// True while WE force-disabled DWM show/hide transitions on this HWND
+// (set on cloak, restored on show — no animation during space switches).
+// Bookkeeping only: DWMWA_TRANSITIONS_FORCEDISABLED is [set]-only, the
+// attribute itself cannot be read back from DWM.
+bool transitionsForced(HWND hwnd);
+
 enum class Backend { None, ImmersiveView, DwmAttribute, ShowWindow };
 Backend lastBackend();
 

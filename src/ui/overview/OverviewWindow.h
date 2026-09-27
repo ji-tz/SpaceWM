@@ -31,8 +31,14 @@ public:
     // Host open sequence:
     //   1) beginPanelOpen — show the dark mask (no capture yet)
     //   2) SpaceManager warm + buildAll (uncloak/capture behind the mask)
-    //   3) populateOpenContent — cards + bottom strip + enter animation
+    //   3) phased populate, applied to ALL panels lockstep by the host so one
+    //      monitor's heavy work never delays the other's reveal:
+    //        populateCards → populateTiles → startPanelEnterAnimation
+    //      (single-panel path: populateOpenContent() runs the three phases).
     void beginPanelOpen(HMONITOR hmon, bool takeFocus = true);
+    void populateCards();
+    void populateTiles();
+    void startPanelEnterAnimation();
     void populateOpenContent();
 
     void closeOverview(bool commit);

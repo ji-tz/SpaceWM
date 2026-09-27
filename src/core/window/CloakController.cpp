@@ -40,9 +40,21 @@ struct HiddenInfo {
     bool wasVisible = false;
     WINDOWPLACEMENT placement{};
     bool hasPlacement = false;
+    // True when WE force-disabled DWM transitions on this window for the
+    // cloak (restored on show so the app's normal animations come back).
+    bool transitionsForced = false;
 };
 
 std::unordered_map<HWND, HiddenInfo> g_hidden;
+
+// Documented per-window switch (DWMWA_TRANSITIONS_FORCEDISABLED): while TRUE,
+// DWM skips show/hide transitions for this window. Cross-process, same call
+// pattern as the cloak attributes below.
+bool setTransitionsForced(HWND hwnd, BOOL forced)
+{
+    return SUCCEEDED(::DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
+                                             &forced, sizeof(forced)));
+}
 
 struct ComMark {
     HRESULT hr;
@@ -234,15 +246,30 @@ bool set(HWND hwnd, bool enable)
         if (it != g_hidden.end() && it->second.how != How::NotHidden)
             return true;
 
+        // Kill the DWM show/hide transition BEFORE hiding — space switches
+        // must not play per-window animations. Restored after a successful
+        // show below (and rolled back if nothing ended up hidden).
+        const bool forced = setTransitionsForced(hwnd, TRUE);
+
+        bool ok = false;
         if (hideViaApplicationView(hwnd)) {
             remember(hwnd, How::Immersive);
-            return true;
-        }
-        if (hideViaDwm(hwnd)) {
+            ok = true;
+        } else if (hideViaDwm(hwnd)) {
             remember(hwnd, How::Dwm);
-            return true;
+            ok = true;
+        } else {
+            ok = hideViaShowWindow(hwnd);
         }
-        return hideViaShowWindow(hwnd);
+
+        if (ok) {
+            auto entry = g_hidden.find(hwnd);
+            if (entry != g_hidden.end())
+                entry->second.transitionsForced = forced;
+        } else if (forced) {
+            setTransitionsForced(hwnd, FALSE);
+        }
+        return ok;
     }
 
     // ---- show: ONLY reverse what we did ----
@@ -251,20 +278,30 @@ bool set(HWND hwnd, bool enable)
         return false;
 
     const How how = it->second.how;
+    const bool restoreTransitions = it->second.transitionsForced;
+    bool ok = false;
     switch (how) {
     case How::ShowWindow:
-        return showViaShowWindow(hwnd);
+        ok = showViaShowWindow(hwnd);
+        break;
     case How::Dwm:
         forget(hwnd);
-        return showViaDwm(hwnd);
+        ok = showViaDwm(hwnd);
+        break;
     case How::Immersive:
         forget(hwnd);
-        return showViaApplicationView(hwnd);
+        ok = showViaApplicationView(hwnd);
+        break;
     case How::NotHidden:
     default:
         forget(hwnd);
-        return false;
+        ok = false;
+        break;
     }
+    // Shown without a transition — hand the window its normal animations back.
+    if (ok && restoreTransitions)
+        setTransitionsForced(hwnd, FALSE);
+    return ok;
 }
 
 bool isHiddenByUs(HWND hwnd)
@@ -282,6 +319,12 @@ bool isCloaked(HWND hwnd)
     DWORD cloaked = 0;
     const HRESULT hr = ::DwmGetWindowAttribute(hwnd, 14, &cloaked, sizeof(cloaked));
     return SUCCEEDED(hr) && cloaked != 0;
+}
+
+bool transitionsForced(HWND hwnd)
+{
+    auto it = g_hidden.find(hwnd);
+    return it != g_hidden.end() && it->second.transitionsForced;
 }
 
 Backend lastBackend()

@@ -1,8 +1,12 @@
 #include <QtTest>
 
 #include "core/space/SpaceManager.h"
+#include "core/window/CloakController.h"
 #include "ui/overview/OverviewHost.h"
 #include "ui/overview/OverviewWindow.h"
+#include "ui/preview/SpaceCardWidget.h"
+
+#include <QLabel>
 
 #include <Windows.h>
 
@@ -176,6 +180,136 @@ private slots:
             QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         QVERIFY(!host.isOpen());
         QCOMPARE(host.openPanelCount(), 0);
+    }
+
+    // Closing must recloak BEFORE the mask starts fading: warm uncloaks every
+    // managed window behind the overview, and recloak used to wait for
+    // setOverviewOpen(false) (after the panels were gone) — off-space windows
+    // flashed on the desktop.
+    void exitRecloaksWhileMaskStillVisible()
+    {
+        SpaceManager sm;
+        OverviewHost host(&sm);
+        auto *m = sm.monitors().first();
+        while (sm.spaceCount(m->hmon) < 2)
+            QVERIFY(sm.addSpace(m->hmon));
+
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"exit recloak target",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 90, 90, 280, 170,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, 1)); // other space → must hide on close
+        ::cloak::set(hwnd, false);
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(hwnd), 1500);
+
+        host.openAll();
+        if (!host.isOpen()) {
+            sm.untrackWindow(hwnd);
+            ::DestroyWindow(hwnd);
+            QSKIP("open failed in this environment");
+        }
+
+        host.closeAll(false); // cancel → prepareClose → startExit → recloakNow
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(hwnd), 800);
+        OverviewWindow *panel = host.panelFor(m->hmon);
+        QVERIFY(panel);
+        QVERIFY2(panel->isVisible(),
+                 "cloak must land while the mask still covers the desktop");
+
+        QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 4000);
+        // No switch happened (cancel) — the other-space window stays hidden.
+        QVERIFY(cloak::isCloaked(hwnd));
+
+        sm.untrackWindow(hwnd);
+        ::cloak::showAllHidden();
+        ::DestroyWindow(hwnd);
+    }
+
+    // CURRENT pill sync timing: clicking a space must (a) switch the model
+    // and flip the pill immediately (spaceChanged → refreshCardBadges) while
+    // the exit animation is still running, and (b) the NEXT open must build
+    // the pill on the clicked card — not the previous current.
+    void currentPillFollowsClickImmediately()
+    {
+        SpaceManager sm;
+        OverviewHost host(&sm);
+        // Multi-head: the panel opens on the CURSOR display — give every
+        // monitor a second space and anchor assertions to the OPEN panel.
+        for (MonitorSpaces *mon : sm.monitors())
+            while (sm.spaceCount(mon->hmon) < 2)
+                QVERIFY(sm.addSpace(mon->hmon));
+
+        host.openAll();
+        if (!host.isOpen())
+            QSKIP("open failed in this environment");
+        OverviewWindow *panel = host.activePanel();
+        QVERIFY(panel);
+        auto *m = sm.monitorOf(panel->targetMonitor());
+        QVERIFY(m);
+        QCOMPARE(m->spaces.size(), 2);
+
+        // Same wiring as main.cpp (spaceChosen → switchSpace).
+        connect(&host, &OverviewHost::spaceChosen, &sm,
+                [&sm](quint64 hmon, int space) {
+                    sm.switchSpace(reinterpret_cast<HMONITOR>(hmon), space,
+                                   /*animateHint=*/false);
+                });
+
+        flushDeferredDeletes(panel);
+        auto cards = panel->findChildren<SpaceCardWidget *>();
+        QCOMPARE(cards.size(), 2);
+
+        // Click the second card (press+release, within drag distance).
+        const QPointF c(cards[1]->rect().center());
+        const QPointF g = cards[1]->mapToGlobal(c);
+        QMouseEvent press(QEvent::MouseButtonPress, c, g, g, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(cards[1], &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, c + QPointF(1, 0),
+                            cards[1]->mapToGlobal(c + QPointF(1, 0)),
+                            cards[1]->mapToGlobal(c + QPointF(1, 0)),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(cards[1], &release);
+
+        // (a) model switched synchronously inside the click dispatch …
+        QCOMPARE(m->currentIndex, 1);
+        // … and the pill flipped while the panel is still on screen.
+        QTRY_VERIFY_WITH_TIMEOUT(currentPillCard(cards) == cards[1], 1000);
+
+        QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 4000);
+
+        // (b) reopen: pill must be built directly on the clicked card.
+        host.openAll();
+        QVERIFY(host.isOpen());
+        flushDeferredDeletes(panel);
+        cards = panel->findChildren<SpaceCardWidget *>();
+        QCOMPARE(cards.size(), 2);
+        QVERIFY2(currentPillCard(cards) == cards[1],
+                 "reopen must show CURRENT on the space clicked last time");
+
+        host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 4000);
+    }
+
+private:
+    static void flushDeferredDeletes(OverviewWindow *panel)
+    {
+        Q_UNUSED(panel)
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+
+    // The card whose badge label shows "CURRENT" (nullptr if none).
+    static SpaceCardWidget *currentPillCard(const QVector<SpaceCardWidget *> &cards)
+    {
+        for (SpaceCardWidget *card : cards) {
+            for (QLabel *label : card->findChildren<QLabel *>()) {
+                if (label->text() == QLatin1String("CURRENT"))
+                    return card;
+            }
+        }
+        return nullptr;
     }
 };
 

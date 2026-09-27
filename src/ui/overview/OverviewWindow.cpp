@@ -65,6 +65,15 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
             if (sp == m_selected || sp == m_manager->currentSpaceIndex(m_hmon))
                 rebuildWindowPreviews();
         });
+        // The CURRENT pill must follow the model the moment a space commits
+        // (click/Enter/hotkey switch while the panels are still on screen) —
+        // otherwise the badge only syncs on the next hover/refresh.
+        connect(m_manager, &SpaceManager::spaceChanged, this,
+                [this](quint64 hmon, int) {
+                    if (!m_hmon || hmon != quint64(m_hmon) || m_cards.isEmpty())
+                        return;
+                    refreshCardBadges();
+                });
     }
 
     m_root = new QWidget(this);
@@ -101,6 +110,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(spaceLabel);
 
     m_spaceStripHost = new QWidget(m_root);
+    m_spaceStripHost->setObjectName(QStringLiteral("SpaceStripHost"));
     auto *stripOuter = new QVBoxLayout(m_spaceStripHost);
     stripOuter->setContentsMargins(0, 0, 0, 0);
     m_cardRow = new QHBoxLayout;
@@ -136,6 +146,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(winLabel);
 
     m_windowScroll = new QScrollArea(m_root);
+    m_windowScroll->setObjectName(QStringLiteral("WindowScroll"));
     m_windowScroll->setWidgetResizable(true);
     m_windowScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_windowScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -326,6 +337,13 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
     m_pendingCommit = -1;
 
     show();
+    // Stale content must not be visible while warm/build runs behind the
+    // mask (old CURRENT pill / old tiles for seconds on heavy machines) —
+    // populateOpenContent shows them again once cards are rebuilt.
+    if (m_spaceStripHost)
+        m_spaceStripHost->hide();
+    if (m_windowScroll)
+        m_windowScroll->hide();
     setWindowOpacity(1.0);
     pinToMonitorPhysically();
     raise();
@@ -341,6 +359,14 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
 
 void OverviewWindow::populateOpenContent()
 {
+    // Single-panel convenience: the three lockstep phases in order.
+    populateCards();
+    populateTiles();
+    startPanelEnterAnimation();
+}
+
+void OverviewWindow::populateCards()
+{
     if (!m_open || m_closePending)
         return;
 
@@ -348,18 +374,35 @@ void OverviewWindow::populateOpenContent()
     m_selected = qBound(0, m_selected, qMax(0, m_cards.size() - 1));
     setSelected(m_selected);
 
-    // Layout must run before enter animation reads card->pos() — otherwise
-    // every card is still at (0,0) and the stagger collapses them into a stack.
+    // Reveal only AFTER the fresh cards exist (hidden since beginPanelOpen so
+    // stale pills/tiles never showed through the mask during warm/build).
+    if (m_spaceStripHost)
+        m_spaceStripHost->show();
+    if (m_windowScroll)
+        m_windowScroll->show();
+
+    // Geometry must be settled before the viewport-dependent strip rebuild.
     if (layout())
         layout()->activate();
     if (m_root && m_root->layout())
         m_root->layout()->activate();
     if (m_spaceStripHost && m_spaceStripHost->layout())
         m_spaceStripHost->layout()->activate();
+}
 
+void OverviewWindow::populateTiles()
+{
+    if (!m_open || m_closePending)
+        return;
     // Build the bottom strip AFTER the widget is shown so viewport width/height
     // match later rebuilds (drag/hover) — fixes size mismatch on first open.
     rebuildWindowPreviews();
+}
+
+void OverviewWindow::startPanelEnterAnimation()
+{
+    if (!m_open || m_closePending)
+        return;
     playEnterAnimation();
 }
 
@@ -425,6 +468,11 @@ void OverviewWindow::startExit()
     if (m_exitStarted)
         return;
     m_exitStarted = true;
+    // Cloak BEFORE the mask starts fading: overview warm uncloaked every
+    // managed window, and setOverviewOpen(false) only recloaks after the
+    // panels are gone — without this off-space windows flash on the desktop.
+    if (m_manager)
+        m_manager->recloakNow();
     cancelAnimations();
     playExitAnimation();
 }

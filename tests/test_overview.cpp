@@ -196,6 +196,50 @@ private slots:
         for (int i = 0; i < 40 && (w.isOpen() || w.isAnimating()); ++i)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 15);
     }
+
+    // The mask is up for seconds while warm/build captures behind it — the
+    // STALE card strip (old CURRENT pill) and window tiles must stay hidden
+    // until populateOpenContent has rebuilt them.
+    void staleStripsHiddenUntilPopulate()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        if (m->spaces.size() < 2)
+            QVERIFY(sm.addSpace(m->hmon));
+
+        // First full open → cards exist (so the second open has something stale).
+        w.openOnMonitor(m->hmon);
+        if (!w.isOpen())
+            QSKIP("overview did not open");
+        QVERIFY(w.cardCount() >= 2);
+        w.closeOverview(false);
+        // Real waiting — a bare processEvents spin returns before the 140ms
+        // exit fade finishes, leaving m_closePending set (begin would no-op).
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isOpen() && !w.isAnimating(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isDismissing(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isVisible(), 3000);
+
+        // Second open, stepwise: begin = mask only, strips hidden …
+        w.beginPanelOpen(m->hmon);
+        QVERIFY(w.isOpen());
+        auto *strip = w.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        auto *scroll = w.findChild<QWidget *>(QStringLiteral("WindowScroll"));
+        QVERIFY(strip && scroll);
+        QVERIFY2(strip->isHidden(),
+                 "stale card strip (old CURRENT pill) must be hidden during warm");
+        QVERIFY2(scroll->isHidden(), "stale window tiles must be hidden during warm");
+
+        // … populate = fresh cards, strips revealed.
+        w.populateOpenContent();
+        QVERIFY(w.cardCount() >= 2);
+        QVERIFY(strip->isVisible());
+        QVERIFY(scroll->isVisible());
+
+        w.closeOverview(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isOpen() && !w.isAnimating(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isDismissing(), 3000);
+    }
 };
 
 QTEST_MAIN(TestOverview)

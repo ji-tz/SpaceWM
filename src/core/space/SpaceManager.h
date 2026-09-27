@@ -50,6 +50,11 @@ public:
     void setOverviewOpen(bool open);
     bool overviewOpen() const { return m_overviewOpen; }
 
+    // Re-apply cloak for every monitor right now (warm uncloaked everything
+    // behind the overview mask — callers invoke this BEFORE the mask fades
+    // so off-space windows never flash on the desktop).
+    void recloakNow();
+
     void setAnimationEnabled(bool on) { m_animationEnabled = on; }
 
     // Snapshot the monitor into space[index].screenshot.

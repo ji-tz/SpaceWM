@@ -220,8 +220,15 @@ void SpaceManager::warmWindowShots()
 bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
 {
     auto *m = monitorOf(hmon);
-    if (!m || index < 0 || index >= m->spaces.size() || index == m->currentIndex)
+    if (!m || index < 0 || index >= m->spaces.size())
         return false;
+    if (index == m->currentIndex) {
+        // Same space (e.g. clicking the current card right after open):
+        // still re-apply cloak — overview warm uncloaked every managed window
+        // and no other step may recloak (flash-on-close otherwise).
+        applyVisibility(hmon);
+        return false;
+    }
 
     const int from = m->currentIndex;
     if (!m_overviewOpen)
@@ -635,6 +642,12 @@ void SpaceManager::untrackWindow(HWND hwnd)
         }
     }
     emit windowUntracked(reinterpret_cast<quint64>(hwnd));
+}
+
+void SpaceManager::recloakNow()
+{
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
+        applyVisibility(it.value().hmon);
 }
 
 void SpaceManager::setOverviewOpen(bool open)
