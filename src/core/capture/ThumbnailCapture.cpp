@@ -1,5 +1,7 @@
 #include "core/capture/ThumbnailCapture.h"
 
+#include "core/log/Log.h"
+
 #include <QPainter>
 #include <QDir>
 #include <QFile>
@@ -122,6 +124,7 @@ namespace thumbs {
 namespace {
 // One shared full-window image per HWND. windowShot scales this on demand.
 QHash<HWND, QImage> g_windowShots;
+bool g_screenSampling = true; // false while the overview overlay is visible
 
 QImage scaleToFit(const QImage &src, const QSize &maxSize)
 {
@@ -199,30 +202,18 @@ QImage bitBltWindowFrame(const RECT &rc)
     ::ReleaseDC(nullptr, screen);
     return img;
 }
-} // namespace
 
-QImage capture(HWND hwnd, const QSize &maxSize)
+// Single PrintWindow attempt into a FULL-window bitmap (PrintWindow draws
+// 1:1 — a pre-shrunk DC only captures the top-left corner). The BOOL only
+// says the call succeeded; composition/GPU windows often "succeed" with a
+// black buffer, so the caller judges content via looksLikeFailedShot.
+QImage printWindowImage(HWND hwnd, int fullW, int fullH, UINT flags)
 {
-    if (!hwnd || !::IsWindow(hwnd))
-        return {};
-    if (::IsIconic(hwnd))
-        return {};
-
-    RECT rc{};
-    if (!::GetWindowRect(hwnd, &rc))
-        return {};
-    // Always render into a FULL-window bitmap. PrintWindow draws 1:1 into the DC;
-    // a pre-shrunk DC only captures the top-left corner (clipped / wrong content).
-    const int fullW = rc.right - rc.left;
-    const int fullH = rc.bottom - rc.top;
     if (fullW <= 0 || fullH <= 0)
         return {};
-
     HDC screen = ::GetDC(nullptr);
     if (!screen)
         return {};
-    // Prefer a 32-bit DIB section so we get top-down BGRA without an extra
-    // GetDIBits round-trip that can soft-convert some surfaces.
     HDC mem = ::CreateCompatibleDC(screen);
     void *bits = nullptr;
     HBITMAP bmp = nullptr;
@@ -244,15 +235,11 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     }
     HGDIOBJ old = ::SelectObject(mem, bmp);
 
-    // PW_RENDERFULLCONTENT: capture layered/composited content at native size.
-    BOOL ok = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
-    if (!ok)
-        ok = ::BitBlt(mem, 0, 0, fullW, fullH, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);
+    const BOOL ok = ::PrintWindow(hwnd, mem, flags);
 
     QImage img;
-    if (ok) {
+    if (ok && bits) {
         img = QImage(fullW, fullH, QImage::Format_ARGB32);
-        // GDI DIB is BGRA little-endian == Qt ARGB32 on little-endian.
         memcpy(img.bits(), bits, size_t(fullW) * size_t(fullH) * 4);
         img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
@@ -261,16 +248,114 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     ::DeleteObject(bmp);
     ::DeleteDC(mem);
     ::ReleaseDC(nullptr, screen);
+    return img;
+}
 
-    // PrintWindow can "succeed" with a black frame (cloaked / secondary GPU).
-    // Fall back to a virtual-screen BitBlt so secondary-monitor tiles stay real.
-    if (looksLikeFailedShot(img)) {
+// GetWindowDC of THIS hwnd (window surface, not the screen).
+QImage windowDcImage(HWND hwnd, int fullW, int fullH)
+{
+    if (fullW <= 0 || fullH <= 0)
+        return {};
+    HDC wdc = ::GetWindowDC(hwnd);
+    if (!wdc)
+        return {};
+    HDC mem = ::CreateCompatibleDC(wdc);
+    void *bits = nullptr;
+    HBITMAP bmp = nullptr;
+    {
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = fullW;
+        bi.bmiHeader.biHeight = -fullH;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        bmp = ::CreateDIBSection(wdc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    }
+    QImage img;
+    if (mem && bmp && bits) {
+        HGDIOBJ old = ::SelectObject(mem, bmp);
+        if (::BitBlt(mem, 0, 0, fullW, fullH, wdc, 0, 0, SRCCOPY)) {
+            img = QImage(fullW, fullH, QImage::Format_ARGB32);
+            memcpy(img.bits(), bits, size_t(fullW) * size_t(fullH) * 4);
+            img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        }
+        ::SelectObject(mem, old);
+    }
+    if (bmp) ::DeleteObject(bmp);
+    if (mem) ::DeleteDC(mem);
+    ::ReleaseDC(hwnd, wdc);
+    return img;
+}
+
+// Per-window cascade: PrintWindow (full content → plain) → GetWindowDC.
+// Every step is rejected on a near-black frame — PrintWindow's BOOL stays
+// TRUE for black buffers, so content decides, not the return value.
+QImage perWindowImage(HWND hwnd, int fullW, int fullH)
+{
+    QImage img = printWindowImage(hwnd, fullW, fullH, PW_RENDERFULLCONTENT);
+    if (!looksLikeFailedShot(img))
+        return img;
+    img = printWindowImage(hwnd, fullW, fullH, 0);
+    if (!looksLikeFailedShot(img))
+        return img;
+    return windowDcImage(hwnd, fullW, fullH);
+}
+
+QString windowClassName(HWND hwnd)
+{
+    wchar_t buf[64]{};
+    ::GetClassNameW(hwnd, buf, 64);
+    return QString::fromWCharArray(buf);
+}
+} // namespace
+
+QImage capture(HWND hwnd, const QSize &maxSize)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return {};
+    if (::IsIconic(hwnd))
+        return {};
+
+    RECT rc{};
+    if (!::GetWindowRect(hwnd, &rc))
+        return {};
+    const int fullW = rc.right - rc.left;
+    const int fullH = rc.bottom - rc.top;
+    if (fullW <= 0 || fullH <= 0)
+        return {};
+
+    QImage img = perWindowImage(hwnd, fullW, fullH);
+    const bool perWindowBlack = looksLikeFailedShot(img);
+    const bool sampleScreen = g_screenSampling && canSampleScreen(hwnd);
+    if (perWindowBlack) {
+        spacelog::warn(QStringLiteral(
+            "per-window capture black (PrintWindow/GetWindowDC) hwnd=0x%1 class=%2 %3x%4 sampling=%5")
+                            .arg(quintptr(hwnd), 0, 16)
+                            .arg(windowClassName(hwnd))
+                            .arg(fullW)
+                            .arg(fullH)
+                            .arg(sampleScreen ? 1 : 0));
+    }
+
+    // Screen BitBlt only when this rect really shows THIS window (visible,
+    // not cloaked, on the virtual screen) and the overview mask is not up.
+    if (perWindowBlack && sampleScreen) {
         const QImage alt = bitBltWindowFrame(rc);
         if (!alt.isNull() && !looksLikeFailedShot(alt))
             img = alt;
     }
-    if (img.isNull())
+    // Still no honest pixels — fail rather than paint overlay/other-space junk.
+    if (img.isNull() || looksLikeFailedShot(img)) {
+        spacelog::error(QStringLiteral(
+            "per-window capture failed hwnd=0x%1 class=%2 %3x%4 cloaked=%5")
+                            .arg(quintptr(hwnd), 0, 16)
+                            .arg(windowClassName(hwnd))
+                            .arg(fullW)
+                            .arg(fullH)
+                            .arg(canSampleScreen(hwnd) ? 0 : 1));
         return {};
+    }
 
     // Crop to visible DWM frame — GetWindowRect includes invisible resize
     // borders that show up as empty margins in the preview tile.
@@ -303,10 +388,8 @@ QImage windowShot(HWND hwnd, const QSize &maxSize)
     }
     auto it = g_windowShots.constFind(hwnd);
     if (it == g_windowShots.constEnd() || it->isNull()) {
-        // Capture once at full window size (no maxSize) — the single source image.
-        // capture() already retries via virtual-screen BitBlt when PrintWindow
-        // returns a black/cloaked frame; cache any non-null result (solid-color
-        // windows are valid and must still populate the cache).
+        // Capture once at full window size (no maxSize) — shared by strip +
+        // space composites for this open only (warm clears the cache first).
         QImage full = capture(hwnd, QSize());
         if (full.isNull())
             return {};
@@ -330,6 +413,38 @@ void clearWindowCache()
 int windowCacheCount()
 {
     return int(g_windowShots.size());
+}
+
+bool canSampleScreen(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd) || !::IsWindowVisible(hwnd))
+        return false;
+    DWORD cloaked = 0;
+    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED,
+                                          &cloaked, sizeof(cloaked)))
+        && cloaked != 0) {
+        return false;
+    }
+    // Off-screen rects (tray-restored at -32000, hidden across monitors)
+    // have no honest pixels to sample.
+    RECT wr{};
+    if (!::GetWindowRect(hwnd, &wr))
+        return false;
+    const int l = ::GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int t = ::GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int r = l + ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int b = t + ::GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    return wr.left < r && wr.right > l && wr.top < b && wr.bottom > t;
+}
+
+void setScreenSamplingEnabled(bool on)
+{
+    g_screenSampling = on;
+}
+
+bool screenSamplingEnabled()
+{
+    return g_screenSampling;
 }
 
 QImage captureMonitor(const RECT &physRect, const QSize &maxSize)

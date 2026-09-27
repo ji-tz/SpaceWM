@@ -91,31 +91,41 @@ void OverviewHost::openAll()
     m_switching = false;
     m_active = nullptr;
 
-    // Refresh window shots FIRST (clear+recapture), then rebuild space
-    // composites from those fresh shots — reopening must not reuse stale tiles.
-    m_manager->warmWindowShots();
-    m_manager->buildAllSpacePreviews();
-    m_manager->setOverviewOpen(true);
-
     const HMONITOR cursor = monitors::fromCursor();
 
+    // 1) Desktop intact: refresh shots for on-screen windows. The screen
+    //    fallback is honest only now — once the mask is up it would bake
+    //    the overlay into other spaces' cards.
+    m_manager->refreshVisibleShots();
+
+    // 2) Dark masks up first — uncloak/capture must not flash on the desktop.
     for (OverviewWindow *w : std::as_const(m_panels)) {
         if (w->targetMonitor() == cursor)
             continue;
-        w->openOnMonitor(w->targetMonitor(), /*takeFocus=*/false);
+        w->beginPanelOpen(w->targetMonitor(), /*takeFocus=*/false);
     }
     for (OverviewWindow *w : std::as_const(m_panels)) {
         if (w->targetMonitor() == cursor) {
-            w->openOnMonitor(cursor, /*takeFocus=*/true);
+            w->beginPanelOpen(cursor, /*takeFocus=*/true);
             m_active = w;
             break;
         }
     }
     if (!m_active && !m_panels.isEmpty()) {
         auto *first = m_panels.first();
-        first->openOnMonitor(first->targetMonitor(), true);
+        first->beginPanelOpen(first->targetMonitor(), true);
         m_active = first;
     }
+
+    // 3) Behind the mask: mark overview open, unhide, capture whatever is
+    //    still missing (off-space windows), then composite space cards.
+    m_manager->setOverviewOpen(true);
+    m_manager->warmWindowShots();
+    m_manager->buildAllSpacePreviews();
+
+    // 4) Fill cards + bottom strips + enter animation on every panel.
+    for (OverviewWindow *w : std::as_const(m_panels))
+        w->populateOpenContent();
 }
 
 void OverviewHost::closeAll(bool commit)

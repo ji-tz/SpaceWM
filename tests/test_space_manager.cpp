@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include "core/capture/ThumbnailCapture.h"
 #include "core/window/CloakController.h"
 #include "core/space/SpaceManager.h"
 #include "core/window/WindowTracker.h"
@@ -337,6 +338,85 @@ private slots:
         QCOMPARE(spy.last().at(0).toULongLong(),
                  quint64(reinterpret_cast<quintptr>(m->hmon)));
         QCOMPARE(spy.last().at(1).toInt(), 0);
+    }
+
+    // Open step 1 (pre-mask): on-screen windows are dropped + recaptured so
+    // the screen fallback can fill PrintWindow-black frames with honest pixels.
+    void refreshVisibleShotsRecapturesOnScreenWindows()
+    {
+        thumbs::clearWindowCache();
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        QVERIFY(thumbs::canSampleScreen(m_hwnd));
+
+        // NOTE: always constBits() — non-const bits() detaches a shared QImage
+        // and would compare two fresh copies instead of the cache buffers.
+        const QImage seeded = thumbs::windowShot(m_hwnd);
+        QVERIFY(!seeded.isNull());
+
+        sm.refreshVisibleShots();
+        const QImage refreshed = thumbs::windowShot(m_hwnd);
+        QVERIFY(!refreshed.isNull());
+        // Recaptured → a NEW backing buffer, not the seeded one.
+        QVERIFY2(refreshed.constBits() != seeded.constBits(),
+                 "refreshVisibleShots kept the stale cache entry");
+
+        // Cloaked (off-space) windows are NOT touched — no honest screen
+        // source exists for them, their existing shot must survive refresh.
+        QVERIFY(::cloak::set(m_hwnd, true));
+        ::Sleep(50);
+        QVERIFY(!thumbs::canSampleScreen(m_hwnd));
+        // Snapshot AFTER the cloak settles (cloak may itself trigger a
+        // recapture through other hooks — that is not what we assert here).
+        const QImage cloakedKept = thumbs::windowShot(m_hwnd);
+        QVERIFY(!cloakedKept.isNull());
+        sm.refreshVisibleShots();
+        QCOMPARE(thumbs::windowShot(m_hwnd).constBits(), cloakedKept.constBits());
+        ::cloak::set(m_hwnd, false);
+        ::cloak::set(m_hwnd, false);
+
+        thumbs::clearWindowCache();
+    }
+
+    // Open step 2 (behind masks): warm fills MISSING shots only — it must not
+    // clear known-good entries the way the old clear+recapture did.
+    void warmWindowShotsPreservesCacheAndFillsMissing()
+    {
+        thumbs::clearWindowCache();
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+
+        const QImage kept = thumbs::windowShot(m_hwnd);
+        QVERIFY(!kept.isNull());
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+
+        // A tracked window whose shot was invalidated (missing) gets filled.
+        HWND fresh = ::CreateWindowExW(
+            0, L"STATIC", L"warm fill target",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 300, 260, 160,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(fresh != nullptr);
+        ::ShowWindow(fresh, SW_SHOW);
+        ::UpdateWindow(fresh);
+        ::Sleep(30);
+        QVERIFY(sm.assignWindow(fresh, m->hmon, 0));
+        thumbs::invalidateWindow(fresh);
+        QCOMPARE(thumbs::windowCacheCount(), 1);
+
+        sm.warmWindowShots();
+
+        // Existing entry preserved (same buffer — no blind clear+recapture)…
+        QCOMPARE(thumbs::windowCacheCount(), 2);
+        const QImage after = thumbs::windowShot(m_hwnd);
+        QVERIFY(!after.isNull());
+        QCOMPARE(after.constBits(), kept.constBits());
+        // …and the missing one was captured.
+        QVERIFY(!thumbs::windowShot(fresh).isNull());
+
+        ::DestroyWindow(fresh);
+        thumbs::clearWindowCache();
     }
 
 private:

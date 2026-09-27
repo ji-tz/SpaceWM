@@ -28,6 +28,13 @@ public:
     void assignMonitor(HMONITOR hmon) { m_hmon = hmon; }
     void openOnMonitor(HMONITOR hmon, bool takeFocus = true);
 
+    // Host open sequence:
+    //   1) beginPanelOpen — show the dark mask (no capture yet)
+    //   2) SpaceManager warm + buildAll (uncloak/capture behind the mask)
+    //   3) populateOpenContent — cards + bottom strip + enter animation
+    void beginPanelOpen(HMONITOR hmon, bool takeFocus = true);
+    void populateOpenContent();
+
     void closeOverview(bool commit);
     void prepareClose();
     void startExit();

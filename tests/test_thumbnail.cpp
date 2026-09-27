@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "core/capture/ThumbnailCapture.h"
+#include "core/window/CloakController.h"
 
 #include <Windows.h>
 
@@ -123,11 +124,12 @@ private slots:
         thumbs::clearWindowCache();
     }
 
-    // Overview re-entry must not keep stale tiles: warmWindowShots clears the
-    // cache first, then recaptures every managed window.
-    void warmWindowShotsClearsThenRecaptures()
+    // Preview open: warm clears the cache, then captures every window once.
+    // Nothing from a previous open may survive that clear.
+    void warmClearsCacheThenCapturesFresh()
     {
         thumbs::clearWindowCache();
+        thumbs::setScreenSamplingEnabled(true);
         HWND hwnd = ::CreateWindowExW(
             0, L"STATIC", L"warm target",
             WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240,
@@ -137,19 +139,93 @@ private slots:
         ::UpdateWindow(hwnd);
         ::Sleep(30);
 
-        // Prime a cache entry that would go stale if not cleared on open.
         QVERIFY(!thumbs::windowShot(hwnd).isNull());
         QCOMPARE(thumbs::windowCacheCount(), 1);
 
+        // Simulate open: clear then recapture — count returns to 1 with a new shot.
         thumbs::clearWindowCache();
         QCOMPARE(thumbs::windowCacheCount(), 0);
-
-        const QImage fresh = thumbs::windowShot(hwnd);
-        QVERIFY(!fresh.isNull());
+        QVERIFY(!thumbs::windowShot(hwnd).isNull());
         QCOMPARE(thumbs::windowCacheCount(), 1);
 
         ::DestroyWindow(hwnd);
         thumbs::clearWindowCache();
+    }
+
+    void canSampleScreenRejectsHiddenAndTracksSamplingFlag()
+    {
+        QVERIFY(!thumbs::canSampleScreen(nullptr));
+        QVERIFY(!thumbs::canSampleScreen(reinterpret_cast<HWND>(0xDEAD)));
+
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"sample target",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 240, 160,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        ::ShowWindow(hwnd, SW_SHOW);
+        ::UpdateWindow(hwnd);
+        ::Sleep(20);
+        QVERIFY(thumbs::canSampleScreen(hwnd));
+
+        ::ShowWindow(hwnd, SW_HIDE);
+        ::Sleep(20);
+        QVERIFY(!thumbs::canSampleScreen(hwnd));
+
+        ::ShowWindow(hwnd, SW_SHOW);
+        ::Sleep(20);
+        QVERIFY(thumbs::canSampleScreen(hwnd));
+
+        // Parked off-screen (tray-restored style) — no honest screen pixels.
+        ::SetWindowPos(hwnd, nullptr, -32000, -32000, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ::Sleep(20);
+        QVERIFY(!thumbs::canSampleScreen(hwnd));
+        ::SetWindowPos(hwnd, nullptr, 50, 50, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ::Sleep(20);
+        QVERIFY(thumbs::canSampleScreen(hwnd));
+
+        // Master switch used while the overview overlay is up.
+        QVERIFY(thumbs::screenSamplingEnabled());
+        thumbs::setScreenSamplingEnabled(false);
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        thumbs::setScreenSamplingEnabled(true);
+        QVERIFY(thumbs::screenSamplingEnabled());
+
+        ::DestroyWindow(hwnd);
+    }
+
+    // Non-current space windows are cloaked; capture must use per-window APIs
+    // (PrintWindow / GetWindowDC), not screen pixels.
+    void capturesCloakedWindowViaPerWindowApi()
+    {
+        HWND hwnd = ::CreateWindowExW(
+            0, L"STATIC", L"cloaked shot",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, 320, 200,
+            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        ::ShowWindow(hwnd, SW_SHOW);
+        ::UpdateWindow(hwnd);
+        ::Sleep(30);
+
+        QVERIFY(!thumbs::capture(hwnd, QSize()).isNull());
+
+        QVERIFY(::cloak::set(hwnd, true));
+        ::Sleep(50);
+        QVERIFY(::cloak::isCloaked(hwnd));
+
+        // Sampling off (as during overview) — must not need screen pixels.
+        thumbs::setScreenSamplingEnabled(false);
+        QVERIFY(!thumbs::canSampleScreen(hwnd));
+        const QImage cloaked = thumbs::capture(hwnd, QSize());
+        thumbs::setScreenSamplingEnabled(true);
+
+        // Per-window path should still produce a frame for STATIC windows.
+        QVERIFY(!cloaked.isNull());
+        QVERIFY(cloaked.width() > 0 && cloaked.height() > 0);
+
+        ::cloak::set(hwnd, false);
+        ::DestroyWindow(hwnd);
     }
 };
 

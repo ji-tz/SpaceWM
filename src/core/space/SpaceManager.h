@@ -66,7 +66,15 @@ public:
     // Fill null screenshots only (cheap). Prefer buildAllSpacePreviews on open.
     void seedScreenshots();
 
-    // Overview entry: clear windowShot cache, then recapture every managed window.
+    // Preview open step 1 — desktop intact, BEFORE the overview masks are up:
+    // drop + recapture every on-screen managed window. The screen fallback is
+    // only honest at this point (after masks it would bake the overlay in).
+    void refreshVisibleShots();
+
+    // Preview open step 2 — behind the masks: uncloak every managed window,
+    // then capture only windows still missing a shot (keeps switch-time shots
+    // for off-space windows — recapturing them has no screen fallback).
+    // Close re-cloaks via setOverviewOpen(false).
     void warmWindowShots();
 
     // Drop cached shot for hwnd and re-render its owner space (SHOW/resize).
