@@ -21,9 +21,8 @@ bool isCloakedByShell(HWND hwnd)
 }
 
 // Free function with WINAPI/CALLBACK so the type matches WINEVENTPROC exactly.
-void CALLBACK winEventTrampoline(
-    HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LONG /*idChild*/,
-    DWORD, DWORD, LPARAM)
+void CALLBACK winEventTrampoline(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject,
+                                 LONG /*idChild*/, DWORD, DWORD, LPARAM)
 {
     if (WindowTracker::s_instance)
         WindowTracker::s_instance->handle(event, hwnd, idObject);
@@ -38,30 +37,32 @@ WindowTracker::WindowTracker(QObject *parent)
     s_instance = this;
     auto proc = reinterpret_cast<WINEVENTPROC>(&winEventTrampoline);
     // OUTOFCONTEXT: delivered on the thread that runs the message loop (Qt UI).
-    m_createHook = ::SetWinEventHook(
-        EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, nullptr, proc,
-        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    m_destroyHook = ::SetWinEventHook(
-        EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY, nullptr, proc,
-        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    m_locationHook = ::SetWinEventHook(
-        EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, proc,
-        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    m_showHook = ::SetWinEventHook(
-        EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, proc,
-        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    m_foregroundHook = ::SetWinEventHook(
-        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, proc,
-        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_createHook = ::SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE, nullptr, proc, 0, 0,
+                                     WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_destroyHook = ::SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY, nullptr, proc, 0,
+                                      0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_locationHook =
+        ::SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, proc,
+                          0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_showHook = ::SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, proc, 0, 0,
+                                   WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_foregroundHook =
+        ::SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, proc, 0, 0,
+                          WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 }
 
 WindowTracker::~WindowTracker()
 {
-    if (m_createHook) ::UnhookWinEvent(m_createHook);
-    if (m_destroyHook) ::UnhookWinEvent(m_destroyHook);
-    if (m_locationHook) ::UnhookWinEvent(m_locationHook);
-    if (m_showHook) ::UnhookWinEvent(m_showHook);
-    if (m_foregroundHook) ::UnhookWinEvent(m_foregroundHook);
+    if (m_createHook)
+        ::UnhookWinEvent(m_createHook);
+    if (m_destroyHook)
+        ::UnhookWinEvent(m_destroyHook);
+    if (m_locationHook)
+        ::UnhookWinEvent(m_locationHook);
+    if (m_showHook)
+        ::UnhookWinEvent(m_showHook);
+    if (m_foregroundHook)
+        ::UnhookWinEvent(m_foregroundHook);
     if (s_instance == this)
         s_instance = nullptr;
 }
@@ -78,17 +79,20 @@ void WindowTracker::handle(DWORD event, HWND hwnd, LONG idObject)
     case EVENT_OBJECT_CREATE:
     case EVENT_OBJECT_SHOW:
         if (isManageable(hwnd)) {
-            if (m_onCreated) m_onCreated(hwnd);
+            if (m_onCreated)
+                m_onCreated(hwnd);
             emit windowCreated(reinterpret_cast<quint64>(hwnd));
         }
         break;
     case EVENT_OBJECT_DESTROY:
-        if (m_onDestroyed) m_onDestroyed(hwnd);
+        if (m_onDestroyed)
+            m_onDestroyed(hwnd);
         emit windowDestroyed(reinterpret_cast<quint64>(hwnd));
         break;
     case EVENT_OBJECT_LOCATIONCHANGE:
         if (isManageable(hwnd)) {
-            if (m_onLocation) m_onLocation(hwnd);
+            if (m_onLocation)
+                m_onLocation(hwnd);
             emit windowMoved(reinterpret_cast<quint64>(hwnd));
         }
         break;
@@ -104,14 +108,18 @@ void WindowTracker::handle(DWORD event, HWND hwnd, LONG idObject)
 QVector<HWND> WindowTracker::snapshotManageableWindows()
 {
     QVector<HWND> out;
-    struct Ctx { QVector<HWND> *out; } ctx{&out};
+    struct Ctx {
+        QVector<HWND> *out;
+    } ctx{&out};
 
-    ::EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
-        auto *c = reinterpret_cast<Ctx *>(lp);
-        if (isManageable(hwnd))
-            c->out->push_back(hwnd);
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&ctx));
+    ::EnumWindows(
+        [](HWND hwnd, LPARAM lp) -> BOOL {
+            auto *c = reinterpret_cast<Ctx *>(lp);
+            if (isManageable(hwnd))
+                c->out->push_back(hwnd);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
 
     return out;
 }

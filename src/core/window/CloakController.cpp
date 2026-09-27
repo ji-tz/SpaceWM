@@ -15,12 +15,12 @@
 
 namespace {
 
-constexpr CLSID CLSID_ImmersiveShell =
-    {0xC2F03A33, 0x21F5, 0x47FA, {0xB4, 0xBB, 0x15, 0x63, 0x62, 0xA2, 0xF2, 0x39}};
+constexpr CLSID CLSID_ImmersiveShell = {
+    0xC2F03A33, 0x21F5, 0x47FA, {0xB4, 0xBB, 0x15, 0x63, 0x62, 0xA2, 0xF2, 0x39}};
 
 // {1841C6D7-4F9D-42C0-AF41-8747538F10E5}
-static const GUID IID_IApplicationViewCollection =
-    {0x1841C6D7, 0x4F9D, 0x42C0, {0xAF, 0x41, 0x87, 0x47, 0x53, 0x8F, 0x10, 0xE5}};
+static const GUID IID_IApplicationViewCollection = {
+    0x1841C6D7, 0x4F9D, 0x42C0, {0xAF, 0x41, 0x87, 0x47, 0x53, 0x8F, 0x10, 0xE5}};
 
 constexpr int AVCT_NONE = 0;
 constexpr int AVCT_DEFAULT = 1;
@@ -46,10 +46,7 @@ std::unordered_map<HWND, HiddenInfo> g_hidden;
 
 struct ComMark {
     HRESULT hr;
-    ComMark()
-    {
-        hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    }
+    ComMark() { hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE); }
     ~ComMark()
     {
         if (hr == S_OK)
@@ -60,11 +57,11 @@ struct ComMark {
 MIDL_INTERFACE("372E1D3B-38D3-42E4-A15B-8AB2B178F513")
 IApplicationViewSlim : public IInspectable
 {
-public:
+  public:
     virtual HRESULT STDMETHODCALLTYPE SetFocus() = 0;
     virtual HRESULT STDMETHODCALLTYPE SwitchTo() = 0;
     virtual HRESULT STDMETHODCALLTYPE TryInvokeBack(void *cb) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetThumbnailWindow(HWND *hwnd) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetThumbnailWindow(HWND * hwnd) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetMonitor(void **m) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetVisibility(int *v) = 0;
     virtual HRESULT STDMETHODCALLTYPE SetCloak(int cloakType, int unknown) = 0;
@@ -73,11 +70,11 @@ public:
 MIDL_INTERFACE("1841C6D7-4F9D-42C0-AF41-8747538F10E5")
 IApplicationViewCollectionSlim : public IInspectable
 {
-public:
+  public:
     virtual HRESULT STDMETHODCALLTYPE GetViews(void **v) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetViewsByZOrder(void **v) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetViewsByAppUserModelId(PCWSTR id, void **v) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetViewForHwnd(HWND hwnd, IApplicationViewSlim **view) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetViewForHwnd(HWND hwnd, IApplicationViewSlim * *view) = 0;
 };
 
 IApplicationViewCollectionSlim *viewCollection()
@@ -90,9 +87,8 @@ IApplicationViewCollectionSlim *viewCollection()
 
     ComMark com;
     IUnknown *unk = nullptr;
-    HRESULT hr = ::CoCreateInstance(CLSID_ImmersiveShell, nullptr,
-                                    CLSCTX_INPROC_SERVER, IID_IUnknown,
-                                    reinterpret_cast<void **>(&unk));
+    HRESULT hr = ::CoCreateInstance(CLSID_ImmersiveShell, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_IUnknown, reinterpret_cast<void **>(&unk));
     if (FAILED(hr) || !unk)
         return nullptr;
 
@@ -103,8 +99,7 @@ IApplicationViewCollectionSlim *viewCollection()
         return nullptr;
 
     void *coll = nullptr;
-    hr = sp->QueryService(IID_IApplicationViewCollection,
-                          IID_IApplicationViewCollection, &coll);
+    hr = sp->QueryService(IID_IApplicationViewCollection, IID_IApplicationViewCollection, &coll);
     sp->Release();
     if (FAILED(hr) || !coll)
         return nullptr;
@@ -193,8 +188,8 @@ bool showViaShowWindow(HWND hwnd)
     if (st.hasPlacement) {
         WINDOWPLACEMENT wp = st.placement;
         wp.length = sizeof(wp);
-        if (::IsIconic(hwnd) && wp.showCmd != SW_SHOWMINIMIZED
-            && wp.showCmd != SW_SHOWMINNOACTIVE && wp.showCmd != SW_MINIMIZE)
+        if (::IsIconic(hwnd) && wp.showCmd != SW_SHOWMINIMIZED &&
+            wp.showCmd != SW_SHOWMINNOACTIVE && wp.showCmd != SW_MINIMIZE)
             wp.showCmd = SW_SHOWMINIMIZED;
         ::SetWindowPlacement(hwnd, &wp);
     } else if (st.wasVisible) {

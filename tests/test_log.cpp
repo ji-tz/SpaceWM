@@ -8,7 +8,7 @@
 // TR = <root>/TR/trace.log, EH = <root>/EH/error.log — spdlog-backed.
 class TestLog : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void initTestCase()
     {
         m_dir = new QTemporaryDir();
@@ -93,7 +93,7 @@ private slots:
         QVERIFY(all.contains(QStringLiteral("unit-after-restart")));
     }
 
-private:
+  private:
     QTemporaryDir *m_dir = nullptr;
 };
 

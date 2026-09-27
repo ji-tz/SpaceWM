@@ -117,8 +117,8 @@ void WindowPreviewWidget::mousePressEvent(QMouseEvent *event)
 void WindowPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 {
     if ((event->buttons() & Qt::LeftButton) && m_hwnd) {
-        if (!m_dragging
-            && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
+        if (!m_dragging &&
+            (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
             m_dragging = true;
             startDrag();
             m_dragging = false;
@@ -132,9 +132,8 @@ void WindowPreviewWidget::mouseMoveEvent(QMouseEvent *event)
 void WindowPreviewWidget::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        const bool wasDrag = m_dragging
-            || (event->pos() - m_pressPos).manhattanLength()
-                >= QApplication::startDragDistance();
+        const bool wasDrag = m_dragging || (event->pos() - m_pressPos).manhattanLength() >=
+                                               QApplication::startDragDistance();
         setCursor(Qt::OpenHandCursor);
         m_dragging = false;
         if (!wasDrag && m_hwnd)
@@ -192,8 +191,7 @@ void WindowPreviewWidget::startDrag()
 }
 
 QPoint WindowPreviewWidget::mapPressToHotSpot(const QPoint &pressInWidget,
-                                              const QPoint &imageTopLeftInWidget,
-                                              const QSize &box,
+                                              const QPoint &imageTopLeftInWidget, const QSize &box,
                                               const QSize &pixmapSize)
 {
     if (pixmapSize.width() <= 0 || pixmapSize.height() <= 0)

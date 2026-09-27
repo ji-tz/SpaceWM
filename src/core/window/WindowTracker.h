@@ -9,7 +9,7 @@
 // when using WINEVENT_OUTOFCONTEXT, which matches our single-threaded Qt app.
 class WindowTracker : public QObject {
     Q_OBJECT
-public:
+  public:
     using WindowCallback = std::function<void(HWND)>;
 
     explicit WindowTracker(QObject *parent = nullptr);
@@ -32,14 +32,14 @@ public:
     // Called from the WinEvent trampoline (friend-equivalent via public).
     void handle(DWORD event, HWND hwnd, LONG idObject);
 
-signals:
+  signals:
     void windowCreated(quint64 hwnd);
     void windowDestroyed(quint64 hwnd);
     void windowMoved(quint64 hwnd);
     // Top-level window came to the foreground (taskbar click, Alt+Tab, …).
     void windowForeground(quint64 hwnd);
 
-private:
+  private:
     HWINEVENTHOOK m_createHook = nullptr;
     HWINEVENTHOOK m_destroyHook = nullptr;
     HWINEVENTHOOK m_locationHook = nullptr;

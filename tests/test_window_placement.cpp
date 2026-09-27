@@ -17,7 +17,7 @@
 // Mission Control placement: drag window previews onto the space strip.
 class TestWindowPlacement : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void mimeRoundTrip()
     {
         quint64 h = quint64(0x1234);
@@ -42,28 +42,27 @@ private slots:
         const QSize box(200, 120);
         const QSize pm(200, 120);
 
-        const QPoint mid = WindowPreviewWidget::mapPressToHotSpot(
-            QPoint(10 + 100, 10 + 60), imageTopLeft, box, pm);
+        const QPoint mid = WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 100, 10 + 60),
+                                                                  imageTopLeft, box, pm);
         QCOMPARE(mid, QPoint(100, 60));
 
-        const QPoint nearCorner = WindowPreviewWidget::mapPressToHotSpot(
-            QPoint(10 + 20, 10 + 15), imageTopLeft, box, pm);
+        const QPoint nearCorner =
+            WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 20, 10 + 15), imageTopLeft, box, pm);
         QCOMPARE(nearCorner, QPoint(20, 15));
 
         // Title below the image clamps into the pixmap (x still follows the click).
-        const QPoint onTitle = WindowPreviewWidget::mapPressToHotSpot(
-            QPoint(10 + 50, 10 + 120 + 8), imageTopLeft, box, pm);
+        const QPoint onTitle = WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 50, 10 + 120 + 8),
+                                                                      imageTopLeft, box, pm);
         QCOMPARE(onTitle.x(), 50);
         QCOMPARE(onTitle.y(), pm.height() - 1);
 
         // Letterboxed pixmap smaller than box: scale press into pixmap space.
         const QSize pmSmall(160, 90);
-        const QPoint scaled = WindowPreviewWidget::mapPressToHotSpot(
-            QPoint(10 + 100, 10 + 60), imageTopLeft, box, pmSmall);
+        const QPoint scaled = WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 100, 10 + 60),
+                                                                     imageTopLeft, box, pmSmall);
         QCOMPARE(scaled, QPoint(80, 45));
 
-        QCOMPARE(WindowPreviewWidget::mapPressToHotSpot(QPoint(5, 5), QPoint(0, 0),
-                                                        box, QSize()),
+        QCOMPARE(WindowPreviewWidget::mapPressToHotSpot(QPoint(5, 5), QPoint(0, 0), box, QSize()),
                  QPoint(0, 0));
     }
 
@@ -101,10 +100,9 @@ private slots:
         // placeWindowInSpace requires trackWindow success).
         // Create a window in this process: trackWindow rejects own process.
         // So placeWindowInSpace should fail cleanly for own HWND.
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"placement-test",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30, 30, 320, 200,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"placement-test", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30,
+                              30, 320, 200, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
 
         w.openOnMonitor(m->hmon);
@@ -217,8 +215,9 @@ private slots:
         for (SpaceCardWidget *card : cards) {
             if (!card || card->spaceIndex() < 0)
                 continue;
-            QVERIFY2(card->isRemovable(),
-                     qPrintable(QStringLiteral("card %1 should be removable").arg(card->spaceIndex())));
+            QVERIFY2(
+                card->isRemovable(),
+                qPrintable(QStringLiteral("card %1 should be removable").arg(card->spaceIndex())));
             QCOMPARE(card->removeRevealDelayMs(), 2000);
             ++checked;
         }
@@ -233,8 +232,8 @@ private slots:
     {
         AddSpaceButton btn;
         QSignalSpy spy(&btn, &AddSpaceButton::addRequested);
-        QMouseEvent press(QEvent::MouseButtonPress, QPointF(36, 36),
-                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(36, 36), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
         QApplication::sendEvent(&btn, &press);
         QCOMPARE(spy.count(), 1);
     }
@@ -284,10 +283,9 @@ private slots:
         auto *m = sm.monitors().first();
         const int origin = m->currentIndex;
 
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"place-stay",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 400, 300,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"place-stay", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50,
+                              400, 300, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         QVERIFY(sm.assignWindow(hwnd, m->hmon, origin));
 
@@ -435,10 +433,9 @@ private slots:
     {
         SpaceManager sm;
         auto *m = sm.monitors().first();
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"merge-src",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, 320, 220,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"merge-src", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60,
+                              320, 220, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         QVERIFY(sm.addSpace(m->hmon)); // ensure > 1
         const int src = m->spaces.size() - 1;
@@ -467,10 +464,9 @@ private slots:
         const int n = m->spaces.size();
         QVERIFY(n >= 3);
 
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"reorder-w",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 300, 200,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"reorder-w", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40,
+                              300, 200, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         QVERIFY(sm.assignWindow(hwnd, m->hmon, 0));
         QCOMPARE(sm.spaceOfWindow(hwnd), 0);
@@ -558,11 +554,10 @@ private slots:
         // Several short-lived own-process windows on the current space.
         QVector<HWND> created;
         for (int i = 0; i < 3; ++i) {
-            HWND hwnd = ::CreateWindowExW(
-                0, L"STATIC", L"pack-test",
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                40 + i * 30, 40 + i * 24, 420 + i * 40, 280 + i * 20,
-                nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+            HWND hwnd =
+                ::CreateWindowExW(0, L"STATIC", L"pack-test", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                                  40 + i * 30, 40 + i * 24, 420 + i * 40, 280 + i * 20, nullptr,
+                                  nullptr, ::GetModuleHandleW(nullptr), nullptr);
             QVERIFY(hwnd != nullptr);
             created.push_back(hwnd);
             // assignWindow bypasses own-process tracker reject used by placeWindowInSpace.
@@ -583,10 +578,14 @@ private slots:
             QVERIFY(real.width() > 0 && real.height() > 0);
             QVERIFY2(box.width() <= real.width(),
                      qPrintable(QStringLiteral("tile %1 wider than logical real (%2>%3)")
-                                    .arg(box.width()).arg(real.width()).arg(real.width())));
+                                    .arg(box.width())
+                                    .arg(real.width())
+                                    .arg(real.width())));
             QVERIFY2(box.height() <= real.height(),
                      qPrintable(QStringLiteral("tile %1 taller than logical real (%2>%3)")
-                                    .arg(box.height()).arg(real.height()).arg(real.height())));
+                                    .arg(box.height())
+                                    .arg(real.height())
+                                    .arg(real.height())));
             // Physical is always ≥ logical at DPI≥96 — tile must not exceed physical either.
             RECT wr{};
             if (::GetWindowRect(hwnd, &wr)) {
@@ -643,10 +642,9 @@ private slots:
         // Cold start is 1 space (issue #8) — grow for the assign to index 2.
         while (m->spaces.size() < 3)
             QVERIFY(sm.addSpace(m->hmon));
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"move-refresh-test",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd = ::CreateWindowExW(0, L"STATIC", L"move-refresh-test",
+                                      WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240, nullptr,
+                                      nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
 
         QVERIFY(sm.assignWindow(hwnd, m->hmon, 0));
@@ -696,11 +694,11 @@ private slots:
         tile.setWindow(reinterpret_cast<HWND>(0xABC), QStringLiteral("T"), img);
         QSignalSpy spy(&tile, &WindowPreviewWidget::activated);
 
-        QMouseEvent press(QEvent::MouseButtonPress, QPointF(20, 20),
-                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(20, 20), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
         QApplication::sendEvent(&tile, &press);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(21, 20),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(21, 20), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(&tile, &release);
 
         QCOMPARE(spy.count(), 1);
