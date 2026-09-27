@@ -50,6 +50,11 @@ class SpaceManager : public QObject {
     void setOverviewOpen(bool open);
     bool overviewOpen() const { return m_overviewOpen; }
 
+    // Re-apply cloak for every monitor right now (warm uncloaked everything
+    // behind the overview mask — callers invoke this BEFORE the mask fades
+    // so off-space windows never flash on the desktop).
+    void recloakNow();
+
     void setAnimationEnabled(bool on) { m_animationEnabled = on; }
 
     // Snapshot the monitor into space[index].screenshot.
@@ -66,7 +71,15 @@ class SpaceManager : public QObject {
     // Fill null screenshots only (cheap). Prefer buildAllSpacePreviews on open.
     void seedScreenshots();
 
-    // Overview entry: clear windowShot cache, then recapture every managed window.
+    // Preview open step 1 — desktop intact, BEFORE the overview masks are up:
+    // drop + recapture every on-screen managed window. The screen fallback is
+    // only honest at this point (after masks it would bake the overlay in).
+    void refreshVisibleShots();
+
+    // Preview open step 2 — behind the masks: uncloak every managed window,
+    // then capture only windows still missing a shot (keeps switch-time shots
+    // for off-space windows — recapturing them has no screen fallback).
+    // Close re-cloaks via setOverviewOpen(false).
     void warmWindowShots();
 
     // Drop cached shot for hwnd and re-render its owner space (SHOW/resize).

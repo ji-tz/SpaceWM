@@ -25,6 +25,11 @@ class WindowTracker : public QObject {
     // Heuristic: app window we may place into a space.
     static bool isManageable(HWND hwnd);
 
+    // Shell / secure-desktop classes we never manage (pure — unit-tested).
+    // Includes LockScreenInputOcclusionFrame: fullscreen lock surfaces steal
+    // foreground and would auto-close the overview.
+    static bool isBannedClassName(const QString &name);
+
     // SetWinEventHook has no user-data slot; one instance per process.
     // Public so the free-function trampoline can dispatch to it.
     static WindowTracker *s_instance;

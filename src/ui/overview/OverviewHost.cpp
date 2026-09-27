@@ -1,7 +1,9 @@
 #include "OverviewHost.h"
 
+#include "core/log/Log.h"
 #include "core/monitor/MonitorInfo.h"
 
+#include <QElapsedTimer>
 #include <QTimer>
 
 OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
@@ -90,31 +92,92 @@ void OverviewHost::openAll()
     m_switching = false;
     m_active = nullptr;
 
-    // Refresh window shots FIRST (clear+recapture), then rebuild space
-    // composites from those fresh shots — reopening must not reuse stale tiles.
-    m_manager->warmWindowShots();
-    m_manager->buildAllSpacePreviews();
-    m_manager->setOverviewOpen(true);
-
     const HMONITOR cursor = monitors::fromCursor();
+    QElapsedTimer t;
+    t.start();
 
+    // 1) Desktop intact: refresh shots for on-screen windows. The screen
+    //    fallback is honest only now — once the mask is up it would bake
+    //    the overlay into other spaces' cards.
+    m_manager->refreshVisibleShots();
+    const qint64 msRefresh = t.restart();
+
+    // 2) Dark masks up first — uncloak/capture must not flash on the desktop.
     for (OverviewWindow *w : std::as_const(m_panels)) {
         if (w->targetMonitor() == cursor)
             continue;
-        w->openOnMonitor(w->targetMonitor(), /*takeFocus=*/false);
+        QElapsedTimer mt;
+        mt.start();
+        w->beginPanelOpen(w->targetMonitor(), /*takeFocus=*/false);
+        spacelog::info(QStringLiteral("overview mask mon=0x%1 ms=%2 focus=0")
+                           .arg(quintptr(w->targetMonitor()), 0, 16)
+                           .arg(mt.elapsed()));
     }
     for (OverviewWindow *w : std::as_const(m_panels)) {
         if (w->targetMonitor() == cursor) {
-            w->openOnMonitor(cursor, /*takeFocus=*/true);
+            QElapsedTimer mt;
+            mt.start();
+            w->beginPanelOpen(cursor, /*takeFocus=*/true);
+            spacelog::info(QStringLiteral("overview mask mon=0x%1 ms=%2 focus=1")
+                               .arg(quintptr(cursor), 0, 16)
+                               .arg(mt.elapsed()));
             m_active = w;
             break;
         }
     }
     if (!m_active && !m_panels.isEmpty()) {
         auto *first = m_panels.first();
-        first->openOnMonitor(first->targetMonitor(), true);
+        first->beginPanelOpen(first->targetMonitor(), true);
         m_active = first;
     }
+    const qint64 msMasks = t.restart();
+
+    // 3) Behind the mask: mark overview open, unhide, capture whatever is
+    //    still missing (off-space windows), then composite space cards.
+    m_manager->setOverviewOpen(true);
+    m_manager->warmWindowShots();
+    const qint64 msWarm = t.restart();
+    m_manager->buildAllSpacePreviews();
+    const qint64 msBuild = t.restart();
+
+    // 4) Lockstep populate: ALL panels reveal cards and start their enter
+    //    fade together FIRST — one monitor's heavy tile build must never
+    //    delay the other monitor's reveal (was: sequential full populate per
+    //    panel, which showed the secondary much later). Tiles fill in while
+    //    the panels are already fading in.
+    for (OverviewWindow *w : std::as_const(m_panels)) {
+        QElapsedTimer pt;
+        pt.start();
+        w->populateCards();
+        spacelog::info(QStringLiteral("overview cards mon=0x%1 ms=%2")
+                           .arg(quintptr(w->targetMonitor()), 0, 16)
+                           .arg(pt.elapsed()));
+    }
+    const qint64 msCards = t.restart();
+    for (OverviewWindow *w : std::as_const(m_panels))
+        w->startPanelEnterAnimation();
+    const qint64 msAnims = t.restart();
+    for (OverviewWindow *w : std::as_const(m_panels)) {
+        QElapsedTimer pt;
+        pt.start();
+        w->populateTiles();
+        spacelog::info(QStringLiteral("overview tiles mon=0x%1 ms=%2")
+                           .arg(quintptr(w->targetMonitor()), 0, 16)
+                           .arg(pt.elapsed()));
+    }
+    const qint64 msTiles = t.restart();
+
+    spacelog::info(
+        QStringLiteral("overview open timings: refresh=%1ms masks=%2ms warm=%3ms build=%4ms "
+                       "cards=%5ms anims=%6ms tiles=%7ms panels=%8")
+            .arg(msRefresh)
+            .arg(msMasks)
+            .arg(msWarm)
+            .arg(msBuild)
+            .arg(msCards)
+            .arg(msAnims)
+            .arg(msTiles)
+            .arg(m_panels.size()));
 }
 
 void OverviewHost::closeAll(bool commit)

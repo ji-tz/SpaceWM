@@ -86,6 +86,26 @@ class TestCloak : public QObject {
         QCOMPARE(cloak::hiddenCount(), 0);
     }
 
+    // Space switches must not play show/hide animations: cloak force-disables
+    // the per-window DWM transition (DWMWA_TRANSITIONS_FORCEDISABLED) and a
+    // successful show restores it so the app's normal animations come back.
+    // The attribute is [set]-only in the SDK — assert via cloak bookkeeping,
+    // which also fails if the underlying DwmSetWindowAttribute call errors.
+    void cloakForcesTransitionsOffUntilShown()
+    {
+        QVERIFY(!cloak::transitionsForced(m_hwnd));
+
+        QVERIFY(cloak::set(m_hwnd, true));
+        QVERIFY(cloak::isCloaked(m_hwnd));
+        QVERIFY2(cloak::transitionsForced(m_hwnd),
+                 "cloak must force-disable DWM transitions while hidden");
+
+        QVERIFY(cloak::set(m_hwnd, false));
+        QVERIFY(!cloak::isCloaked(m_hwnd));
+        QVERIFY2(!cloak::transitionsForced(m_hwnd),
+                 "show must restore DWM transitions for the window");
+    }
+
   private:
     HWND m_hwnd = nullptr;
 };

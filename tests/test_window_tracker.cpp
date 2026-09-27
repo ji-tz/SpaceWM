@@ -62,6 +62,16 @@ class TestWindowTracker : public QObject {
             QVERIFY(!WindowTracker::isManageable(progman));
     }
 
+    // Lock-screen occlusion is banned by class: managing it would cloak a
+    // secure-desktop surface and its foreground steals auto-close overview.
+    void bansLockScreenOcclusionClass()
+    {
+        QVERIFY(WindowTracker::isBannedClassName(QStringLiteral("LockScreenInputOcclusionFrame")));
+        QVERIFY(WindowTracker::isBannedClassName(QStringLiteral("Progman")));
+        QVERIFY(!WindowTracker::isBannedClassName(QStringLiteral("Chrome_WidgetWin_1")));
+        QVERIFY(!WindowTracker::isBannedClassName(QStringLiteral("Notepad")));
+    }
+
     void snapshotDoesNotCrash()
     {
         const auto list = WindowTracker::snapshotManageableWindows();

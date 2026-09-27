@@ -124,6 +124,28 @@ QVector<HWND> WindowTracker::snapshotManageableWindows()
     return out;
 }
 
+bool WindowTracker::isBannedClassName(const QString &name)
+{
+    static const QSet<QString> banned = {
+        QStringLiteral("Progman"),
+        QStringLiteral("WorkerW"),
+        QStringLiteral("Shell_TrayWnd"),
+        QStringLiteral("Shell_SecondaryTrayWnd"),
+        QStringLiteral("NotifyIconOverflowWindow"),
+        QStringLiteral("Windows.UI.Core.CoreWindow"),
+        QStringLiteral("ApplicationFrameWindow"),
+        QStringLiteral("SysListView32"),
+        QStringLiteral("SysHeader32"),
+        QStringLiteral("ToolTips_Class32"),
+        QStringLiteral("DV2ControlHost"),
+        QStringLiteral("Button"),
+        // Secure-desktop / lock-screen surface: fullscreen, appears with Win+L
+        // and would steal foreground (auto-closing the overview).
+        QStringLiteral("LockScreenInputOcclusionFrame"),
+    };
+    return banned.contains(name);
+}
+
 bool WindowTracker::isManageable(HWND hwnd)
 {
     // Only discover currently-visible top-level windows.
@@ -145,22 +167,8 @@ bool WindowTracker::isManageable(HWND hwnd)
 
     wchar_t cls[64]{};
     ::GetClassNameW(hwnd, cls, 64);
-    static const QSet<QString> banned = {
-        QStringLiteral("Progman"),
-        QStringLiteral("WorkerW"),
-        QStringLiteral("Shell_TrayWnd"),
-        QStringLiteral("Shell_SecondaryTrayWnd"),
-        QStringLiteral("NotifyIconOverflowWindow"),
-        QStringLiteral("Windows.UI.Core.CoreWindow"),
-        QStringLiteral("ApplicationFrameWindow"),
-        QStringLiteral("SysListView32"),
-        QStringLiteral("SysHeader32"),
-        QStringLiteral("ToolTips_Class32"),
-        QStringLiteral("DV2ControlHost"),
-        QStringLiteral("Button"),
-    };
     const QString name = QString::fromWCharArray(cls);
-    if (banned.contains(name)) {
+    if (isBannedClassName(name)) {
         if (name == QLatin1String("ApplicationFrameWindow")) {
             wchar_t title[256]{};
             ::GetWindowTextW(hwnd, title, 256);

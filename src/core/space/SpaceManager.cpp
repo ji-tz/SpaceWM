@@ -170,17 +170,47 @@ void SpaceManager::buildAllSpacePreviews()
     }
 }
 
+void SpaceManager::refreshVisibleShots()
+{
+    // Open step 1 — masks are NOT up yet: PrintWindow-black windows can still
+    // fall back to an honest screen sample of what the user sees right now.
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+        const MonitorSpaces &m = it.value();
+        for (const Space &sp : m.spaces) {
+            for (HWND hwnd : sp.windows) {
+                if (!::IsWindow(hwnd) || ::IsIconic(hwnd) || !thumbs::canSampleScreen(hwnd))
+                    continue;
+                thumbs::invalidateWindow(hwnd);
+                thumbs::windowShot(hwnd); // recapture with screen fallback allowed
+            }
+        }
+    }
+}
+
 void SpaceManager::warmWindowShots()
 {
-    // Overview entry: drop every cached shot so reopening recaptures live pixels
-    // (stale PrintWindow from last open looked “not a real screenshot”).
-    thumbs::clearWindowCache();
+    // Cloaked off-space windows black-frame under PrintWindow — unhide first
+    // so every HWND gets a real capture attempt. setOverviewOpen(false) re-cloaks non-current.
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
         const MonitorSpaces &m = it.value();
         for (const Space &sp : m.spaces) {
             for (HWND hwnd : sp.windows) {
                 if (::IsWindow(hwnd) && !::IsIconic(hwnd))
-                    thumbs::windowShot(hwnd); // fresh capture into cache
+                    ::cloak::set(hwnd, false);
+            }
+        }
+    }
+
+    // Fill MISSING shots only. Visible windows were refreshed pre-mask by
+    // refreshVisibleShots(); off-space windows keep their switch-time shots
+    // (a blind clear+recapture here would trade known-good pixels for
+    // PrintWindow-only frames that come back black for GPU windows).
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
+        const MonitorSpaces &m = it.value();
+        for (const Space &sp : m.spaces) {
+            for (HWND hwnd : sp.windows) {
+                if (::IsWindow(hwnd) && !::IsIconic(hwnd))
+                    thumbs::windowShot(hwnd); // cached → no-op; missing → capture
             }
         }
     }
@@ -189,8 +219,15 @@ void SpaceManager::warmWindowShots()
 bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
 {
     auto *m = monitorOf(hmon);
-    if (!m || index < 0 || index >= m->spaces.size() || index == m->currentIndex)
+    if (!m || index < 0 || index >= m->spaces.size())
         return false;
+    if (index == m->currentIndex) {
+        // Same space (e.g. clicking the current card right after open):
+        // still re-apply cloak — overview warm uncloaked every managed window
+        // and no other step may recloak (flash-on-close otherwise).
+        applyVisibility(hmon);
+        return false;
+    }
 
     const int from = m->currentIndex;
     if (!m_overviewOpen)
@@ -609,10 +646,19 @@ void SpaceManager::untrackWindow(HWND hwnd)
     emit windowUntracked(reinterpret_cast<quint64>(hwnd));
 }
 
+void SpaceManager::recloakNow()
+{
+    for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
+        applyVisibility(it.value().hmon);
+}
+
 void SpaceManager::setOverviewOpen(bool open)
 {
     const bool was = m_overviewOpen;
     m_overviewOpen = open;
+    // While the overlay covers the desktop, screen BitBlt would bake the
+    // overview (or current space) into other spaces' cards — disable it.
+    thumbs::setScreenSamplingEnabled(!open);
     if (was && !open) {
         for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
             applyVisibility(it.value().hmon);

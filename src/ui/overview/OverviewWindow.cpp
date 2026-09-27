@@ -65,6 +65,14 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
             if (sp == m_selected || sp == m_manager->currentSpaceIndex(m_hmon))
                 rebuildWindowPreviews();
         });
+        // The CURRENT pill must follow the model the moment a space commits
+        // (click/Enter/hotkey switch while the panels are still on screen) —
+        // otherwise the badge only syncs on the next hover/refresh.
+        connect(m_manager, &SpaceManager::spaceChanged, this, [this](quint64 hmon, int) {
+            if (!m_hmon || hmon != quint64(m_hmon) || m_cards.isEmpty())
+                return;
+            refreshCardBadges();
+        });
     }
 
     m_root = new QWidget(this);
@@ -100,6 +108,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(spaceLabel);
 
     m_spaceStripHost = new QWidget(m_root);
+    m_spaceStripHost->setObjectName(QStringLiteral("SpaceStripHost"));
     auto *stripOuter = new QVBoxLayout(m_spaceStripHost);
     stripOuter->setContentsMargins(0, 0, 0, 0);
     m_cardRow = new QHBoxLayout;
@@ -132,6 +141,7 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(winLabel);
 
     m_windowScroll = new QScrollArea(m_root);
+    m_windowScroll->setObjectName(QStringLiteral("WindowScroll"));
     m_windowScroll->setWidgetResizable(true);
     m_windowScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_windowScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -279,6 +289,28 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
     if (m_closePending)
         return;
 
+    // Desktop intact: refresh on-screen shots (screen fallback honest here).
+    if (m_manager && !m_hostManaged)
+        m_manager->refreshVisibleShots();
+
+    // 1) Dark mask first so uncloak/capture is never visible on the desktop.
+    beginPanelOpen(hmon, takeFocus);
+
+    if (m_manager && !m_hostManaged) {
+        m_manager->setOverviewOpen(true);
+        m_manager->warmWindowShots();
+        m_manager->buildAllSpacePreviews();
+    }
+    // Host path: mask already up; Host runs refresh/warm/build then populateOpenContent.
+
+    populateOpenContent();
+}
+
+void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
+{
+    if (m_closePending)
+        return;
+
     auto *m = m_manager ? m_manager->monitorOf(hmon) : nullptr;
     if (!m)
         return;
@@ -288,20 +320,9 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
     m_hmon = hmon;
     m_exitStarted = false;
 
-    if (m_manager) {
-        if (!m_hostManaged) {
-            // Fresh window shots before composites so reopen never shows stale tiles.
-            m_manager->warmWindowShots();
-            m_manager->buildAllSpacePreviews();
-            m_manager->setOverviewOpen(true);
-        }
-        // Host path: batch caches already built in OverviewHost::openAll.
-    }
-
     // Cover the work area only — taskbar remains on top / visible.
     const QRect work = monitors::logicalWorkArea(hmon);
     setGeometry(work.isValid() && !work.isEmpty() ? work : m->geometry);
-    rebuildCards();
     m_originSpace = m->currentIndex;
     m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
     m_open = true;
@@ -309,6 +330,13 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
     m_pendingCommit = -1;
 
     show();
+    // Stale content must not be visible while warm/build runs behind the
+    // mask (old CURRENT pill / old tiles for seconds on heavy machines) —
+    // populateOpenContent shows them again once cards are rebuilt.
+    if (m_spaceStripHost)
+        m_spaceStripHost->hide();
+    if (m_windowScroll)
+        m_windowScroll->hide();
     setWindowOpacity(1.0);
     pinToMonitorPhysically();
     raise();
@@ -320,11 +348,54 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
             ::SetFocus(h);
         }
     }
+}
 
+void OverviewWindow::populateOpenContent()
+{
+    // Single-panel convenience: the three lockstep phases in order.
+    populateCards();
+    populateTiles();
+    startPanelEnterAnimation();
+}
+
+void OverviewWindow::populateCards()
+{
+    if (!m_open || m_closePending)
+        return;
+
+    rebuildCards();
+    m_selected = qBound(0, m_selected, qMax(0, m_cards.size() - 1));
+    setSelected(m_selected);
+
+    // Reveal only AFTER the fresh cards exist (hidden since beginPanelOpen so
+    // stale pills/tiles never showed through the mask during warm/build).
+    if (m_spaceStripHost)
+        m_spaceStripHost->show();
+    if (m_windowScroll)
+        m_windowScroll->show();
+
+    // Geometry must be settled before the viewport-dependent strip rebuild.
+    if (layout())
+        layout()->activate();
+    if (m_root && m_root->layout())
+        m_root->layout()->activate();
+    if (m_spaceStripHost && m_spaceStripHost->layout())
+        m_spaceStripHost->layout()->activate();
+}
+
+void OverviewWindow::populateTiles()
+{
+    if (!m_open || m_closePending)
+        return;
     // Build the bottom strip AFTER the widget is shown so viewport width/height
     // match later rebuilds (drag/hover) — fixes size mismatch on first open.
     rebuildWindowPreviews();
+}
 
+void OverviewWindow::startPanelEnterAnimation()
+{
+    if (!m_open || m_closePending)
+        return;
     playEnterAnimation();
 }
 
@@ -389,6 +460,11 @@ void OverviewWindow::startExit()
     if (m_exitStarted)
         return;
     m_exitStarted = true;
+    // Cloak BEFORE the mask starts fading: overview warm uncloaked every
+    // managed window, and setOverviewOpen(false) only recloaks after the
+    // panels are gone — without this off-space windows flash on the desktop.
+    if (m_manager)
+        m_manager->recloakNow();
     cancelAnimations();
     playExitAnimation();
 }
@@ -1020,24 +1096,9 @@ void OverviewWindow::playEnterAnimation()
     });
     anim->start(QAbstractAnimation::DeleteWhenStopped);
 
-    for (int i = 0; i < m_cards.size(); ++i) {
-        auto *card = m_cards[i];
-        if (!card)
-            continue;
-        const QPoint end = card->pos();
-        const QPoint start = end + QPoint(0, 16);
-        card->move(start);
-        QTimer::singleShot(i * 25, this, [card, end]() {
-            if (!card)
-                return;
-            auto *a = new QPropertyAnimation(card, "pos", card);
-            a->setDuration(180);
-            a->setStartValue(card->pos());
-            a->setEndValue(end);
-            a->setEasingCurve(QEasingCurve::OutCubic);
-            a->start(QAbstractAnimation::DeleteWhenStopped);
-        });
-    }
+    // Card stagger slide removed: it snapshotted card->pos() before the strip
+    // layout settled, so every card animated to the same stale point and the
+    // row collapsed into a stack. Cards now just appear where layout put them.
 }
 
 void OverviewWindow::playExitAnimation()

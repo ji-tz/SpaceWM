@@ -7,8 +7,16 @@
 #include <QVector>
 #include <Windows.h>
 
+class QThread;
+
 // Global hotkeys via low-level keyboard hook (primary) + RegisterHotKey fallback.
 // Bindings are configurable (including Win-combos that occupy system shortcuts).
+//
+// The LL hook runs on a DEDICATED thread with its own message pump: Windows
+// silently removes hooks whose installer thread does not answer within
+// LowLevelHooksTimeout, and the overview open path can block the main thread
+// for seconds (capture batches) — on the main thread every hotkey would die
+// after the first slow open.
 class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     Q_OBJECT
   public:
@@ -45,6 +53,13 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     Binding bindingFor(int action) const;
     bool usesWinBindings() const;
 
+    // Esc handling while the overview is open: the hook swallows Esc and
+    // emits escapeRequested() instead — works even when the panel lost
+    // focus to the bounced foreground window (panel keyPressEvent still
+    // covers the focused case / tests).
+    void setConsumeEscape(bool on);
+    bool consumeEscape() const;
+
     // Portable sequence helpers (pure — unit-tested).
     static QString defaultSequence(int action);
     static QString systemSequence(int action); // Win+Tab / Ctrl+Win+←/→
@@ -66,12 +81,26 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     // plain Win tap still injects down+up so Start keeps working.
     static WinUpDecision winKeyUpDecision(bool deferredNotForwarded, bool chordKeyAte,
                                           bool foreignModifierHeld);
+    // LL-hook auto-repeat guard (unit-tested): Windows repeats keyDOWN while
+    // a key is held and MOD_NOREPEAT does not apply to hooks — without this
+    // one long Ctrl+Alt+Space press toggles the overview twice (open → close).
+    // keyDownEmits: true only for the FIRST down of a press; keyUpSeen clears.
+    static bool keyDownEmits(UINT vk);
+    static void keyUpSeen(UINT vk);
+    // Alt+Tab / Alt+Ctrl+Tab — the documented window-switcher chord. The hook
+    // observes it directly (unit-tested) so main can treat the next
+    // foreground change as a user switch instead of a system side-effect.
+    static bool isWindowSwitchChord(UINT vk, bool altDown);
 
     // native filter
     bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override;
 
   signals:
     void actionTriggered(int action);
+    // User pressed Alt+Tab (window switcher) — queued like actionTriggered.
+    void windowSwitchChord();
+    // Esc pressed while consumeEscape() is set (overview open) — queued.
+    void escapeRequested();
 
   private:
     struct BindingInternal {
@@ -86,4 +115,5 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     QVector<Binding> m_bindings;
     QVector<BindingInternal> m_registered; // RegisterHotKey fallback only
     QVector<int> m_registeredIds;
+    QThread *m_hookThread = nullptr; // owns the LL hook + its message pump
 };

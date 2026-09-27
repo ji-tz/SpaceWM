@@ -15,6 +15,7 @@ set(SPACEWM_TEST_NAMES
   test_window_placement
   test_flash_overlay
   test_tray
+  test_integration_flow
 )
 
 set(SPACEWM_TEST_EXES "")
@@ -30,6 +31,10 @@ foreach(name IN LISTS SPACEWM_TEST_NAMES)
   set_tests_properties(${name} PROPERTIES TIMEOUT 60)
   list(APPEND SPACEWM_TEST_EXES $<TARGET_FILE:${name}>)
 endforeach()
+
+# Real-mode flow launches real apps and drives the live desktop — opt-in via
+# SPACEWM_IT=1 (skips otherwise, see AGENTS.md §2.5) and much slower.
+set_tests_properties(test_integration_flow PROPERTIES TIMEOUT 300)
 
 # Deploy Qt runtime ONCE into tests/ after all test binaries link.
 # Per-target windeployqt races on the same plugin files under parallel Ninja.
