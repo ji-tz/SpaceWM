@@ -285,8 +285,10 @@ QImage windowDcImage(HWND hwnd, int fullW, int fullH)
         }
         ::SelectObject(mem, old);
     }
-    if (bmp) ::DeleteObject(bmp);
-    if (mem) ::DeleteDC(mem);
+    if (bmp)
+        ::DeleteObject(bmp);
+    if (mem)
+        ::DeleteDC(mem);
     ::ReleaseDC(hwnd, wdc);
     return img;
 }
@@ -332,13 +334,14 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     const bool perWindowBlack = looksLikeFailedShot(img);
     const bool sampleScreen = g_screenSampling && canSampleScreen(hwnd);
     if (perWindowBlack) {
-        spacelog::warn(QStringLiteral(
-            "per-window capture black (PrintWindow/GetWindowDC) hwnd=0x%1 class=%2 %3x%4 sampling=%5")
-                            .arg(quintptr(hwnd), 0, 16)
-                            .arg(windowClassName(hwnd))
-                            .arg(fullW)
-                            .arg(fullH)
-                            .arg(sampleScreen ? 1 : 0));
+        spacelog::warn(
+            QStringLiteral(
+                "per-window capture black (PrintWindow/GetWindowDC) hwnd=0x%1 class=%2 %3x%4 sampling=%5")
+                .arg(quintptr(hwnd), 0, 16)
+                .arg(windowClassName(hwnd))
+                .arg(fullW)
+                .arg(fullH)
+                .arg(sampleScreen ? 1 : 0));
     }
 
     // Screen BitBlt only when this rect really shows THIS window (visible,
@@ -350,13 +353,13 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     }
     // Still no honest pixels — fail rather than paint overlay/other-space junk.
     if (img.isNull() || looksLikeFailedShot(img)) {
-        spacelog::error(QStringLiteral(
-            "per-window capture failed hwnd=0x%1 class=%2 %3x%4 cloaked=%5")
-                            .arg(quintptr(hwnd), 0, 16)
-                            .arg(windowClassName(hwnd))
-                            .arg(fullW)
-                            .arg(fullH)
-                            .arg(canSampleScreen(hwnd) ? 0 : 1));
+        spacelog::error(
+            QStringLiteral("per-window capture failed hwnd=0x%1 class=%2 %3x%4 cloaked=%5")
+                .arg(quintptr(hwnd), 0, 16)
+                .arg(windowClassName(hwnd))
+                .arg(fullW)
+                .arg(fullH)
+                .arg(canSampleScreen(hwnd) ? 0 : 1));
         return {};
     }
 
@@ -421,9 +424,8 @@ bool canSampleScreen(HWND hwnd)
     if (!hwnd || !::IsWindow(hwnd) || !::IsWindowVisible(hwnd))
         return false;
     DWORD cloaked = 0;
-    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED,
-                                          &cloaked, sizeof(cloaked)))
-        && cloaked != 0) {
+    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+        cloaked != 0) {
         return false;
     }
     // Off-screen rects (tray-restored at -32000, hidden across monitors)

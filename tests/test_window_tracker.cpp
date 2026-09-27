@@ -66,11 +66,9 @@ class TestWindowTracker : public QObject {
     // secure-desktop surface and its foreground steals auto-close overview.
     void bansLockScreenOcclusionClass()
     {
-        QVERIFY(WindowTracker::isBannedClassName(
-            QStringLiteral("LockScreenInputOcclusionFrame")));
+        QVERIFY(WindowTracker::isBannedClassName(QStringLiteral("LockScreenInputOcclusionFrame")));
         QVERIFY(WindowTracker::isBannedClassName(QStringLiteral("Progman")));
-        QVERIFY(!WindowTracker::isBannedClassName(
-            QStringLiteral("Chrome_WidgetWin_1")));
+        QVERIFY(!WindowTracker::isBannedClassName(QStringLiteral("Chrome_WidgetWin_1")));
         QVERIFY(!WindowTracker::isBannedClassName(QStringLiteral("Notepad")));
     }
 
