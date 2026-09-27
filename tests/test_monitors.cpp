@@ -4,7 +4,7 @@
 
 class TestMonitors : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void enumerateFindsAtLeastOne()
     {
         const auto list = monitors::enumerate();
@@ -43,10 +43,10 @@ private slots:
         QVERIFY(!list.isEmpty());
         // contains() works in physical coordinates (physRect).
         const RECT &pr = list.first().physRect;
-        POINT pt{ (pr.left + pr.right) / 2, (pr.top + pr.bottom) / 2 };
+        POINT pt{(pr.left + pr.right) / 2, (pr.top + pr.bottom) / 2};
         QVERIFY(monitors::contains(list.first(), pt));
 
-        POINT outside{ pr.left - 10000, pr.top - 10000 };
+        POINT outside{pr.left - 10000, pr.top - 10000};
         QVERIFY(!monitors::contains(list.first(), outside));
     }
 
@@ -90,10 +90,9 @@ private slots:
 
     void logicalWindowSizeNotLargerThanPhysical()
     {
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"dpi size",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 10, 10, 400, 300,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"dpi size", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 10, 10,
+                              400, 300, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         ::ShowWindow(hwnd, SW_SHOW);
         ::Sleep(20);

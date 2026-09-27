@@ -77,12 +77,10 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     for (int i = 0; i < m_rows.size(); ++i) {
         auto *btn = m_rows[i].button;
         const int action = m_rows[i].action;
-        connect(btn, &QPushButton::clicked, this, [this, action, btn]() {
-            startCapture(action, btn);
-        });
+        connect(btn, &QPushButton::clicked, this,
+                [this, action, btn]() { startCapture(action, btn); });
     }
-    connect(m_preset, &QComboBox::currentIndexChanged, this,
-            &SettingsDialog::onPresetChanged);
+    connect(m_preset, &QComboBox::currentIndexChanged, this, &SettingsDialog::onPresetChanged);
 
     // --- General ---
     auto *genPage = new QWidget;
@@ -185,8 +183,8 @@ void SettingsDialog::keyPressEvent(QKeyEvent *event)
     }
     // Ignore pure modifier presses.
     const int key = event->key();
-    if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt
-        || key == Qt::Key_Meta || key == Qt::Key_unknown) {
+    if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt ||
+        key == Qt::Key_Meta || key == Qt::Key_unknown) {
         event->accept();
         return;
     }

@@ -27,7 +27,7 @@ struct Space {
 struct MonitorSpaces {
     HMONITOR hmon = nullptr;
     RECT physRect{};
-    QRect geometry;       // Qt logical
+    QRect geometry; // Qt logical
     QString deviceName;
     int currentIndex = 0;
     QVector<Space> spaces;

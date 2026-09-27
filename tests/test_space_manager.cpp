@@ -9,13 +9,12 @@
 // End-to-end space model against the real primary monitor + a real test window.
 class TestSpaceManager : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void initTestCase()
     {
-        m_hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"SpaceWM space test",
-            WS_OVERLAPPEDWINDOW, 10, 10, 300, 200,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        m_hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"SpaceWM space test", WS_OVERLAPPEDWINDOW, 10, 10, 300,
+                              200, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(m_hwnd != nullptr);
         ::ShowWindow(m_hwnd, SW_SHOWNORMAL);
         ::UpdateWindow(m_hwnd);
@@ -144,18 +143,15 @@ private slots:
         auto *m = sm.monitors().first();
         ensureSpaces(sm, m, 4);
 
-        HWND back = ::CreateWindowExW(
-            0, L"STATIC", L"z-back",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, 280, 180,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
-        HWND front = ::CreateWindowExW(
-            0, L"STATIC", L"z-front",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100, 280, 180,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND back =
+            ::CreateWindowExW(0, L"STATIC", L"z-back", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60,
+                              280, 180, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND front =
+            ::CreateWindowExW(0, L"STATIC", L"z-front", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100,
+                              280, 180, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(back && front);
         // Ensure front is above back in real Z-order.
-        ::SetWindowPos(front, HWND_TOP, 0, 0, 0, 0,
-                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ::SetWindowPos(front, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         ::Sleep(30);
 
         QVERIFY(sm.assignWindow(back, m->hmon, 3));
@@ -173,8 +169,8 @@ private slots:
         // Canvas is monitor-aspect, not a letterboxed 640×360.
         const int monW = m->physRect.right - m->physRect.left;
         const int monH = m->physRect.bottom - m->physRect.top;
-        QVERIFY(qAbs(double(sp.screenshot.width()) / sp.screenshot.height()
-                     - double(monW) / monH) < 0.05);
+        QVERIFY(qAbs(double(sp.screenshot.width()) / sp.screenshot.height() - double(monW) / monH) <
+                0.05);
 
         sm.setOverviewOpen(false);
         sm.untrackWindow(back);
@@ -244,10 +240,9 @@ private slots:
         const QString nameBefore = m->spaces[1].name;
 
         // Second window (own-process → only used via assignWindow directly).
-        HWND other = ::CreateWindowExW(
-            0, L"STATIC", L"OtherApp Document",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 400, 300,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND other = ::CreateWindowExW(0, L"STATIC", L"OtherApp Document",
+                                       WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 400, 300, nullptr,
+                                       nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(other != nullptr);
 
         // Maximized windows no longer create exclusive spaces.
@@ -334,12 +329,11 @@ private slots:
 
         sm.rebuildSpaceScreenshot(m->hmon, 0);
         QVERIFY(spy.count() >= 1);
-        QCOMPARE(spy.last().at(0).toULongLong(),
-                 quint64(reinterpret_cast<quintptr>(m->hmon)));
+        QCOMPARE(spy.last().at(0).toULongLong(), quint64(reinterpret_cast<quintptr>(m->hmon)));
         QCOMPARE(spy.last().at(1).toInt(), 0);
     }
 
-private:
+  private:
     // Grow the monitor to at least n spaces (cold start is 1 — issue #8).
     static void ensureSpaces(SpaceManager &sm, MonitorSpaces *m, int n)
     {

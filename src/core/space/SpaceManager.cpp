@@ -267,12 +267,14 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
         const QSet<HWND> *set;
         QVector<HWND> *out;
     } ctx{&sp.windows, &ordered};
-    ::EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
-        auto *c = reinterpret_cast<Ctx *>(lp);
-        if (c->set->contains(hwnd))
-            c->out->push_back(hwnd);
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&ctx));
+    ::EnumWindows(
+        [](HWND hwnd, LPARAM lp) -> BOOL {
+            auto *c = reinterpret_cast<Ctx *>(lp);
+            if (c->set->contains(hwnd))
+                c->out->push_back(hwnd);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
     for (HWND hwnd : sp.windows) {
         if (!ordered.contains(hwnd))
             ordered.push_back(hwnd);
@@ -496,17 +498,19 @@ void SpaceManager::applyVisibility(HMONITOR hmon)
             const QSet<HWND> *filter;
             QVector<HWND> *out;
         } ctx{hmon, &filter, &out};
-        ::EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
-            auto *c = reinterpret_cast<Ctx *>(lp);
-            if (!c->filter->contains(hwnd) || ::IsIconic(hwnd))
+        ::EnumWindows(
+            [](HWND hwnd, LPARAM lp) -> BOOL {
+                auto *c = reinterpret_cast<Ctx *>(lp);
+                if (!c->filter->contains(hwnd) || ::IsIconic(hwnd))
+                    return TRUE;
+                if (::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != c->mon)
+                    return TRUE;
+                if (!::IsWindowVisible(hwnd))
+                    return TRUE;
+                c->out->push_back(hwnd);
                 return TRUE;
-            if (::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != c->mon)
-                return TRUE;
-            if (!::IsWindowVisible(hwnd))
-                return TRUE;
-            c->out->push_back(hwnd);
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&ctx));
+            },
+            reinterpret_cast<LPARAM>(&ctx));
         return out;
     };
 
@@ -529,8 +533,7 @@ void SpaceManager::applyVisibility(HMONITOR hmon)
         HWND hwnd = z[i];
         if (!::IsWindow(hwnd) || ::IsIconic(hwnd) || !::IsWindowVisible(hwnd))
             continue;
-        ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
-                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     for (Space &sp : m->spaces) {

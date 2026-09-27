@@ -22,7 +22,7 @@ class QTimer;
 //   bottom — window previews on this monitor (drag onto a space)
 class OverviewWindow : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit OverviewWindow(SpaceManager *manager, QWidget *parent = nullptr);
 
     void assignMonitor(HMONITOR hmon) { m_hmon = hmon; }
@@ -65,7 +65,7 @@ public:
     // True while the hold timer is armed (pointer off keep-zones, not yet restored).
     bool isSoftPreviewHoldPending() const;
 
-signals:
+  signals:
     void closed(int chosenSpace);
     // Emitted after a successful drag-place (hwnd may be null in tests via placeWindowInSpace).
     void windowPlaced(quint64 hwnd, int spaceIndex);
@@ -74,13 +74,13 @@ signals:
     // Clicked a bottom tile: will switch to that window's space and focus it.
     void windowActivated(quint64 hwnd);
 
-protected:
+  protected:
     void keyPressEvent(QKeyEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
-private:
+  private:
     void rebuildCards();
     void rebuildWindowPreviews();
     void refreshCardBadges();

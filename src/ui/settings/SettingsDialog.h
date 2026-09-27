@@ -12,19 +12,19 @@ class QKeyEvent;
 // Settings: Hotkeys tab + General tab. Opened from the tray.
 class SettingsDialog : public QDialog {
     Q_OBJECT
-public:
+  public:
     explicit SettingsDialog(QWidget *parent = nullptr);
 
     void reload();
 
-signals:
+  signals:
     // Emitted on Apply/OK after persisting — re-register hotkeys, etc.
     void settingsApplied();
 
-protected:
+  protected:
     void keyPressEvent(QKeyEvent *event) override;
 
-private:
+  private:
     void loadHotkeyRows();
     void applyAndSave(bool close);
     void onPresetChanged(int index);

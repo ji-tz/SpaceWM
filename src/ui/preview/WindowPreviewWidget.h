@@ -12,7 +12,7 @@ class QLabel;
 // Tile size follows the real window aspect ratio (not a fixed thumbnail box).
 class WindowPreviewWidget : public QFrame {
     Q_OBJECT
-public:
+  public:
     static const char *kMimeType; // "application/x-spacewm-hwnd"
 
     explicit WindowPreviewWidget(QWidget *parent = nullptr);
@@ -28,23 +28,21 @@ public:
     // Press point (widget coords) → hotspot inside the drag pixmap (usually
     // the image label, scaled to the actual pixmap size). Used by QDrag::setHotSpot
     // so the ghost sticks to the click point, not the top-left corner.
-    static QPoint mapPressToHotSpot(const QPoint &pressInWidget,
-                                    const QPoint &imageTopLeftInWidget,
-                                    const QSize &box,
-                                    const QSize &pixmapSize);
+    static QPoint mapPressToHotSpot(const QPoint &pressInWidget, const QPoint &imageTopLeftInWidget,
+                                    const QSize &box, const QSize &pixmapSize);
 
-signals:
+  signals:
     void dragStarted(quint64 hwnd);
     // Click without drag — enter this window's space and focus it.
     void activated(quint64 hwnd);
 
-protected:
+  protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
-private:
+  private:
     void startDrag();
     void applyPixmap();
 
