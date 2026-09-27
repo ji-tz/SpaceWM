@@ -7,7 +7,7 @@
 
 class TestThumbnail : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void nullAndInvalidAreSafe()
     {
         QImage a = thumbs::capture(nullptr);
@@ -18,10 +18,9 @@ private slots:
 
     void capturesRealWindowWithinMaxSize()
     {
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"thumb target",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 20, 20, 400, 300,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"thumb target", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 20,
+                              20, 400, 300, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         ::ShowWindow(hwnd, SW_SHOW);
         ::UpdateWindow(hwnd);
@@ -52,10 +51,9 @@ private slots:
 
         // Large window: PrintWindow at full size then scale — must not be a
         // top-left crop of the window (aspect still matches; fits maxSize).
-        HWND big = ::CreateWindowExW(
-            0, L"STATIC", L"big thumb",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 10, 10, 1200, 800,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND big =
+            ::CreateWindowExW(0, L"STATIC", L"big thumb", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 10, 10,
+                              1200, 800, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(big != nullptr);
         ::ShowWindow(big, SW_SHOW);
         ::UpdateWindow(big);
@@ -90,10 +88,9 @@ private slots:
     void windowShotCachesOnceAndScales()
     {
         thumbs::clearWindowCache();
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"cache target",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30, 30, 500, 360,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"cache target", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30,
+                              30, 500, 360, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         ::ShowWindow(hwnd, SW_SHOW);
         ::UpdateWindow(hwnd);
@@ -130,10 +127,9 @@ private slots:
     {
         thumbs::clearWindowCache();
         thumbs::setScreenSamplingEnabled(true);
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"warm target",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 360, 240,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"warm target", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40,
+                              40, 360, 240, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         ::ShowWindow(hwnd, SW_SHOW);
         ::UpdateWindow(hwnd);
@@ -157,10 +153,9 @@ private slots:
         QVERIFY(!thumbs::canSampleScreen(nullptr));
         QVERIFY(!thumbs::canSampleScreen(reinterpret_cast<HWND>(0xDEAD)));
 
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"sample target",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 240, 160,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"sample target", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50,
+                              50, 240, 160, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         ::ShowWindow(hwnd, SW_SHOW);
         ::UpdateWindow(hwnd);
@@ -180,8 +175,7 @@ private slots:
                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         ::Sleep(20);
         QVERIFY(!thumbs::canSampleScreen(hwnd));
-        ::SetWindowPos(hwnd, nullptr, 50, 50, 0, 0,
-                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ::SetWindowPos(hwnd, nullptr, 50, 50, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         ::Sleep(20);
         QVERIFY(thumbs::canSampleScreen(hwnd));
 
@@ -199,10 +193,9 @@ private slots:
     // (PrintWindow / GetWindowDC), not screen pixels.
     void capturesCloakedWindowViaPerWindowApi()
     {
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"cloaked shot",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, 320, 200,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd =
+            ::CreateWindowExW(0, L"STATIC", L"cloaked shot", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60,
+                              60, 320, 200, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         ::ShowWindow(hwnd, SW_SHOW);
         ::UpdateWindow(hwnd);

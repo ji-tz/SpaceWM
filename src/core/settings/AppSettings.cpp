@@ -24,8 +24,7 @@ QString presetSystem(int action)
 
 AppSettings::AppSettings(QObject *parent)
     : QObject(parent)
-{
-}
+{}
 
 QString AppSettings::hotkey(int action) const
 {
@@ -75,17 +74,14 @@ void AppSettings::syncHotkeysFromPreset(const QString &preset)
 {
     QSettings s(kOrg, kApp);
     const int actions[] = {
-        HotkeyManager::SwitchPrevSpace,
-        HotkeyManager::SwitchNextSpace,
-        HotkeyManager::ToggleOverview,
-        HotkeyManager::JumpSpace1,
-        HotkeyManager::JumpSpace2,
-        HotkeyManager::JumpSpace3,
+        HotkeyManager::SwitchPrevSpace, HotkeyManager::SwitchNextSpace,
+        HotkeyManager::ToggleOverview,  HotkeyManager::JumpSpace1,
+        HotkeyManager::JumpSpace2,      HotkeyManager::JumpSpace3,
         HotkeyManager::JumpSpace4,
     };
     for (int a : actions) {
-        const QString seq = (preset == QStringLiteral("system")) ? presetSystem(a)
-                                                                 : presetDefault(a);
+        const QString seq =
+            (preset == QStringLiteral("system")) ? presetSystem(a) : presetDefault(a);
         s.setValue(QStringLiteral("hotkeys/%1").arg(a), seq);
     }
 }
@@ -109,11 +105,9 @@ void AppSettings::setAutoStart(bool on)
 bool AppSettings::applyAutoStartRegistry(bool enable)
 {
     HKEY key = nullptr;
-    if (::RegCreateKeyExW(HKEY_CURRENT_USER,
-                          L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                          0, nullptr, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, nullptr,
-                          &key, nullptr)
-        != ERROR_SUCCESS)
+    if (::RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                          0, nullptr, 0, KEY_SET_VALUE | KEY_QUERY_VALUE, nullptr, &key,
+                          nullptr) != ERROR_SUCCESS)
         return false;
 
     bool ok = true;
@@ -128,8 +122,7 @@ bool AppSettings::applyAutoStartRegistry(bool enable)
             const std::wstring w = cmd.toStdWString();
             ok = ::RegSetValueExW(key, L"SpaceWM", 0, REG_SZ,
                                   reinterpret_cast<const BYTE *>(w.c_str()),
-                                  DWORD((w.size() + 1) * sizeof(wchar_t)))
-                == ERROR_SUCCESS;
+                                  DWORD((w.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
             Q_UNUSED(utf8)
         }
     } else {
@@ -143,10 +136,8 @@ bool AppSettings::applyAutoStartRegistry(bool enable)
 bool AppSettings::autoStartRegistryEnabled()
 {
     HKEY key = nullptr;
-    if (::RegOpenKeyExW(HKEY_CURRENT_USER,
-                        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                        0, KEY_QUERY_VALUE, &key)
-        != ERROR_SUCCESS)
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                        KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return false;
     DWORD type = 0;
     DWORD size = 0;

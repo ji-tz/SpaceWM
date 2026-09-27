@@ -7,10 +7,9 @@
 #include <QTimer>
 
 OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
-    : QObject(parent)
-    , m_manager(manager)
-{
-}
+    : QObject(parent),
+      m_manager(manager)
+{}
 
 OverviewHost::~OverviewHost()
 {
@@ -168,17 +167,17 @@ void OverviewHost::openAll()
     }
     const qint64 msTiles = t.restart();
 
-    spacelog::info(QStringLiteral(
-        "overview open timings: refresh=%1ms masks=%2ms warm=%3ms build=%4ms "
-        "cards=%5ms anims=%6ms tiles=%7ms panels=%8")
-                       .arg(msRefresh)
-                       .arg(msMasks)
-                       .arg(msWarm)
-                       .arg(msBuild)
-                       .arg(msCards)
-                       .arg(msAnims)
-                       .arg(msTiles)
-                       .arg(m_panels.size()));
+    spacelog::info(
+        QStringLiteral("overview open timings: refresh=%1ms masks=%2ms warm=%3ms build=%4ms "
+                       "cards=%5ms anims=%6ms tiles=%7ms panels=%8")
+            .arg(msRefresh)
+            .arg(msMasks)
+            .arg(msWarm)
+            .arg(msBuild)
+            .arg(msCards)
+            .arg(msAnims)
+            .arg(msTiles)
+            .arg(m_panels.size()));
 }
 
 void OverviewHost::closeAll(bool commit)

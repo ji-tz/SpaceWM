@@ -38,7 +38,7 @@
 //   SpaceWM.exe --quit ; $env:SPACEWM_IT='1' ; ctest -R test_integration_flow -V
 class TestIntegrationFlow : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void initTestCase()
     {
         if (!qEnvironmentVariableIsSet("SPACEWM_IT"))
@@ -62,11 +62,10 @@ private slots:
             if (m_sm.spaceOfWindow(hwnd) >= 0)
                 m_sm.refreshWindowAfterUpdate(hwnd);
         });
-        connect(&m_host, &OverviewHost::spaceChosen, &m_sm,
-                [this](quint64 h, int space) {
-                    m_sm.switchSpace(reinterpret_cast<HMONITOR>(h), space,
-                                     /*animateHint=*/false);
-                });
+        connect(&m_host, &OverviewHost::spaceChosen, &m_sm, [this](quint64 h, int space) {
+            m_sm.switchSpace(reinterpret_cast<HMONITOR>(h), space,
+                             /*animateHint=*/false);
+        });
         m_allClosedSpy = std::make_unique<QSignalSpy>(&m_host, &OverviewHost::allClosed);
 
         QVERIFY(!m_sm.monitors().isEmpty());
@@ -90,9 +89,8 @@ private slots:
         auto before = WindowTracker::snapshotManageableWindows();
         QVERIFY(QProcess::startDetached(QStringLiteral("notepad.exe"), {m_noteFile}));
         m_hwndNote = waitForNewWindow(before, {QStringLiteral("Notepad")}, 15000);
-        QVERIFY2(m_hwndNote,
-                 "Notepad window did not appear (an existing Notepad instance "
-                 "may have absorbed the launch — close it and rerun)");
+        QVERIFY2(m_hwndNote, "Notepad window did not appear (an existing Notepad instance "
+                             "may have absorbed the launch — close it and rerun)");
 
         // --- File Explorer (its own new window; never kill explorer.exe) ---
         before = WindowTracker::snapshotManageableWindows();
@@ -104,11 +102,9 @@ private slots:
         const QString browser = findBrowser();
         if (!browser.isEmpty()) {
             before = WindowTracker::snapshotManageableWindows();
-            QVERIFY(QProcess::startDetached(browser,
-                                            {QStringLiteral("--new-window"),
-                                             QStringLiteral("about:blank")}));
-            m_hwndWeb = waitForNewWindow(
-                before, {QStringLiteral("Chrome_WidgetWin_1")}, 20000);
+            QVERIFY(QProcess::startDetached(
+                browser, {QStringLiteral("--new-window"), QStringLiteral("about:blank")}));
+            m_hwndWeb = waitForNewWindow(before, {QStringLiteral("Chrome_WidgetWin_1")}, 20000);
             if (!m_hwndWeb)
                 QWARN("browser window did not appear — falling back to a 2nd Notepad");
         } else {
@@ -116,8 +112,7 @@ private slots:
         }
         if (!m_hwndWeb) {
             m_webFile = QDir::temp().filePath(
-                QStringLiteral("spacewm-it-web-%1.txt")
-                    .arg(QCoreApplication::applicationPid()));
+                QStringLiteral("spacewm-it-web-%1.txt").arg(QCoreApplication::applicationPid()));
             QFile f(m_webFile);
             if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
                 f.write("browser stand-in\n");
@@ -176,8 +171,7 @@ private slots:
 
         const QPoint c = btn->rect().center();
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(c), btn->mapToGlobal(c),
-                          btn->mapToGlobal(c), Qt::LeftButton, Qt::LeftButton,
-                          Qt::NoModifier);
+                          btn->mapToGlobal(c), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(btn, &press);
 
         QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceCount(m_hmon), 2, 3000);
@@ -205,8 +199,7 @@ private slots:
         mime.setData(WindowPreviewWidget::kMimeType, payload);
 
         const QPoint c = target->rect().center();
-        QDragEnterEvent enter(c, Qt::CopyAction, &mime, Qt::LeftButton,
-                              Qt::NoModifier);
+        QDragEnterEvent enter(c, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(target, &enter);
         QVERIFY2(enter.isAccepted(), "second space card rejected the drag");
 
@@ -285,18 +278,15 @@ private slots:
 
         const QPointF c0(first->rect().center());
         QMouseEvent press(QEvent::MouseButtonPress, c0, first->mapToGlobal(c0),
-                          first->mapToGlobal(c0), Qt::LeftButton, Qt::LeftButton,
-                          Qt::NoModifier);
+                          first->mapToGlobal(c0), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(first, &press);
 
-        QMouseEvent move(QEvent::MouseMove, localSecond, QPointF(gSecond),
-                         QPointF(gSecond), Qt::NoButton, Qt::LeftButton,
-                         Qt::NoModifier);
+        QMouseEvent move(QEvent::MouseMove, localSecond, QPointF(gSecond), QPointF(gSecond),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(first, &move); // fires reorder → rebuild here
 
-        QMouseEvent release(QEvent::MouseButtonRelease, localSecond,
-                            QPointF(gSecond), QPointF(gSecond), Qt::LeftButton,
-                            Qt::NoButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, localSecond, QPointF(gSecond),
+                            QPointF(gSecond), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(first, &release); // old card still alive (deleteLater)
 
         QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceCount(m_hmon), 2, 2000);
@@ -396,7 +386,7 @@ private slots:
         spacelog::shutdown();
     }
 
-private:
+  private:
     // The flow always follows the OPEN panel's monitor (openAll picks the
     // cursor's display — asserting against monitors().first() reads the wrong
     // monitor on multi-head machines).
@@ -422,17 +412,17 @@ private:
                                 .arg(i);
         }
         const bool onPanelMon = m_sm.ownerMonitorOf(m_hwndWeb) == m_hmon;
-        QWARN(qPrintable(QStringLiteral(
-            "[%1] web alive=%2 ownerSpace=%3 onPanelMon=%4 in:%5 cloaked=%6 "
-            "visible=%7 current(panel)=%8")
-                             .arg(QLatin1String(where))
-                             .arg(::IsWindow(m_hwndWeb) ? 1 : 0)
-                             .arg(m_sm.spaceOfWindow(m_hwndWeb))
-                             .arg(onPanelMon ? 1 : 0)
-                             .arg(sets.isEmpty() ? QStringLiteral("<none>") : sets)
-                             .arg(cloak::isCloaked(m_hwndWeb) ? 1 : 0)
-                             .arg(::IsWindowVisible(m_hwndWeb) ? 1 : 0)
-                             .arg(m_monitor->currentIndex)));
+        QWARN(qPrintable(
+            QStringLiteral("[%1] web alive=%2 ownerSpace=%3 onPanelMon=%4 in:%5 cloaked=%6 "
+                           "visible=%7 current(panel)=%8")
+                .arg(QLatin1String(where))
+                .arg(::IsWindow(m_hwndWeb) ? 1 : 0)
+                .arg(m_sm.spaceOfWindow(m_hwndWeb))
+                .arg(onPanelMon ? 1 : 0)
+                .arg(sets.isEmpty() ? QStringLiteral("<none>") : sets)
+                .arg(cloak::isCloaked(m_hwndWeb) ? 1 : 0)
+                .arg(::IsWindowVisible(m_hwndWeb) ? 1 : 0)
+                .arg(m_monitor->currentIndex)));
     }
 
     // A browser assertion is only meaningful when the window lives on the
@@ -441,8 +431,7 @@ private:
     // Edge reopens windows wherever it likes, run to run.
     bool webStableIn(int expectedSpace)
     {
-        if (!m_hwndWeb || !::IsWindow(m_hwndWeb)
-            || m_sm.spaceOfWindow(m_hwndWeb) < 0) {
+        if (!m_hwndWeb || !::IsWindow(m_hwndWeb) || m_sm.spaceOfWindow(m_hwndWeb) < 0) {
             QWARN("browser window died mid-flow — skipping web asserts");
             return false;
         }
@@ -453,9 +442,8 @@ private:
         }
         const int sp = m_sm.spaceOfWindow(m_hwndWeb);
         if (sp != expectedSpace) {
-            QWARN(qPrintable(QStringLiteral(
-                "browser window landed in space %1 (expected %2) — "
-                "skipping web asserts")
+            QWARN(qPrintable(QStringLiteral("browser window landed in space %1 (expected %2) — "
+                                            "skipping web asserts")
                                  .arg(sp)
                                  .arg(expectedSpace)));
             return false;
@@ -471,8 +459,7 @@ private:
     }
 
     // Poll real window enumeration for a NEW top-level window of a class.
-    HWND waitForNewWindow(const QVector<HWND> &before, const QStringList &classes,
-                          int timeoutMs)
+    HWND waitForNewWindow(const QVector<HWND> &before, const QStringList &classes, int timeoutMs)
     {
         QElapsedTimer timer;
         timer.start();
@@ -492,16 +479,16 @@ private:
     static QString findBrowser()
     {
         const QStringList candidates = {
-            qEnvironmentVariable("ProgramFiles(x86)")
-                + QStringLiteral("/Microsoft/Edge/Application/msedge.exe"),
-            qEnvironmentVariable("ProgramFiles")
-                + QStringLiteral("/Microsoft/Edge/Application/msedge.exe"),
-            qEnvironmentVariable("LocalAppData")
-                + QStringLiteral("/Microsoft/Edge/Application/msedge.exe"),
-            qEnvironmentVariable("ProgramFiles")
-                + QStringLiteral("/Google/Chrome/Application/chrome.exe"),
-            qEnvironmentVariable("ProgramFiles(x86)")
-                + QStringLiteral("/Google/Chrome/Application/chrome.exe"),
+            qEnvironmentVariable("ProgramFiles(x86)") +
+                QStringLiteral("/Microsoft/Edge/Application/msedge.exe"),
+            qEnvironmentVariable("ProgramFiles") +
+                QStringLiteral("/Microsoft/Edge/Application/msedge.exe"),
+            qEnvironmentVariable("LocalAppData") +
+                QStringLiteral("/Microsoft/Edge/Application/msedge.exe"),
+            qEnvironmentVariable("ProgramFiles") +
+                QStringLiteral("/Google/Chrome/Application/chrome.exe"),
+            qEnvironmentVariable("ProgramFiles(x86)") +
+                QStringLiteral("/Google/Chrome/Application/chrome.exe"),
         };
         for (const QString &c : candidates)
             if (!c.isEmpty() && QFile::exists(c))
@@ -527,13 +514,12 @@ private:
     {
         const QPointF c(w->rect().center());
         const QPointF g = w->mapToGlobal(c);
-        QMouseEvent press(QEvent::MouseButtonPress, c, g, g, Qt::LeftButton,
-                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent press(QEvent::MouseButtonPress, c, g, g, Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
         QApplication::sendEvent(w, &press);
         QMouseEvent release(QEvent::MouseButtonRelease, c + QPointF(1, 0),
-                            w->mapToGlobal(c + QPointF(1, 0)),
-                            w->mapToGlobal(c + QPointF(1, 0)), Qt::LeftButton,
-                            Qt::NoButton, Qt::NoModifier);
+                            w->mapToGlobal(c + QPointF(1, 0)), w->mapToGlobal(c + QPointF(1, 0)),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(w, &release);
     }
 

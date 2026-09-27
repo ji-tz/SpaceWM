@@ -13,7 +13,7 @@
 // Mission Control style multi-monitor overview host.
 class TestOverviewHost : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void nullManagerOpenIsNoop()
     {
         OverviewHost host(nullptr);
@@ -115,8 +115,7 @@ private slots:
     {
         SpaceManager sm;
         OverviewHost host(&sm);
-        QObject::connect(&host, &OverviewHost::spaceChosen, &sm,
-                         [&](quint64 hmon, int space) {
+        QObject::connect(&host, &OverviewHost::spaceChosen, &sm, [&](quint64 hmon, int space) {
             sm.switchSpace(reinterpret_cast<HMONITOR>(hmon), space, false);
         });
 
@@ -194,10 +193,9 @@ private slots:
         while (sm.spaceCount(m->hmon) < 2)
             QVERIFY(sm.addSpace(m->hmon));
 
-        HWND hwnd = ::CreateWindowExW(
-            0, L"STATIC", L"exit recloak target",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 90, 90, 280, 170,
-            nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        HWND hwnd = ::CreateWindowExW(0, L"STATIC", L"exit recloak target",
+                                      WS_OVERLAPPEDWINDOW | WS_VISIBLE, 90, 90, 280, 170, nullptr,
+                                      nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(hwnd != nullptr);
         QVERIFY(sm.assignWindow(hwnd, m->hmon, 1)); // other space → must hide on close
         ::cloak::set(hwnd, false);
@@ -214,8 +212,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(hwnd), 800);
         OverviewWindow *panel = host.panelFor(m->hmon);
         QVERIFY(panel);
-        QVERIFY2(panel->isVisible(),
-                 "cloak must land while the mask still covers the desktop");
+        QVERIFY2(panel->isVisible(), "cloak must land while the mask still covers the desktop");
 
         QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 4000);
         // No switch happened (cancel) — the other-space window stays hidden.
@@ -250,11 +247,10 @@ private slots:
         QCOMPARE(m->spaces.size(), 2);
 
         // Same wiring as main.cpp (spaceChosen → switchSpace).
-        connect(&host, &OverviewHost::spaceChosen, &sm,
-                [&sm](quint64 hmon, int space) {
-                    sm.switchSpace(reinterpret_cast<HMONITOR>(hmon), space,
-                                   /*animateHint=*/false);
-                });
+        connect(&host, &OverviewHost::spaceChosen, &sm, [&sm](quint64 hmon, int space) {
+            sm.switchSpace(reinterpret_cast<HMONITOR>(hmon), space,
+                           /*animateHint=*/false);
+        });
 
         flushDeferredDeletes(panel);
         auto cards = panel->findChildren<SpaceCardWidget *>();
@@ -263,13 +259,12 @@ private slots:
         // Click the second card (press+release, within drag distance).
         const QPointF c(cards[1]->rect().center());
         const QPointF g = cards[1]->mapToGlobal(c);
-        QMouseEvent press(QEvent::MouseButtonPress, c, g, g, Qt::LeftButton,
-                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent press(QEvent::MouseButtonPress, c, g, g, Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
         QApplication::sendEvent(cards[1], &press);
-        QMouseEvent release(QEvent::MouseButtonRelease, c + QPointF(1, 0),
-                            cards[1]->mapToGlobal(c + QPointF(1, 0)),
-                            cards[1]->mapToGlobal(c + QPointF(1, 0)),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QMouseEvent release(
+            QEvent::MouseButtonRelease, c + QPointF(1, 0), cards[1]->mapToGlobal(c + QPointF(1, 0)),
+            cards[1]->mapToGlobal(c + QPointF(1, 0)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(cards[1], &release);
 
         // (a) model switched synchronously inside the click dispatch …
@@ -292,7 +287,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 4000);
     }
 
-private:
+  private:
     static void flushDeferredDeletes(OverviewWindow *panel)
     {
         Q_UNUSED(panel)
