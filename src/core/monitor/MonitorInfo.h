@@ -7,10 +7,10 @@
 
 struct MonitorEntry {
     HMONITOR handle = nullptr;
-    RECT physRect{};        // physical pixels (GetMonitorInfo)
-    QRect geometry;         // Qt logical pixels (safe for QWidget::setGeometry)
+    RECT physRect{}; // physical pixels (GetMonitorInfo)
+    QRect geometry;  // Qt logical pixels (safe for QWidget::setGeometry)
     bool primary = false;
-    QString deviceName;     // e.g. \\.\DISPLAY1
+    QString deviceName; // e.g. \\.\DISPLAY1
 };
 
 // Enumerates monitors; geometry is converted to Qt logical DPI coords.
@@ -48,4 +48,3 @@ QSize toLogicalSize(int physW, int physH, UINT dpiX, UINT dpiY);
 QSize logicalWindowSize(HWND hwnd);
 
 } // namespace monitors
-

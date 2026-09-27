@@ -11,7 +11,7 @@
 // - double close
 class TestOverview : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void nullManagerIsSafe()
     {
         OverviewWindow w(nullptr);
@@ -80,8 +80,8 @@ private slots:
 
         w.openOnMonitor(m->hmon);
         // Even if open partially failed, send keys — must not crash.
-        for (int key : {Qt::Key_Left, Qt::Key_Right, Qt::Key_Home, Qt::Key_End,
-                        Qt::Key_1, Qt::Key_9, Qt::Key_Return, Qt::Key_Escape}) {
+        for (int key : {Qt::Key_Left, Qt::Key_Right, Qt::Key_Home, Qt::Key_End, Qt::Key_1,
+                        Qt::Key_9, Qt::Key_Return, Qt::Key_Escape}) {
             QKeyEvent ev(QEvent::KeyPress, key, Qt::NoModifier);
             QApplication::sendEvent(&w, &ev);
         }

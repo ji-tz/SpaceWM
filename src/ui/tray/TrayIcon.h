@@ -8,13 +8,13 @@ class QMenu;
 
 class TrayIcon : public QObject {
     Q_OBJECT
-public:
+  public:
     explicit TrayIcon(QObject *parent = nullptr);
 
     void setSpaceLabel(const QString &monitorDevice, int index, int total);
     void showMessage(const QString &title, const QString &body);
 
-signals:
+  signals:
     void overviewRequested();
     void nextSpaceRequested();
     void prevSpaceRequested();
@@ -22,7 +22,7 @@ signals:
     void refreshMonitorsRequested();
     void settingsRequested();
 
-private:
+  private:
     QSystemTrayIcon *m_tray = nullptr;
     QMenu *m_menu = nullptr;
     QAction *m_statusAction = nullptr;

@@ -13,7 +13,7 @@ class QTimer;
 // Compact mode shrinks the preview for the Mission Control space bar.
 class SpaceCardWidget : public QFrame {
     Q_OBJECT
-public:
+  public:
     explicit SpaceCardWidget(QWidget *parent = nullptr);
 
     void setSpace(int index, const QString &name, bool current);
@@ -41,7 +41,7 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
-signals:
+  signals:
     void activated(int spaceIndex);
     void hovered(int spaceIndex);
     // Pointer left the card (paint only — does NOT reset bottom strip).
@@ -53,7 +53,7 @@ signals:
     // Drag-to-reorder: user dragged this card onto target index.
     void reorderRequested(int from, int to);
 
-protected:
+  protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -66,7 +66,7 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
 
-private:
+  private:
     void applyAspectLayout();
     QSize previewSizeForAspect() const;
     void paintPixmap();

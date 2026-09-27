@@ -9,7 +9,7 @@
 // Mission Control style multi-monitor overview host.
 class TestOverviewHost : public QObject {
     Q_OBJECT
-private slots:
+  private slots:
     void nullManagerOpenIsNoop()
     {
         OverviewHost host(nullptr);
@@ -111,8 +111,7 @@ private slots:
     {
         SpaceManager sm;
         OverviewHost host(&sm);
-        QObject::connect(&host, &OverviewHost::spaceChosen, &sm,
-                         [&](quint64 hmon, int space) {
+        QObject::connect(&host, &OverviewHost::spaceChosen, &sm, [&](quint64 hmon, int space) {
             sm.switchSpace(reinterpret_cast<HMONITOR>(hmon), space, false);
         });
 
