@@ -130,6 +130,17 @@ int main(int argc, char *argv[])
 
     // Taskbar / Alt+Tab while overview is open → land on the CURRENT space
     // and close the overlay so the app is visible on the live desktop.
+    // EVENT_SYSTEM_FOREGROUND carries no cause info (MSDN: "the foreground
+    // window has changed"), so act ONLY on the two documented user-initiated
+    // switches and ignore everything else (uncloak steals, activation reverts):
+    //   - Alt+Tab — our LL hook announced the chord (switchPending);
+    //   - mouse click — the button is still down when the event arrives
+    //     (GetAsyncKeyState), which system side-effects never are.
+    bool switchPending = false;
+    QObject::connect(&hotkeys, &HotkeyManager::windowSwitchChord, &app, [&]() {
+        if (overview.isOpen())
+            switchPending = true;
+    });
     QObject::connect(&tracker, &WindowTracker::windowForeground, &app, [&](quint64 h) {
         HWND hwnd = reinterpret_cast<HWND>(h);
         if (!overview.isOpen() || !hwnd || !::IsWindow(hwnd))
@@ -138,6 +149,20 @@ int main(int argc, char *argv[])
         // Own overview tool windows are unmanaged — ignore those foreground events.
         if (ownedSpace < 0 && !WindowTracker::isManageable(hwnd))
             return;
+
+        const bool userClick = (::GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+            || (::GetAsyncKeyState(VK_RBUTTON) & 0x8000);
+        if (!switchPending && !userClick) {
+            wchar_t cls[64]{};
+            ::GetClassNameW(hwnd, cls, 64);
+            spacelog::info(QStringLiteral(
+                "overview foreground ignored (no user switch): hwnd=0x%1 class=%2")
+                               .arg(quintptr(hwnd), 0, 16)
+                               .arg(QString::fromWCharArray(cls)));
+            return;
+        }
+        const bool altTab = switchPending;
+        switchPending = false;
 
         HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         auto *m = manager.monitorOf(mon);
@@ -150,6 +175,15 @@ int main(int argc, char *argv[])
             manager.assignWindow(hwnd, mon, m->currentIndex);
 
         // Leave preview; stay on the real current space with the app shown.
+        wchar_t cls[64]{};
+        ::GetClassNameW(hwnd, cls, 64);
+        spacelog::info(QStringLiteral(
+            "overview auto-close: foreground hwnd=0x%1 class=%2 space=%3 via=%4")
+                           .arg(quintptr(hwnd), 0, 16)
+                           .arg(QString::fromWCharArray(cls))
+                           .arg(manager.spaceOfWindow(hwnd))
+                           .arg(altTab ? QStringLiteral("altTab")
+                                       : QStringLiteral("click")));
         overview.closeAll(false);
     });
 

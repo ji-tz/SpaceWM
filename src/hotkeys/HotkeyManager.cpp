@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QAbstractEventDispatcher>
 #include <QHash>
+#include <QSet>
 
 #include <Windows.h>
 
@@ -69,6 +70,14 @@ void emitAction(int action)
     if (g_manager)
         QMetaObject::invokeMethod(g_manager, [action]() {
             emit g_manager->actionTriggered(action);
+        }, Qt::QueuedConnection);
+}
+
+void emitWindowSwitchChord()
+{
+    if (g_manager)
+        QMetaObject::invokeMethod(g_manager, []() {
+            emit g_manager->windowSwitchChord();
         }, Qt::QueuedConnection);
 }
 
@@ -154,6 +163,16 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
                     trackModifier(vk, isDown);
                 }
             }
+            // Release the auto-repeat guard on EVERY key up (binding keys are
+            // swallowed below — their up still lands here first).
+            if (isUp)
+                HotkeyManager::keyUpSeen(vk);
+
+            // Alt+Tab passes through to the shell (no binding matches) — just
+            // announce it so main can treat the next foreground change as a
+            // user window switch rather than a system side-effect.
+            if (isDown && HotkeyManager::isWindowSwitchChord(vk, g_tAlt))
+                emitWindowSwitchChord();
 
             // Physical Win key: defer / swallow so the shell never sees a
             // bare or Ctrl+Win tap (those open the Windows/Start menu).
@@ -202,7 +221,9 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
                     continue;
                 if (!HotkeyManager::modifiersMatch(b.modifiers, c, a, s, w))
                     continue;
-                if (isDown)
+                // One physical press → one action: ignore auto-repeat downs
+                // (still swallowed so apps never see the repeat either).
+                if (isDown && HotkeyManager::keyDownEmits(vk))
                     emitAction(b.action);
                 // Swallow down AND up so Windows virtual-desktop / Task View
                 // never sees Win+Tab or Ctrl+Win+←/→.
@@ -221,6 +242,30 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     return CallNextHookEx(g_llHookHandle, nCode, wParam, lParam);
 }
 } // namespace
+
+// Vks whose first keyDOWN was seen but not yet released — auto-repeat
+// keyDOWNs while present must not re-emit the action (one press = one action).
+namespace {
+QSet<UINT> g_keysDown;
+}
+
+bool HotkeyManager::keyDownEmits(UINT vk)
+{
+    if (g_keysDown.contains(vk))
+        return false;
+    g_keysDown.insert(vk);
+    return true;
+}
+
+void HotkeyManager::keyUpSeen(UINT vk)
+{
+    g_keysDown.remove(vk);
+}
+
+bool HotkeyManager::isWindowSwitchChord(UINT vk, bool altDown)
+{
+    return altDown && vk == VK_TAB;
+}
 
 HotkeyManager::HotkeyManager(QObject *parent)
     : QObject(parent)

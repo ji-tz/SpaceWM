@@ -67,12 +67,24 @@ public:
     static WinUpDecision winKeyUpDecision(bool deferredNotForwarded,
                                           bool chordKeyAte,
                                           bool foreignModifierHeld);
+    // LL-hook auto-repeat guard (unit-tested): Windows repeats keyDOWN while
+    // a key is held and MOD_NOREPEAT does not apply to hooks — without this
+    // one long Ctrl+Alt+Space press toggles the overview twice (open → close).
+    // keyDownEmits: true only for the FIRST down of a press; keyUpSeen clears.
+    static bool keyDownEmits(UINT vk);
+    static void keyUpSeen(UINT vk);
+    // Alt+Tab / Alt+Ctrl+Tab — the documented window-switcher chord. The hook
+    // observes it directly (unit-tested) so main can treat the next
+    // foreground change as a user switch instead of a system side-effect.
+    static bool isWindowSwitchChord(UINT vk, bool altDown);
 
     // native filter
     bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override;
 
 signals:
     void actionTriggered(int action);
+    // User pressed Alt+Tab (window switcher) — queued like actionTriggered.
+    void windowSwitchChord();
 
 private:
     struct BindingInternal {

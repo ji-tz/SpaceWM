@@ -86,6 +86,32 @@ private slots:
                  HotkeyManager::WinUpDecision::Pass);
     }
 
+    // Auto-repeat keyDOWNs while a binding key is held must not re-emit the
+    // action — one long Ctrl+Alt+Space press would otherwise toggle the
+    // overview twice (open → immediate close flash).
+    void keyRepeatGuardEmitsOncePerPress()
+    {
+        const UINT vk = 0x59; // unused-by-tests VK_Y
+        HotkeyManager::keyUpSeen(vk); // clean slate
+        QVERIFY(HotkeyManager::keyDownEmits(vk)); // first down → emit
+        QVERIFY(!HotkeyManager::keyDownEmits(vk)); // auto-repeat → no emit
+        QVERIFY(!HotkeyManager::keyDownEmits(vk)); // still held → no emit
+        HotkeyManager::keyUpSeen(vk);
+        QVERIFY(HotkeyManager::keyDownEmits(vk)); // released → next press emits
+        HotkeyManager::keyUpSeen(vk);
+    }
+
+    // Alt+Tab detection in the LL hook: main treats the next foreground
+    // change as a user window switch (taskbar/Alt+Tab close behavior) instead
+    // of a system side-effect like an uncloak steal.
+    void windowSwitchChordDetection()
+    {
+        QVERIFY(HotkeyManager::isWindowSwitchChord(VK_TAB, /*altDown=*/true));
+        QVERIFY(!HotkeyManager::isWindowSwitchChord(VK_TAB, /*altDown=*/false));
+        QVERIFY(!HotkeyManager::isWindowSwitchChord('A', true));
+        QVERIFY(!HotkeyManager::isWindowSwitchChord(VK_ESCAPE, true));
+    }
+
     void bindingsUseWinDetectsSystemPreset()
     {
         QVector<HotkeyManager::Binding> defs;
