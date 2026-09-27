@@ -216,13 +216,27 @@ int main(int argc, char *argv[])
     // --- overview: every monitor at once (Mission Control style) ---
     auto openOverview = [&]() {
         overview.openAll();
+        if (overview.isOpen())
+            hotkeys.setConsumeEscape(true); // Esc closes globally (hook swallows)
     };
     auto toggleOverview = [&]() {
+        if (overview.isOpen()) {
+            hotkeys.setConsumeEscape(false);
+            overview.closeAll(false);
+        } else {
+            openOverview();
+        }
+    };
+    // Any full close (cancel, commit, foreground/Alt+Tab) ends with allClosed.
+    QObject::connect(&overview, &OverviewHost::allClosed, &hotkeys, [&]() {
+        hotkeys.setConsumeEscape(false);
+    });
+    // Esc pressed while the overview is open — works even when the panel
+    // lost focus (the hook swallows it, so no leak to the foreground app).
+    QObject::connect(&hotkeys, &HotkeyManager::escapeRequested, &app, [&]() {
         if (overview.isOpen())
             overview.closeAll(false);
-        else
-            overview.openAll();
-    };
+    });
 
     QObject::connect(&overview, &OverviewHost::spaceChosen, &manager,
                      [&](quint64 hmon, int space) {

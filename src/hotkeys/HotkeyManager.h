@@ -7,8 +7,16 @@
 #include <QVector>
 #include <Windows.h>
 
+class QThread;
+
 // Global hotkeys via low-level keyboard hook (primary) + RegisterHotKey fallback.
 // Bindings are configurable (including Win-combos that occupy system shortcuts).
+//
+// The LL hook runs on a DEDICATED thread with its own message pump: Windows
+// silently removes hooks whose installer thread does not answer within
+// LowLevelHooksTimeout, and the overview open path can block the main thread
+// for seconds (capture batches) — on the main thread every hotkey would die
+// after the first slow open.
 class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     Q_OBJECT
 public:
@@ -44,6 +52,13 @@ public:
     QVector<Binding> bindings() const { return m_bindings; }
     Binding bindingFor(int action) const;
     bool usesWinBindings() const;
+
+    // Esc handling while the overview is open: the hook swallows Esc and
+    // emits escapeRequested() instead — works even when the panel lost
+    // focus to the bounced foreground window (panel keyPressEvent still
+    // covers the focused case / tests).
+    void setConsumeEscape(bool on);
+    bool consumeEscape() const;
 
     // Portable sequence helpers (pure — unit-tested).
     static QString defaultSequence(int action);
@@ -85,6 +100,8 @@ signals:
     void actionTriggered(int action);
     // User pressed Alt+Tab (window switcher) — queued like actionTriggered.
     void windowSwitchChord();
+    // Esc pressed while consumeEscape() is set (overview open) — queued.
+    void escapeRequested();
 
 private:
     struct BindingInternal {
@@ -99,4 +116,5 @@ private:
     QVector<Binding> m_bindings;
     QVector<BindingInternal> m_registered; // RegisterHotKey fallback only
     QVector<int> m_registeredIds;
+    QThread *m_hookThread = nullptr; // owns the LL hook + its message pump
 };

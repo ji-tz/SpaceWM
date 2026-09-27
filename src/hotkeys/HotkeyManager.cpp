@@ -1,13 +1,18 @@
 #include "HotkeyManager.h"
 
+#include "core/log/Log.h"
 #include "core/settings/AppSettings.h"
 
 #include <QCoreApplication>
 #include <QAbstractEventDispatcher>
 #include <QHash>
+#include <QMutex>
 #include <QSet>
+#include <QThread>
 
 #include <Windows.h>
+
+#include <atomic>
 
 namespace {
 constexpr int kIdPrev = 1001;
@@ -49,16 +54,28 @@ int idToAction(int id)
 HHOOK g_llHookHandle = nullptr;
 HotkeyManager *g_manager = nullptr;
 
+// --- hook-thread shared state (ctor installs the hook on its own thread) ---
+std::atomic<bool> g_hookReady{false};
+// Esc swallow while the overview is open (main flips; hook reads).
+std::atomic<bool> g_consumeEscape{false};
+// Bindings snapshot for the hook thread (published under mutex by arm).
+QMutex g_hookBindingsMutex;
+QVector<HotkeyManager::Binding> g_hookBindings;
+// One physical press → one action (auto-repeat guard).
+QSet<UINT> g_keysDown;
+
 // --- LL Win-key state machine (System preset occupies Win combos) ---
 // The shell opens the Start/Windows menu when it sees Win down + Win up
 // without a key it recognizes in between. Swallowing only Left/Tab still
 // lets that Win tap through → menu. Defer Win down until we know the next key.
-bool g_winArmed = false;       // any binding uses MOD_WIN
-bool g_winDeferred = false;    // saw Win down, not yet forwarded to the shell
-bool g_winForwarded = false;   // deferred Win down was flushed via SendInput
-bool g_ateChordKey = false;    // a MOD_WIN binding swallowed its trigger key
+// Atomic: armed/deferred flags are written by main (arm/dtor) and read or
+// written by the hook thread.
+std::atomic<bool> g_winArmed{false};     // any binding uses MOD_WIN
+std::atomic<bool> g_winDeferred{false};  // saw Win down, not yet forwarded to the shell
+std::atomic<bool> g_winForwarded{false}; // deferred Win down was flushed via SendInput
+std::atomic<bool> g_ateChordKey{false};  // a MOD_WIN binding swallowed its trigger key
 UINT g_pendingWinVk = VK_LWIN;
-int g_winDownCount = 0;        // physical LWIN/RWIN downs seen by the hook
+int g_winDownCount = 0; // physical LWIN/RWIN downs seen by the hook
 
 // Tracked modifiers (updated even for swallowed keys). OR'd with async state.
 bool g_tCtrl = false;
@@ -69,6 +86,8 @@ void emitAction(int action)
 {
     if (g_manager)
         QMetaObject::invokeMethod(g_manager, [action]() {
+            // Logged on main (off the hook thread) — one line per real press.
+            spacelog::info(QStringLiteral("hotkey action=%1").arg(action));
             emit g_manager->actionTriggered(action);
         }, Qt::QueuedConnection);
 }
@@ -78,6 +97,14 @@ void emitWindowSwitchChord()
     if (g_manager)
         QMetaObject::invokeMethod(g_manager, []() {
             emit g_manager->windowSwitchChord();
+        }, Qt::QueuedConnection);
+}
+
+void emitEscapeRequested()
+{
+    if (g_manager)
+        QMetaObject::invokeMethod(g_manager, []() {
+            emit g_manager->escapeRequested();
         }, Qt::QueuedConnection);
 }
 
@@ -174,6 +201,14 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             if (isDown && HotkeyManager::isWindowSwitchChord(vk, g_tAlt))
                 emitWindowSwitchChord();
 
+            // Esc while the overview is open: swallow it and notify main —
+            // the panel may have lost focus to the bounced foreground window,
+            // so Esc must work globally, not only when the panel has focus.
+            if (isDown && vk == VK_ESCAPE && g_consumeEscape.load()) {
+                emitEscapeRequested();
+                return 1;
+            }
+
             // Physical Win key: defer / swallow so the shell never sees a
             // bare or Ctrl+Win tap (those open the Windows/Start menu).
             if (g_winArmed && (vk == VK_LWIN || vk == VK_RWIN)) {
@@ -213,7 +248,12 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             if (g_winDeferred && !g_winForwarded)
                 w = true;
 
-            const auto bindings = g_manager->bindings();
+            // Snapshot — the hook thread must not touch main-owned m_bindings.
+            QVector<HotkeyManager::Binding> bindings;
+            {
+                QMutexLocker lock(&g_hookBindingsMutex);
+                bindings = g_hookBindings;
+            }
             for (const auto &b : bindings) {
                 if (b.vk == 0)
                     continue;
@@ -243,12 +283,6 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 }
 } // namespace
 
-// Vks whose first keyDOWN was seen but not yet released — auto-repeat
-// keyDOWNs while present must not re-emit the action (one press = one action).
-namespace {
-QSet<UINT> g_keysDown;
-}
-
 bool HotkeyManager::keyDownEmits(UINT vk)
 {
     if (g_keysDown.contains(vk))
@@ -267,22 +301,57 @@ bool HotkeyManager::isWindowSwitchChord(UINT vk, bool altDown)
     return altDown && vk == VK_TAB;
 }
 
+void HotkeyManager::setConsumeEscape(bool on)
+{
+    g_consumeEscape.store(on);
+}
+
+bool HotkeyManager::consumeEscape() const
+{
+    return g_consumeEscape.load();
+}
+
 HotkeyManager::HotkeyManager(QObject *parent)
     : QObject(parent)
 {
     if (qApp)
         qApp->installNativeEventFilter(this);
     g_manager = this;
-    g_llHookHandle = SetWindowsHookExW(WH_KEYBOARD_LL, llKeyboardProc,
-                                       GetModuleHandleW(nullptr), 0);
+
+    // Install the LL hook ON ITS OWN THREAD: Windows silently removes hooks
+    // whose installer thread stops answering within LowLevelHooksTimeout,
+    // and the overview open path blocks the main thread for seconds in
+    // capture batches — on the main thread one slow open killed all hotkeys.
+    g_hookReady.store(false);
+    m_hookThread = new QThread(this);
+    // Functor-only connect → runs in the EMITTING (hook) thread, before its
+    // event loop starts pumping key callbacks.
+    QObject::connect(m_hookThread, &QThread::started, []() {
+        g_llHookHandle = SetWindowsHookExW(WH_KEYBOARD_LL, llKeyboardProc,
+                                           GetModuleHandleW(nullptr), 0);
+        spacelog::info(g_llHookHandle
+                           ? QStringLiteral("LL keyboard hook installed (hook thread)")
+                           : QStringLiteral("LL keyboard hook FAILED — RegisterHotKey fallback"));
+        g_hookReady.store(true);
+    });
+    m_hookThread->start();
+    for (int i = 0; i < 200 && !g_hookReady.load(); ++i)
+        ::Sleep(5); // bounded ~1s; SetWindowsHookEx is effectively instant
 }
 
 HotkeyManager::~HotkeyManager()
 {
     unregisterAll();
+    // Stop new callbacks, join the hook thread, THEN free shared state —
+    // an in-flight callback runs on the hook thread and must not observe a
+    // cleared g_manager.
     if (g_llHookHandle) {
         UnhookWindowsHookEx(g_llHookHandle);
         g_llHookHandle = nullptr;
+    }
+    if (m_hookThread) {
+        m_hookThread->quit();
+        m_hookThread->wait();
     }
     if (g_manager == this) {
         g_manager = nullptr;
@@ -290,6 +359,9 @@ HotkeyManager::~HotkeyManager()
         resetWinChordState();
         g_winDownCount = 0;
         g_tCtrl = g_tAlt = g_tShift = false;
+        g_consumeEscape.store(false);
+        QMutexLocker lock(&g_hookBindingsMutex);
+        g_hookBindings.clear();
     }
     if (qApp)
         qApp->removeNativeEventFilter(this);
@@ -498,6 +570,12 @@ bool HotkeyManager::armFromBindings()
     unregisterAll();
     g_winArmed = bindingsUseWin(m_bindings);
     resetWinChordState();
+    // Publish the snapshot the hook thread reads (it must not touch
+    // main-owned m_bindings).
+    {
+        QMutexLocker lock(&g_hookBindingsMutex);
+        g_hookBindings = m_bindings;
+    }
     // Prefer LL hook (can swallow Win+Tab etc.). RegisterHotKey only if hook failed.
     const bool llOk = g_llHookHandle != nullptr;
     if (!llOk) {

@@ -112,6 +112,18 @@ private slots:
         QVERIFY(!HotkeyManager::isWindowSwitchChord(VK_ESCAPE, true));
     }
 
+    // Esc swallow flag: set while the overview is open (the hook then eats
+    // Esc globally and emits escapeRequested; cleared on allClosed).
+    void consumeEscapeRoundTrip()
+    {
+        HotkeyManager hm;
+        QVERIFY(!hm.consumeEscape());
+        hm.setConsumeEscape(true);
+        QVERIFY(hm.consumeEscape());
+        hm.setConsumeEscape(false);
+        QVERIFY(!hm.consumeEscape());
+    }
+
     void bindingsUseWinDetectsSystemPreset()
     {
         QVector<HotkeyManager::Binding> defs;
