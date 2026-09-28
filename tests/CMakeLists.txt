@@ -15,6 +15,7 @@ set(SPACEWM_TEST_NAMES
   test_window_placement
   test_flash_overlay
   test_tray
+  test_package
   test_integration_flow
 )
 
@@ -35,6 +36,10 @@ endforeach()
 # Real-mode flow launches real apps and drives the live desktop — opt-in via
 # SPACEWM_IT=1 (skips otherwise, see AGENTS.md §2.5) and much slower.
 set_tests_properties(test_integration_flow PROPERTIES TIMEOUT 300)
+
+# Packaging compresses a ~40 MB zip (and compiles the installer when ISCC.exe
+# is available) — needs more headroom than the default 60 s.
+set_tests_properties(test_package PROPERTIES TIMEOUT 180)
 
 # Deploy Qt runtime ONCE into tests/ after all test binaries link.
 # Per-target windeployqt races on the same plugin files under parallel Ninja.
