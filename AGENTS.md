@@ -76,7 +76,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 
 ### 2.2 功能 ↔ 测试（摘要）
 
-当前 **15** 个测试二进制：`cloak` / `monitors` / `space_manager` / `window_tracker` / `thumbnail` / `hotkeys` / `settings` / `log` / `space_card` / `overview` / `overview_host` / `window_placement` / `flash_overlay` / `tray` / `integration_flow`。
+当前 **16** 个测试二进制：`cloak` / `monitors` / `space_manager` / `window_tracker` / `thumbnail` / `hotkeys` / `settings` / `log` / `space_card` / `overview` / `overview_host` / `window_placement` / `flash_overlay` / `tray` / `package` / `integration_flow`。
 
 | 能力（本会话 + 近期 commit） | 测试 | 状态 |
 |------------------------------|------|------|
@@ -94,6 +94,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
 | 遮罩前刷新可见截图（screen fallback）/ warm 只补缺不清缓存 | `test_space_manager` | 有 |
 | **实模式 12 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
+| **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
 | 确认/退出时**先 cloak 再撤遮罩**（防闪现） | `test_space_manager` · `test_overview_host` | 有 |
 | 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
 
