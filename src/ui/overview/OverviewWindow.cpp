@@ -4,9 +4,11 @@
 #include "ui/preview/SpaceCardWidget.h"
 #include "ui/preview/WindowPreviewWidget.h"
 #include "core/capture/ThumbnailCapture.h"
+#include "core/log/Log.h"
 #include "core/monitor/MonitorInfo.h"
 #include "core/window/WindowTracker.h"
 
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
@@ -363,7 +365,11 @@ void OverviewWindow::populateCards()
     if (!m_open || m_closePending)
         return;
 
+    QElapsedTimer pt;
+    pt.start();
     rebuildCards();
+    const qint64 msRebuild = pt.restart();
+
     m_selected = qBound(0, m_selected, qMax(0, m_cards.size() - 1));
     setSelected(m_selected);
 
@@ -373,6 +379,7 @@ void OverviewWindow::populateCards()
         m_spaceStripHost->show();
     if (m_windowScroll)
         m_windowScroll->show();
+    const qint64 msReveal = pt.restart();
 
     // Geometry must be settled before the viewport-dependent strip rebuild.
     if (layout())
@@ -381,6 +388,16 @@ void OverviewWindow::populateCards()
         m_root->layout()->activate();
     if (m_spaceStripHost && m_spaceStripHost->layout())
         m_spaceStripHost->layout()->activate();
+
+    // Sub-phase triage: an intermittent stall showed up once as cards=913ms —
+    // this line splits it into rebuild / reveal / layout.
+    spacelog::info(
+        QStringLiteral("populateCards mon=0x%1 rebuild=%2ms reveal=%3ms layout=%4ms cards=%5")
+            .arg(quintptr(m_hmon), 0, 16)
+            .arg(msRebuild)
+            .arg(msReveal)
+            .arg(pt.elapsed())
+            .arg(m_cards.size()));
 }
 
 void OverviewWindow::populateTiles()
@@ -555,8 +572,13 @@ void OverviewWindow::rebuildCards()
                                m->physRect.bottom - m->physRect.top);
 
         QImage shot = m->spaces[i].screenshot;
-        if (shot.isNull())
+        if (shot.isNull()) {
+            spacelog::info(
+                QStringLiteral("card wallpaper fallback (null screenshot) space=%1 mon=0x%2")
+                    .arg(i)
+                    .arg(quintptr(m_hmon), 0, 16));
             shot = thumbs::desktopWallpaper(m->physRect, QSize(640, 360));
+        }
         if (shot.isNull()) {
             shot = QImage(640, 360, QImage::Format_ARGB32_Premultiplied);
             shot.fill(QColor(32, 36, 48));

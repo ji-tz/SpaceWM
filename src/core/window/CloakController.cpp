@@ -193,23 +193,41 @@ bool showViaShowWindow(HWND hwnd)
         return false;
 
     const HiddenInfo st = it->second;
-    g_hidden.erase(it);
+
+    // Already hidden before we touched it — nothing to restore, drop record.
+    if (!st.wasVisible) {
+        g_hidden.erase(hwnd);
+        g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
+        return true;
+    }
 
     // Restore exact placement (includes SW_SHOWMINIMIZED if it was iconic).
     // Do NOT follow with SW_SHOW — that force-un-minimizes / raises wrongly.
+    bool ok = false;
     if (st.hasPlacement) {
         WINDOWPLACEMENT wp = st.placement;
         wp.length = sizeof(wp);
         if (::IsIconic(hwnd) && wp.showCmd != SW_SHOWMINIMIZED &&
             wp.showCmd != SW_SHOWMINNOACTIVE && wp.showCmd != SW_MINIMIZE)
             wp.showCmd = SW_SHOWMINIMIZED;
-        ::SetWindowPlacement(hwnd, &wp);
-    } else if (st.wasVisible) {
+        ok = ::SetWindowPlacement(hwnd, &wp) != FALSE;
+        // A "successful" call with the wrong showCmd can still leave the
+        // window hidden — only drop the record when it is really visible.
+        if (ok && !::IsWindowVisible(hwnd))
+            ok = false;
+    } else {
         ::ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        ok = ::IsWindowVisible(hwnd) != FALSE;
     }
 
+    // Erase ONLY on success: a failed restore must keep the record so the
+    // next applyVisibility/showAllHidden retries — otherwise the window is
+    // stuck hidden forever with nothing left to un-hide it.
+    if (ok)
+        g_hidden.erase(hwnd);
+
     g_lastBackend.store(static_cast<int>(cloak::Backend::ShowWindow));
-    return true;
+    return ok;
 }
 
 void remember(HWND hwnd, How how)
@@ -277,15 +295,17 @@ bool set(HWND hwnd, bool enable)
     bool ok = false;
     switch (how) {
     case How::ShowWindow:
-        ok = showViaShowWindow(hwnd);
+        ok = showViaShowWindow(hwnd); // erases record itself, only on success
         break;
     case How::Dwm:
-        forget(hwnd);
         ok = showViaDwm(hwnd);
+        if (ok)           // keep the record on failure so the next pass retries —
+            forget(hwnd); // dropping it first = window stuck cloaked forever
         break;
     case How::Immersive:
-        forget(hwnd);
         ok = showViaApplicationView(hwnd);
+        if (ok)
+            forget(hwnd);
         break;
     case How::NotHidden:
     default:
