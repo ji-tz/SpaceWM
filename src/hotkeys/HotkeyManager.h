@@ -87,6 +87,16 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     // keyDownEmits: true only for the FIRST down of a press; keyUpSeen clears.
     static bool keyDownEmits(UINT vk);
     static void keyUpSeen(UINT vk);
+    // Win-held edge tracking (unit-tested): trackWinDown is true only when no
+    // Win key was down before — auto-repeat repeats must not restart the defer
+    // chord; trackWinUp ends the edge. Auto-repeat-safe by construction (set
+    // is idempotent), unlike a per-down counter that could drift and fake a
+    // held Win modifier (lone Tab matching Win+Tab).
+    static bool trackWinDown(UINT vk);
+    static void trackWinUp(UINT vk);
+    // Win modifier as seen by binding match (unit-tested): only a live defer
+    // or the system's own async key state — both self-correcting.
+    static bool winModifierActive(bool deferred, bool asyncWinDown);
     // Alt+Tab / Alt+Ctrl+Tab — the documented window-switcher chord. The hook
     // observes it directly (unit-tested) so main can treat the next
     // foreground change as a user switch instead of a system side-effect.

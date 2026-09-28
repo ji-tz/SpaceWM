@@ -91,7 +91,12 @@ std::atomic<bool> g_winDeferred{false};  // saw Win down, not yet forwarded to t
 std::atomic<bool> g_winForwarded{false}; // deferred Win down was flushed via SendInput
 std::atomic<bool> g_ateChordKey{false};  // a MOD_WIN binding swallowed its trigger key
 UINT g_pendingWinVk = VK_LWIN;
-int g_winDownCount = 0; // physical LWIN/RWIN downs seen by the hook
+// Edge tracker for "is a physical Win key down" (bit1=LWIN, bit2=RWIN).
+// Idempotent set/clear — a plain per-down counter drifts on auto-repeat
+// repeats or a missed up, permanently faking the Win modifier (that made a
+// lone Tab match Win+Tab). Binding match no longer reads this at all; it
+// only gates entering the defer state.
+std::atomic<UINT> g_winHeld{0};
 
 // Tracked modifiers (updated even for swallowed keys). OR'd with async state.
 bool g_tCtrl = false;
@@ -199,9 +204,9 @@ void readMods(bool *ctrl, bool *alt, bool *shift, bool *win)
     *ctrl = g_tCtrl || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
     *alt = g_tAlt || ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
     *shift = g_tShift || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
-    // Deferred Win was never forwarded — rely on the hook-local count.
-    *win = g_winDownCount > 0 ||
-           ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+    const int asyncWin =
+        (GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000;
+    *win = HotkeyManager::winModifierActive(g_winDeferred.load(), asyncWin != 0);
 }
 
 LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -213,14 +218,15 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             const UINT vk = kb->vkCode;
             const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
             const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+            bool firstWinDown = false;
 
             if (isModVk(vk)) {
                 if (vk == VK_LWIN || vk == VK_RWIN) {
                     if (isDown) {
-                        ++g_winDownCount;
+                        firstWinDown = HotkeyManager::trackWinDown(vk);
                         g_pendingWinVk = vk;
-                    } else if (g_winDownCount > 0) {
-                        --g_winDownCount;
+                    } else {
+                        HotkeyManager::trackWinUp(vk);
                     }
                 } else if (isDown || isUp) {
                     trackModifier(vk, isDown);
@@ -248,13 +254,22 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             // Physical Win key: defer / swallow so the shell never sees a
             // bare or Ctrl+Win tap (those open the Windows/Start menu).
             if (g_winArmed && (vk == VK_LWIN || vk == VK_RWIN)) {
-                if (isDown && HotkeyManager::winKeyDownDecision(g_winArmed) ==
-                                  HotkeyManager::WinDownDecision::Defer) {
-                    g_winDeferred = true;
-                    g_winForwarded = false;
-                    g_ateChordKey = false;
-                    g_pendingWinVk = vk;
-                    return 1;
+                if (isDown) {
+                    if (firstWinDown && HotkeyManager::winKeyDownDecision(g_winArmed) ==
+                                            HotkeyManager::WinDownDecision::Defer) {
+                        g_winDeferred = true;
+                        g_winForwarded = false;
+                        g_ateChordKey = false;
+                        g_pendingWinVk = vk;
+                        return 1;
+                    }
+                    // Auto-repeat while the first down is still deferred:
+                    // swallow, but never restart the chord state machine
+                    // (re-deferring would clobber forwarded/ate).
+                    if (g_winDeferred)
+                        return 1;
+                    // Otherwise the down was forwarded (flush) or the edge
+                    // survived an arm() — pass repeats like a normal held key.
                 }
                 if (isUp) {
                     if (g_winDeferred && !g_winForwarded) {
@@ -279,9 +294,6 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
             bool c = false, a = false, s = false, w = false;
             readMods(&c, &a, &s, &w);
-            // While Win is deferred, GetAsyncKeyState may not report it; force on.
-            if (g_winDeferred && !g_winForwarded)
-                w = true;
 
             // Snapshot — the hook thread must not touch main-owned m_bindings.
             QVector<HotkeyManager::Binding> bindings;
@@ -329,6 +341,31 @@ bool HotkeyManager::keyDownEmits(UINT vk)
 void HotkeyManager::keyUpSeen(UINT vk)
 {
     g_keysDown.remove(vk);
+}
+
+bool HotkeyManager::trackWinDown(UINT vk)
+{
+    const UINT bit = (vk == VK_LWIN) ? 1u : 2u;
+    // True only when NO Win key was down before this event — auto-repeat
+    // repeats and LWIN/RWIN double-fires must not restart the chord.
+    return g_winHeld.fetch_or(bit) == 0;
+}
+
+void HotkeyManager::trackWinUp(UINT vk)
+{
+    Q_UNUSED(vk)
+    // Any Win release ends the edge (tolerates drivers that pair an LWIN
+    // down with an RWIN up).
+    g_winHeld.store(0);
+}
+
+bool HotkeyManager::winModifierActive(bool deferred, bool asyncWinDown)
+{
+    // Only self-correcting sources: a live defer (Win down swallowed by us,
+    // possibly invisible to GetAsyncKeyState) or the system's own key state.
+    // Never a hook-local counter — those drift and made a lone Tab match
+    // Win+Tab after the System preset was armed.
+    return deferred || asyncWinDown;
 }
 
 bool HotkeyManager::isWindowSwitchChord(UINT vk, bool altDown)
@@ -392,7 +429,7 @@ HotkeyManager::~HotkeyManager()
         g_manager = nullptr;
         g_winArmed = false;
         resetWinChordState();
-        g_winDownCount = 0;
+        g_winHeld.store(0);
         g_tCtrl = g_tAlt = g_tShift = false;
         g_consumeEscape.store(false);
         QMutexLocker lock(&g_hookBindingsMutex);
@@ -651,6 +688,11 @@ bool HotkeyManager::armFromBindings()
     unregisterAll();
     g_winArmed = bindingsUseWin(m_bindings);
     resetWinChordState();
+    // Heal stale Win-edge state: with no Win key physically down, any
+    // recorded edge is drift from before this arm (missed up / repeat
+    // inflation) and would silently skip the defer on later presses.
+    if (((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) == 0)
+        g_winHeld.store(0);
     // Publish the snapshot the hook thread reads (it must not touch
     // main-owned m_bindings).
     {

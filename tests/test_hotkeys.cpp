@@ -99,6 +99,39 @@ class TestHotkeys : public QObject {
         HotkeyManager::keyUpSeen(vk);
     }
 
+    // Regression: in the System preset a lone Tab used to open the overview
+    // (it matched Win+Tab). The Win modifier seen by binding match may come
+    // ONLY from a live defer or the system's async state — a hook-local
+    // counter that drifts (auto-repeat Win downs / a missed up) must not be
+    // able to fake "Win is held".
+    void winModifierComesOnlyFromDeferOrAsync()
+    {
+        QVERIFY(!HotkeyManager::winModifierActive(false, false));
+        QVERIFY(HotkeyManager::winModifierActive(true, false)); // deferred down
+        QVERIFY(HotkeyManager::winModifierActive(false, true)); // system state
+        QVERIFY(HotkeyManager::winModifierActive(true, true));
+    }
+
+    // Win edge tracking must be idempotent: auto-repeat downs and an LWIN
+    // down followed by an RWIN down must not create a second chord edge
+    // (re-entering defer mid-chord clobbers forwarded/ate state).
+    void winDownEdgeIsRepeatSafe()
+    {
+        HotkeyManager::trackWinUp(VK_LWIN);
+        QVERIFY(HotkeyManager::trackWinDown(VK_LWIN));  // first down → edge
+        QVERIFY(!HotkeyManager::trackWinDown(VK_LWIN)); // auto-repeat → no edge
+        QVERIFY(!HotkeyManager::trackWinDown(VK_LWIN));
+        QVERIFY(!HotkeyManager::trackWinDown(VK_RWIN)); // other Win while held
+        HotkeyManager::trackWinUp(VK_RWIN);             // any up ends the edge
+        QVERIFY(HotkeyManager::trackWinDown(VK_LWIN));  // next press is fresh
+        HotkeyManager::trackWinUp(VK_LWIN);
+        // Stray up (no preceding down) leaves no residue either.
+        QVERIFY(HotkeyManager::trackWinDown(VK_RWIN));
+        HotkeyManager::trackWinUp(VK_RWIN);
+        QVERIFY(HotkeyManager::trackWinDown(VK_LWIN));
+        HotkeyManager::trackWinUp(VK_LWIN);
+    }
+
     // Alt+Tab detection in the LL hook: main treats the next foreground
     // change as a user window switch (taskbar/Alt+Tab close behavior) instead
     // of a system side-effect like an uncloak steal.
