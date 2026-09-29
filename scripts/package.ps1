@@ -31,8 +31,7 @@ $LibDir   = (Resolve-Path $LibDir).Path
 $OutDir   = [System.IO.Path]::GetFullPath($OutDir)
 
 $exe = Join-Path $BuildDir "SpaceWM.exe"
-Write-Host ("DBG init: BuildDir=[{0}] exe=[{1}] PSScriptRoot=[{2}]"
-    -f $BuildDir, $exe, $PSScriptRoot)
+Write-Host "DBG init: BuildDir=[$BuildDir] exe=[$exe] PSScriptRoot=[$PSScriptRoot]"
 if (-not (Test-Path $exe)) {
     Write-Error "SpaceWM.exe not found in '$BuildDir' — build first."
     exit 1
@@ -47,8 +46,7 @@ $stage = Join-Path $OutDir "SpaceWM-win64"
 # CI breadcrumb: report the actual values that reach Copy-Item (the Windows
 # runner failed here with "Path is null" even though Test-Path above passed).
 $exeState = if ($null -eq $exe) { 'NULL' } else { 'ok' }
-Write-Host ("DBG stage: exe=[{0}] ({1}) stage=[{2}] OutDir=[{3}] BuildDir=[{4}] PS={5}"
-    -f $exe, $exeState, $stage, $OutDir, $BuildDir, $PSVersionTable.PSVersion)
+Write-Host "DBG stage: exe=[$exe] ($exeState) stage=[$stage] OutDir=[$OutDir] BuildDir=[$BuildDir] PS=$($PSVersionTable.PSVersion)"
 if ($null -eq $exe) {
     Write-Error "package.ps1: exe is null at staging"
     exit 7
