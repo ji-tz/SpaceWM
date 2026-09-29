@@ -17,6 +17,12 @@ class SpaceManager : public QObject {
 
     void refreshMonitors();
 
+    // Applies an explicit monitor list (refreshMonitors() = enumerate + this).
+    // Handles whose monitor vanished lose their space lists with it — survivors
+    // are re-homed onto a live monitor's current space instead of being purged.
+    // Public as the test seam for that recovery (tests inject fake handles).
+    void applyMonitorEntries(const QVector<MonitorEntry> &list);
+
     QVector<MonitorSpaces *> monitors();
     MonitorSpaces *monitorOf(HMONITOR hmon);
     MonitorSpaces *monitorAt(const QPoint &globalPos);
@@ -46,6 +52,11 @@ class SpaceManager : public QObject {
 
     bool trackWindow(HWND hwnd);
     void untrackWindow(HWND hwnd);
+
+    // WindowTracker::windowMoved entry (main + integration flow share it):
+    // a cross-monitor move re-homes an OWNED window into the target
+    // monitor's current space; unowned ones go through normal discovery.
+    void onWindowMoved(HWND hwnd);
 
     void setOverviewOpen(bool open);
     bool overviewOpen() const { return m_overviewOpen; }
@@ -111,6 +122,10 @@ class SpaceManager : public QObject {
     void ensureMonitor(HMONITOR hmon);
     void cloakWindow(HWND hwnd, bool hide);
     void placeNewWindow(HWND hwnd);
+    // Put an owned-or-orphaned window into a live monitor's current space.
+    // Deliberately skips ensureMonitor/isManageable so it can never re-enter
+    // refreshMonitors() mid-iteration and never skips a still-cloaked survivor.
+    void rehomeWindow(HWND hwnd);
 
     QHash<quintptr, MonitorSpaces> m_monitors;
     struct Owner {

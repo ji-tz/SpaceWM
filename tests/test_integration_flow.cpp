@@ -58,9 +58,9 @@ class TestIntegrationFlow : public QObject {
         connect(&m_tracker, &WindowTracker::windowDestroyed, &m_sm,
                 [this](quint64 h) { m_sm.untrackWindow(reinterpret_cast<HWND>(h)); });
         connect(&m_tracker, &WindowTracker::windowMoved, &m_sm, [this](quint64 h) {
-            HWND hwnd = reinterpret_cast<HWND>(h);
-            if (m_sm.spaceOfWindow(hwnd) >= 0)
-                m_sm.refreshWindowAfterUpdate(hwnd);
+            // Same entry as main.cpp — cross-monitor moves re-home (fidelity:
+            // the flow used to only refresh, which main never does).
+            m_sm.onWindowMoved(reinterpret_cast<HWND>(h));
         });
         connect(&m_host, &OverviewHost::spaceChosen, &m_sm, [this](quint64 h, int space) {
             m_sm.switchSpace(reinterpret_cast<HMONITOR>(h), space,
@@ -237,7 +237,8 @@ class TestIntegrationFlow : public QObject {
         QVERIFY(m_allClosedSpy->count() >= 1);
 
         QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
-        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndExpl), 3000);
+        if (explOnPanel())
+            QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndExpl), 3000);
         dumpWebState("step07");
         if (webStableIn(0)) // pre-swap: browser must live on S1 (idx 0)
             QVERIFY(cloak::isCloaked(m_hwndWeb));
@@ -302,7 +303,8 @@ class TestIntegrationFlow : public QObject {
         QCOMPARE(m_monitor->spaces[1].name, m_nameS1);
         // Notepad lives on S2 which moved to index 0 …
         QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceOfWindow(m_hwndNote), 0, 3000);
-        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
+        if (explOnPanel())
+            QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
         if (webStableIn(1)) // post-swap: S1 sits at index 1
             QCOMPARE(m_sm.spaceOfWindow(m_hwndWeb), 1);
         // … and the desktop stayed on S2 (currentIndex followed the move).
@@ -344,7 +346,48 @@ class TestIntegrationFlow : public QObject {
         }
         QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndNote), 3000);
         QCOMPARE(m_sm.spaceOfWindow(m_hwndNote), 0);
-        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
+        if (explOnPanel())
+            QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
+    }
+
+    // Step 13: a monitor refresh whose handles change must not lose windows —
+    // survivors re-home onto a live monitor's current space (SpaceManager::
+    // applyMonitorEntries purge → re-home), and a window that was OFF-space
+    // (cloaked) before the change becomes visible again instead of staying
+    // stuck hidden until process exit.
+    void step13_monitorRefreshRehomesLostWindows()
+    {
+        // State from step 12: Notepad lives off the current space → cloaked.
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndNote), 3000);
+        const HMONITOR realH = m_hmon;
+
+        // 1) Every real handle "vanishes" — only a fake monitor survives.
+        MonitorEntry fake;
+        fake.handle = reinterpret_cast<HMONITOR>(quintptr(0x00C0FFEE));
+        m_sm.applyMonitorEntries({fake});
+
+        // No flow window may fall out of management…
+        for (HWND h : {m_hwndNote, m_hwndExpl, m_hwndWeb}) {
+            if (!h || !::IsWindow(h))
+                continue;
+            QVERIFY2(m_sm.spaceOfWindow(h) >= 0,
+                     qPrintable(QStringLiteral("monitor refresh lost window 0x%1")
+                                    .arg(quintptr(h), 0, 16)));
+        }
+        // …and the previously off-space Notepad is visible again.
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
+
+        // 2) Real handles come back — everyone lands on a LIVE monitor.
+        m_sm.applyMonitorEntries(monitors::enumerate());
+        m_monitor = m_sm.monitorOf(realH); // m_monitors was rebuilt — re-sync
+        QVERIFY(m_monitor);
+        for (HWND h : {m_hwndNote, m_hwndExpl, m_hwndWeb}) {
+            if (!h || !::IsWindow(h))
+                continue;
+            QVERIFY2(m_sm.monitorOf(m_sm.ownerMonitorOf(h)) != nullptr,
+                     "window re-homed onto a monitor that no longer exists");
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
     }
 
     void cleanupTestCase()
@@ -423,6 +466,23 @@ class TestIntegrationFlow : public QObject {
                 .arg(cloak::isCloaked(m_hwndWeb) ? 1 : 0)
                 .arg(::IsWindowVisible(m_hwndWeb) ? 1 : 0)
                 .arg(m_monitor->currentIndex)));
+    }
+
+    // Explorer windows land wherever the shell decides (cursor/taskbar —
+    // varies run to run): like webStableIn, membership/cloak asserts are only
+    // meaningful when it sits on the PANEL's monitor.
+    bool explOnPanel()
+    {
+        if (!m_hwndExpl || !::IsWindow(m_hwndExpl)) {
+            QWARN("explorer window died mid-flow — skipping explorer asserts");
+            return false;
+        }
+        if (m_sm.ownerMonitorOf(m_hwndExpl) != m_hmon) {
+            QWARN("explorer sits on another display — its monitor's spaces are "
+                  "independent; skipping explorer asserts");
+            return false;
+        }
+        return true;
     }
 
     // A browser assertion is only meaningful when the window lives on the
