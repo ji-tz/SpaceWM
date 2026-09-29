@@ -93,7 +93,8 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | 拖拽热点 mapPressToHotSpot；点击 tile → activated | `test_window_placement` | 有 |
 | 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
 | 遮罩前刷新可见截图（screen fallback）/ warm 只补缺不清缓存 | `test_space_manager` | 有 |
-| **实模式 12 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
+| 显示器句柄变化**不丢窗口**（purge→re-home、不扫收未追踪窗口、卡住的 cloak 恢复）；**跨 monitor move re-home**（`onWindowMoved`，main/流程共用） | `test_space_manager` · `test_integration_flow` | 有 |
+| **实模式 13 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
 | **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
 | 确认/退出时**先 cloak 再撤遮罩**（防闪现） | `test_space_manager` · `test_overview_host` | 有 |
 | 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
@@ -138,6 +139,7 @@ $env:SPACEWM_IT = $null
 | 10 | 顺序交换为 [Space 2, Space 1]，归属/当前 space 跟随 | `step10_spaceOrderSwapped` |
 | 11 | 点击第二个 space | `step11_clickSecondSpaceCard` |
 | 12 | 进入第二个 space，preview 消失 | `step12_enteredSpaceAndPreviewGone` |
+| 13 | 模拟显示器句柄变化（假句柄往返刷新）：窗口不丢失、被 cloak 卡住的记事本恢复可见 | `step13_monitorRefreshRehomesLostWindows` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与

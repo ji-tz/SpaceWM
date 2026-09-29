@@ -122,7 +122,7 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 | `test_flash_overlay` | 切换 flash 动画 |
 | `test_tray` | 托盘菜单动作 |
 | `test_package` | 打包 zip 条目自校验 / 安装包构建（装有 Inno Setup 时，否则 skip） |
-| `test_integration_flow` | 实模式 12 步集成流程（`SPACEWM_IT=1` 显式开启） |
+| `test_integration_flow` | 实模式 13 步集成流程（`SPACEWM_IT=1` 显式开启） |
 
 新增 / 修改功能必须同步测试，详见 [`AGENTS.md` §2](AGENTS.md)。
 

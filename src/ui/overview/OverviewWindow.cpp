@@ -199,8 +199,13 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     if (!m || spaceIndex < 0 || spaceIndex >= m->spaces.size())
         return false;
 
-    if (!m_manager->trackWindow(hwnd))
+    if (!m_manager->trackWindow(hwnd)) {
+        spacelog::warn(QStringLiteral("placeWindow failed: trackWindow hwnd=0x%1 mon=0x%2 space=%3")
+                           .arg(quintptr(hwnd), 0, 16)
+                           .arg(quintptr(m_hmon), 0, 16)
+                           .arg(spaceIndex));
         return false;
+    }
 
     // Source space/monitor before the move so we can refresh the vacated card.
     const int srcSpace = m_manager->spaceOfWindow(hwnd);
@@ -208,8 +213,22 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     // Stay on the space we are viewing — do NOT jump to the drop target.
     const int stay = m->currentIndex;
 
-    if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex))
+    if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex)) {
+        spacelog::warn(QStringLiteral(
+                           "placeWindow failed: assignWindow hwnd=0x%1 mon=0x%2 space=%3")
+                           .arg(quintptr(hwnd), 0, 16)
+                           .arg(quintptr(m_hmon), 0, 16)
+                           .arg(spaceIndex));
         return false;
+    }
+    if (srcMon && srcMon != m_hmon) {
+        spacelog::info(QStringLiteral(
+                           "placeWindow cross-monitor hwnd=0x%1 from=0x%2 to=0x%3 space=%4")
+                           .arg(quintptr(hwnd), 0, 16)
+                           .arg(quintptr(srcMon), 0, 16)
+                           .arg(quintptr(m_hmon), 0, 16)
+                           .arg(spaceIndex));
+    }
 
     // Destination card (window now lives there — may be hidden).
     refreshCardScreenshot(spaceIndex);
