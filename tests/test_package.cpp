@@ -10,17 +10,16 @@
 #include <QTemporaryDir>
 #include <QTest>
 
-class TestPackage : public QObject
-{
+class TestPackage : public QObject {
     Q_OBJECT
 
-private slots:
+  private slots:
     void initTestCase();
     void zipPackage();
     void packageRejectsMissingBuild();
     void installerWhenIsccAvailable();
 
-private:
+  private:
     QString m_root; // repo root (tests/..)
     int runPowerShell(const QStringList &args, QString *output, int timeoutMs = 300000) const;
     static QString findIscc();
@@ -38,9 +37,9 @@ int TestPackage::runPowerShell(const QStringList &args, QString *output, int tim
 {
     QProcess p;
     p.start(QStringLiteral("powershell.exe"),
-             QStringList{QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"),
-                         QStringLiteral("Bypass"), QStringLiteral("-File")}
-                 + args);
+            QStringList{QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"),
+                        QStringLiteral("Bypass"), QStringLiteral("-File")} +
+                args);
     if (!p.waitForStarted(15000))
         return -1;
     if (!p.waitForFinished(timeoutMs)) {
@@ -84,9 +83,9 @@ void TestPackage::zipPackage()
 
     const QString zip = tmp.path() + QStringLiteral("/SpaceWM-win64.zip");
     QVERIFY2(QFile::exists(zip), qPrintable(zip));
-    QVERIFY2(QFileInfo(zip).size() > 10 * 1024 * 1024,
-             qPrintable(QStringLiteral("zip suspiciously small: %1 bytes")
-                            .arg(QFileInfo(zip).size())));
+    QVERIFY2(
+        QFileInfo(zip).size() > 10 * 1024 * 1024,
+        qPrintable(QStringLiteral("zip suspiciously small: %1 bytes").arg(QFileInfo(zip).size())));
     // The script itself verifies required entries (exe, Qt DLLs, platform plugin).
     QVERIFY2(out.contains(QStringLiteral("entries")), qPrintable(out));
 }
@@ -97,13 +96,10 @@ void TestPackage::packageRejectsMissingBuild()
     QVERIFY(empty.isValid());
 
     QString out;
-    const int code = runPowerShell(
-        {m_root + QStringLiteral("/scripts/package.ps1"),
-         QStringLiteral("-BuildDir"),
-         empty.path(),
-         QStringLiteral("-OutDir"),
-         empty.path()},
-        &out);
+    const int code =
+        runPowerShell({m_root + QStringLiteral("/scripts/package.ps1"), QStringLiteral("-BuildDir"),
+                       empty.path(), QStringLiteral("-OutDir"), empty.path()},
+                      &out);
     QVERIFY2(code != 0, qPrintable(out));
 }
 
@@ -118,17 +114,18 @@ void TestPackage::installerWhenIsccAvailable()
     QVERIFY(tmp.isValid());
 
     QString out;
-    const int code = runPowerShell(
-        {m_root + QStringLiteral("/scripts/package.ps1"), QStringLiteral("-Installer"),
-         QStringLiteral("-OutDir"), tmp.path()},
-        &out);
+    const int code =
+        runPowerShell({m_root + QStringLiteral("/scripts/package.ps1"),
+                       QStringLiteral("-Installer"), QStringLiteral("-OutDir"), tmp.path()},
+                      &out);
     QVERIFY2(code == 0, qPrintable(out));
 
     const QString setup = tmp.path() + QStringLiteral("/SpaceWM-Setup-x64.exe");
     QVERIFY2(QFile::exists(setup), qPrintable(setup));
-    QVERIFY2(QFileInfo(setup).size() > 1024 * 1024,
-             qPrintable(QStringLiteral("setup suspiciously small: %1 bytes")
-                            .arg(QFileInfo(setup).size())));
+    QVERIFY2(
+        QFileInfo(setup).size() > 1024 * 1024,
+        qPrintable(
+            QStringLiteral("setup suspiciously small: %1 bytes").arg(QFileInfo(setup).size())));
 }
 
 QTEST_MAIN(TestPackage)
