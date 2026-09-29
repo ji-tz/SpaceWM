@@ -17,6 +17,7 @@
 #include <QElapsedTimer>
 #include <QMimeData>
 #include <QProcess>
+#include <QPushButton>
 #include <QSignalSpy>
 
 #include <Windows.h>
@@ -370,9 +371,10 @@ class TestIntegrationFlow : public QObject {
         for (HWND h : {m_hwndNote, m_hwndExpl, m_hwndWeb}) {
             if (!h || !::IsWindow(h))
                 continue;
-            QVERIFY2(m_sm.spaceOfWindow(h) >= 0,
-                     qPrintable(QStringLiteral("monitor refresh lost window 0x%1")
-                                    .arg(quintptr(h), 0, 16)));
+            QVERIFY2(
+                m_sm.spaceOfWindow(h) >= 0,
+                qPrintable(
+                    QStringLiteral("monitor refresh lost window 0x%1").arg(quintptr(h), 0, 16)));
         }
         // …and the previously off-space Notepad is visible again.
         QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
@@ -388,6 +390,59 @@ class TestIntegrationFlow : public QObject {
                      "window re-homed onto a monitor that no longer exists");
         }
         QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
+    }
+
+    // Step 14: tile header — title ABOVE the image; × on the right closes the
+    // window via graceful WM_CLOSE without activating the tile, and the strip
+    // drops the dead window through untrack.
+    void step14_tileCloseButtonClosesWindow()
+    {
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        syncPanelMonitor();
+        QTest::qWait(700);
+        QVERIFY(m_sm.overviewOpen());
+
+        // Notepad may sit on any monitor's panel (per-monitor spaces).
+        WindowPreviewWidget *tile = nullptr;
+        OverviewWindow *tilePanel = nullptr;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto *p = qobject_cast<OverviewWindow *>(w);
+            if (!p || !p->isOpen())
+                continue;
+            for (auto *t : p->findChildren<WindowPreviewWidget *>()) {
+                if (t->windowHandle() == m_hwndNote) {
+                    tile = t;
+                    tilePanel = p;
+                    break;
+                }
+            }
+            if (tile)
+                break;
+        }
+        QVERIFY2(tile, "Notepad tile not found in any panel strip");
+        QVERIFY(tilePanel);
+
+        auto *btn = tile->findChild<QPushButton *>(QStringLiteral("CloseButton"));
+        QVERIFY(btn && btn->isEnabled());
+        QSignalSpy activated(tile, &WindowPreviewWidget::activated);
+
+        QTest::mouseClick(btn, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!::IsWindow(m_hwndNote), 5000);
+        QCOMPARE(activated.count(), 0);
+
+        // The strip rebuilds without the dead window (windowUntracked).
+        QTRY_VERIFY_WITH_TIMEOUT(
+            [&] {
+                for (auto *t : tilePanel->findChildren<WindowPreviewWidget *>()) {
+                    if (t->windowHandle() == m_hwndNote)
+                        return false;
+                }
+                return true;
+            }(),
+            3000);
+
+        m_hwndNote = nullptr; // closed on purpose — cleanup skips it
     }
 
     void cleanupTestCase()

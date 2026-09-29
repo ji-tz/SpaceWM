@@ -214,20 +214,20 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
     const int stay = m->currentIndex;
 
     if (!m_manager->assignWindow(hwnd, m_hmon, spaceIndex)) {
-        spacelog::warn(QStringLiteral(
-                           "placeWindow failed: assignWindow hwnd=0x%1 mon=0x%2 space=%3")
-                           .arg(quintptr(hwnd), 0, 16)
-                           .arg(quintptr(m_hmon), 0, 16)
-                           .arg(spaceIndex));
+        spacelog::warn(
+            QStringLiteral("placeWindow failed: assignWindow hwnd=0x%1 mon=0x%2 space=%3")
+                .arg(quintptr(hwnd), 0, 16)
+                .arg(quintptr(m_hmon), 0, 16)
+                .arg(spaceIndex));
         return false;
     }
     if (srcMon && srcMon != m_hmon) {
-        spacelog::info(QStringLiteral(
-                           "placeWindow cross-monitor hwnd=0x%1 from=0x%2 to=0x%3 space=%4")
-                           .arg(quintptr(hwnd), 0, 16)
-                           .arg(quintptr(srcMon), 0, 16)
-                           .arg(quintptr(m_hmon), 0, 16)
-                           .arg(spaceIndex));
+        spacelog::info(
+            QStringLiteral("placeWindow cross-monitor hwnd=0x%1 from=0x%2 to=0x%3 space=%4")
+                .arg(quintptr(hwnd), 0, 16)
+                .arg(quintptr(srcMon), 0, 16)
+                .arg(quintptr(m_hmon), 0, 16)
+                .arg(spaceIndex));
     }
 
     // Destination card (window now lives there — may be hidden).
@@ -287,6 +287,16 @@ bool OverviewWindow::activateWindowPreview(HWND hwnd)
     emit windowActivated(reinterpret_cast<quint64>(hwnd));
     closeOverview(true);
     return true;
+}
+
+void OverviewWindow::closeWindowPreview(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return;
+    // Graceful close: the app may prompt to save; the tile then disappears
+    // through windowDestroyed → untrack → windowUntracked → strip rebuild.
+    spacelog::info(QStringLiteral("tile close requested hwnd=0x%1").arg(quintptr(hwnd), 0, 16));
+    ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
 }
 
 void OverviewWindow::pinToMonitorPhysically()
@@ -763,7 +773,7 @@ void OverviewWindow::rebuildWindowPreviews()
     const int gap = 14;
     // Tile chrome beyond the image box (must match WindowPreviewWidget::setImageBoxSize).
     constexpr int kChromeW = 20;
-    constexpr int kChromeH = 40;
+    constexpr int kChromeH = 42;
 
     // Larger tiles first → less waste on the last row (排满).
     std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
@@ -868,6 +878,8 @@ void OverviewWindow::rebuildWindowPreviews()
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
         connect(tile, &WindowPreviewWidget::activated, this,
                 [this](quint64 h) { activateWindowPreview(reinterpret_cast<HWND>(h)); });
+        connect(tile, &WindowPreviewWidget::closeRequested, this,
+                [this](quint64 h) { closeWindowPreview(reinterpret_cast<HWND>(h)); });
         row->addWidget(tile, 0, Qt::AlignTop);
         m_windowPreviews.push_back(tile);
         x += cellW;
