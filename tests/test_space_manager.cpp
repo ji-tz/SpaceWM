@@ -454,6 +454,11 @@ class TestSpaceManager : public QObject {
         ensureSpaces(sm, m, 2);
         m->currentIndex = 0;
         const HMONITOR realH = m->hmon;
+        // rehomeWindow() adopts the monitor physically under the window; first()
+        // sorts by x, so on multi-monitor machines (negative-x secondary) the
+        // window at (10,10) sits elsewhere. Pin it to the monitor under test.
+        ::SetWindowPos(m_hwnd, nullptr, m->physRect.left + 40, m->physRect.top + 40, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Off-space → cloaked (the stuck-hidden case).
         QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 1));
