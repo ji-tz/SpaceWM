@@ -7,9 +7,11 @@
 #include <Windows.h>
 
 class QLabel;
+class QPushButton;
 
 // Draggable preview of one top-level window.
 // Tile size follows the real window aspect ratio (not a fixed thumbnail box).
+// Layout: header (title left + close button right) ABOVE the image.
 class WindowPreviewWidget : public QFrame {
     Q_OBJECT
   public:
@@ -35,6 +37,8 @@ class WindowPreviewWidget : public QFrame {
     void dragStarted(quint64 hwnd);
     // Click without drag — enter this window's space and focus it.
     void activated(quint64 hwnd);
+    // Header × button — close this window (graceful WM_CLOSE, done by owner).
+    void closeRequested(quint64 hwnd);
 
   protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -54,4 +58,5 @@ class WindowPreviewWidget : public QFrame {
     bool m_dragging = false;
     QLabel *m_label = nullptr;
     QLabel *m_imageLabel = nullptr;
+    QPushButton *m_closeBtn = nullptr;
 };

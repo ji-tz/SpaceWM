@@ -28,7 +28,10 @@ foreach(name IN LISTS SPACEWM_TEST_NAMES)
   if(MSVC)
     target_compile_options(${name} PRIVATE /W4 /permissive-)
   endif()
-  add_test(NAME ${name} COMMAND ${name})
+  # Per-test result file: Qt Test's console output (stderr/stdout) does not
+  # survive capture on Windows runners — the .txt is the reliable channel for
+  # failure details (CI copies build/tests/*.out.txt into diagnostics/).
+  add_test(NAME ${name} COMMAND ${name} -o ${name}.out.txt,txt)
   set_tests_properties(${name} PROPERTIES TIMEOUT 60)
   list(APPEND SPACEWM_TEST_EXES $<TARGET_FILE:${name}>)
 endforeach()

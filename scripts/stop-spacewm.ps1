@@ -25,7 +25,7 @@ try {
         $ev = New-Object System.Threading.EventWaitHandle($true, [System.Threading.EventResetMode]::ManualReset, 'SpaceWM-quit')
     }
     $ev.Set() | Out-Null
-    Write-Host "Signaled SpaceWM-quit — waiting for graceful exit..."
+    Write-Host "Signaled SpaceWM-quit - waiting for graceful exit..."
 }
 catch {
     Write-Warning "Could not signal quit event: $_"
@@ -43,7 +43,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
 
 $procs = @(Get-Process -Name SpaceWM -ErrorAction SilentlyContinue)
 if ($procs.Count -gt 0) {
-    Write-Warning "Graceful quit timed out — FORCE KILL (hidden windows may remain)."
+    Write-Warning "Graceful quit timed out - FORCE KILL (hidden windows may remain)."
     $procs | Stop-Process -Force
     Start-Sleep -Milliseconds 300
 }

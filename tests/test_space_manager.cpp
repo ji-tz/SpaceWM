@@ -454,6 +454,11 @@ class TestSpaceManager : public QObject {
         ensureSpaces(sm, m, 2);
         m->currentIndex = 0;
         const HMONITOR realH = m->hmon;
+        // rehomeWindow() adopts the monitor physically under the window; first()
+        // sorts by x, so on multi-monitor machines (negative-x secondary) the
+        // window at (10,10) sits elsewhere. Pin it to the monitor under test.
+        ::SetWindowPos(m_hwnd, nullptr, m->physRect.left + 40, m->physRect.top + 40, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Off-space → cloaked (the stuck-hidden case).
         QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 1));
@@ -517,9 +522,10 @@ class TestSpaceManager : public QObject {
         const QVector<HWND> foreign = WindowTracker::snapshotManageableWindows();
         sm.applyMonitorEntries(monitors::enumerate());
         for (HWND h : foreign)
-            QVERIFY2(sm.spaceOfWindow(h) == -1,
-                     qPrintable(QStringLiteral("refresh swept untracked window 0x%1")
-                                    .arg(quintptr(h), 0, 16)));
+            QVERIFY2(
+                sm.spaceOfWindow(h) == -1,
+                qPrintable(
+                    QStringLiteral("refresh swept untracked window 0x%1").arg(quintptr(h), 0, 16)));
         // The owned window keeps its membership (no-op refresh path).
         QCOMPARE(sm.spaceOfWindow(m_hwnd), 0);
 
@@ -549,8 +555,7 @@ class TestSpaceManager : public QObject {
         // Physically move onto monitor B, then deliver the move event.
         const int cx = (b->physRect.left + b->physRect.right) / 2;
         const int cy = (b->physRect.top + b->physRect.bottom) / 2;
-        ::SetWindowPos(m_hwnd, nullptr, cx - 150, cy - 100, 0, 0,
-                       SWP_NOZORDER | SWP_NOACTIVATE);
+        ::SetWindowPos(m_hwnd, nullptr, cx - 150, cy - 100, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE);
         sm.onWindowMoved(m_hwnd);
 
         QCOMPARE(sm.ownerMonitorOf(m_hwnd), b->hmon);
