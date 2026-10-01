@@ -31,6 +31,31 @@ void TestPackage::initTestCase()
     m_root = QDir::cleanPath(QFileInfo(testsDir + QStringLiteral("/..")).absoluteFilePath());
     QVERIFY2(QFile::exists(m_root + QStringLiteral("/scripts/package.ps1")),
              qPrintable(QStringLiteral("package.ps1 not found under %1").arg(m_root)));
+
+    // Windows PowerShell 5.1 decodes BOM-less .ps1 with the ANSI codepage; on
+    // en-US runners a UTF-8 em-dash becomes U+201D, which the tokenizer treats
+    // as a string delimiter and silently swallows statements (CI failure:
+    // "exe is null at staging"). Every script must be ASCII or BOM'd UTF-8.
+    const QDir scriptsDir(m_root + QStringLiteral("/scripts"));
+    const QStringList scripts = scriptsDir.entryList({QStringLiteral("*.ps1")}, QDir::Files);
+    QVERIFY2(!scripts.isEmpty(), "no scripts/*.ps1 found");
+    for (const QString &name : scripts) {
+        QFile f(scriptsDir.filePath(name));
+        QVERIFY2(f.open(QIODevice::ReadOnly), qPrintable(name));
+        const QByteArray data = f.readAll();
+        const bool hasBom = data.startsWith("\xEF\xBB\xBF");
+        bool asciiOnly = true;
+        for (const char c : data) {
+            if (static_cast<unsigned char>(c) > 127) {
+                asciiOnly = false;
+                break;
+            }
+        }
+        QVERIFY2(hasBom || asciiOnly,
+                 qPrintable(QStringLiteral("%1: scripts must be pure ASCII or UTF-8 with BOM "
+                                           "(PS 5.1 ANSI decode corrupts bare non-ASCII)")
+                                .arg(name)));
+    }
 }
 
 int TestPackage::runPowerShell(const QStringList &args, QString *output, int timeoutMs) const

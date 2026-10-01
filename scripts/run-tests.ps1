@@ -15,7 +15,7 @@ $BuildDir = (Resolve-Path $BuildDir).Path
 
 Write-Host "Build dir: $BuildDir"
 if (-not (Test-Path (Join-Path $BuildDir "CTestTestfile.cmake"))) {
-    Write-Error "No CTest files in $BuildDir — configure/build first."
+    Write-Error "No CTest files in $BuildDir - configure/build first."
     exit 1
 }
 
