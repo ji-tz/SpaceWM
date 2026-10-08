@@ -445,6 +445,66 @@ class TestIntegrationFlow : public QObject {
         m_hwndNote = nullptr; // closed on purpose — cleanup skips it
     }
 
+    // Step 15: cloak backend contract — after a REAL switch hides a REAL
+    // foreign window, the hide must have gone through the shell
+    // IApplicationView::SetCloak backend: the only one that keeps the
+    // window's taskbar button (the DWM/ShowWindow fallbacks silently drop
+    // it — regression guarded in test_cloak too).
+    void step15_cloakHidesViaShellBackend()
+    {
+        if (!cloak::shellBackendAvailable())
+            QSKIP("shell IApplicationViewCollection unavailable — cannot pin cloak backend");
+
+        // Step14 left the preview open with Notepad closed (its premise).
+        OverviewWindow *panel = m_host.activePanel();
+        QVERIFY(panel && panel->isOpen());
+        syncPanelMonitor();
+
+        // Step13's monitor-handle refresh rebuilt monitors with the default
+        // single space — a second one is needed for a switch to hide anything.
+        if (m_sm.spaceCount(m_hmon) < 2) {
+            auto *btn = panel->findChild<AddSpaceButton *>();
+            QVERIFY(btn);
+            const QPoint c = btn->rect().center();
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(c), btn->mapToGlobal(c),
+                              btn->mapToGlobal(c), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(btn, &press);
+            QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceCount(m_hmon), 2, 3000);
+        }
+
+        // A flow window in the CURRENT space of the PANEL monitor is what the
+        // switch below hides (per-monitor spaces — same guard style as
+        // explOnPanel/webStableIn for windows parked on the other display).
+        HWND target = nullptr;
+        for (HWND h : {m_hwndExpl, m_hwndWeb}) {
+            if (h && ::IsWindow(h) && m_sm.ownerMonitorOf(h) == m_hmon &&
+                m_sm.spaceOfWindow(h) == m_monitor->currentIndex) {
+                target = h;
+                break;
+            }
+        }
+        if (!target) {
+            QWARN("no flow window in the panel monitor's current space — "
+                  "skipping shell-backend assert");
+            return;
+        }
+
+        const int cur = m_monitor->currentIndex;
+        const int other = cur == 0 ? 1 : 0;
+        auto cards = visibleCards(panel);
+        QCOMPARE(cards.size(), 2);
+
+        QSignalSpy chosen(&m_host, &OverviewHost::spaceChosen);
+        clickWidget(cards[other]);
+        QTRY_COMPARE_WITH_TIMEOUT(chosen.count(), 1, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(m_monitor->currentIndex, other, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 5000);
+
+        // The switch hid `target` for real — and via the SHELL backend.
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(target), 3000);
+        QCOMPARE(cloak::backendOf(target), cloak::Backend::ImmersiveView);
+    }
+
     void cleanupTestCase()
     {
         // Best-effort teardown — must leave the user's desktop untouched.

@@ -98,6 +98,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | **实模式 14 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
 | **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
 | 确认/退出时**先 cloak 再撤遮罩**（防闪现） | `test_space_manager` · `test_overview_host` | 有 |
+| **cloak 后端 = shell `IApplicationView::SetCloak`（保任务栏按钮）**，shell 可用时禁回退 DWM/ShowWindow | `test_cloak` · `test_integration_flow` (step15) | 有 |
 | 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
 
 已知缺口优先补：`main` 前台 re-home、`+` 拖入 UI、`windowForeground`、`spacePreviewInvalidated` 直连。
@@ -142,6 +143,7 @@ $env:SPACEWM_IT = $null
 | 12 | 进入第二个 space，preview 消失 | `step12_enteredSpaceAndPreviewGone` |
 | 13 | 模拟显示器句柄变化（假句柄往返刷新）：窗口不丢失、被 cloak 卡住的记事本恢复可见 | `step13_monitorRefreshRehomesLostWindows` |
 | 14 | 点击 tile 右侧 **×**：记事本收到 WM_CLOSE 退出、不触发 activated、strip 移除该 tile | `step14_tileCloseButtonClosesWindow` |
+| 15 | 真实切换隐藏真实窗口时 cloak 必须走 shell `SetCloak` 后端（任务栏按钮保留契约） | `step15_cloakHidesViaShellBackend` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与
@@ -170,6 +172,9 @@ spacelog       → spdlog → TR/trace.log + EH/error.log
 
 - **绝不**对“本进程未 hide 过”的窗口 `ShowWindow(SW_SHOW)`。
 - **绝不**管理 `IsIconic` 最小化窗口。
+- **cloak 后端只走 shell `IApplicationView::SetCloak`（`CLSCTX_ALL` + `SetCloak(1,2)/(1,0)`）**——
+  它是唯一保留任务栏按钮的后端；DWM/ShowWindow 仅作 shell 不可用时的兜底，
+  TR 每次 cloak 转换打印 `backend=` / `shellHr=` 可排查回退。
 - overview 打开期间 **禁止** BitBlt 整屏。
 - 混合 DPI：逻辑坐标给 QWidget，物理 `SetWindowPos`。
 - **无跨进程隐藏列表落盘**；仅温和退出 `showAllHidden()`。
