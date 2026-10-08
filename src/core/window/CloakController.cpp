@@ -1,5 +1,7 @@
 #include "core/window/CloakController.h"
 
+#include "core/log/Log.h"
+
 #include <dwmapi.h>
 #include <inspectable.h>
 #include <objbase.h>
@@ -22,10 +24,12 @@ constexpr CLSID CLSID_ImmersiveShell = {
 static const GUID IID_IApplicationViewCollection = {
     0x1841C6D7, 0x4F9D, 0x42C0, {0xAF, 0x41, 0x87, 0x47, 0x53, 0x8F, 0x10, 0xE5}};
 
-constexpr int AVCT_NONE = 0;
 constexpr int AVCT_DEFAULT = 1;
 
 std::atomic<int> g_lastBackend{0};
+// HRESULT of the last failed IApplicationView attempt (0 = none) — surfaced
+// in the TR cloak lines so a DWM/ShowWindow fallback is explainable.
+std::atomic<long> g_lastShellHr{0};
 
 // How we hid a window — only reverse with the matching show path.
 enum class How : unsigned char {
@@ -58,10 +62,15 @@ bool setTransitionsForced(HWND hwnd, BOOL forced)
 
 struct ComMark {
     HRESULT hr;
+    // Once a proxy to Explorer is cached, the apartment must outlive this
+    // scope: CoUninitialize with a live cached interface invalidates it and
+    // every later shell-cloak call would crash or fail. Set keep=true to
+    // leak the init (correct: one per process, cleaned up at exit).
+    bool keep = false;
     ComMark() { hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE); }
     ~ComMark()
     {
-        if (hr == S_OK)
+        if (hr == S_OK && !keep)
             ::CoUninitialize();
     }
 };
@@ -79,8 +88,12 @@ IApplicationViewSlim : public IInspectable
     virtual HRESULT STDMETHODCALLTYPE SetCloak(int cloakType, int unknown) = 0;
 };
 
+// IApplicationViewCollection derives from IUnknown (NOT IInspectable — the
+// three enumerator slots come right after IUnknown, GetViewForHwnd = slot 6).
+// Declaring IInspectable shifted every slot by 3: GetViewForHwnd then called
+// a different method and RPCRT4 crashed writing the HWND as an out-pointer.
 MIDL_INTERFACE("1841C6D7-4F9D-42C0-AF41-8747538F10E5")
-IApplicationViewCollectionSlim : public IInspectable
+IApplicationViewCollectionSlim : public IUnknown
 {
   public:
     virtual HRESULT STDMETHODCALLTYPE GetViews(void **v) = 0;
@@ -92,31 +105,48 @@ IApplicationViewCollectionSlim : public IInspectable
 IApplicationViewCollectionSlim *viewCollection()
 {
     static IApplicationViewCollectionSlim *cached = nullptr;
-    static bool tried = false;
-    if (tried)
+    static bool warned = false;
+    if (cached)
         return cached;
-    tried = true;
 
     ComMark com;
     IUnknown *unk = nullptr;
-    HRESULT hr = ::CoCreateInstance(CLSID_ImmersiveShell, nullptr, CLSCTX_INPROC_SERVER,
-                                    IID_IUnknown, reinterpret_cast<void **>(&unk));
-    if (FAILED(hr) || !unk)
+    // CLSCTX_ALL, not INPROC: ImmersiveShell has no InprocServer32 (probe:
+    // 0x80040154) — the class object is registered at runtime by explorer,
+    // so only SERVER/ALL activation finds it. INPROC-only made the whole
+    // shell backend silently fall back to DWM/ShowWindow (no taskbar buttons).
+    HRESULT hr = ::CoCreateInstance(CLSID_ImmersiveShell, nullptr, CLSCTX_ALL, IID_IUnknown,
+                                    reinterpret_cast<void **>(&unk));
+    if (FAILED(hr) || !unk) {
+        g_lastShellHr.store(static_cast<long>(hr)); // every failure, not just the first
+        if (!warned) {
+            warned = true;
+            spacelog::info(QStringLiteral("shell cloak unavailable: CoCreateInstance "
+                                         "ImmersiveShell hr=0x%1 (fallback active)")
+                               .arg(static_cast<quint32>(hr), 0, 16));
+        }
         return nullptr;
+    }
 
     IServiceProvider *sp = nullptr;
     hr = unk->QueryInterface(IID_IServiceProvider, reinterpret_cast<void **>(&sp));
     unk->Release();
-    if (FAILED(hr) || !sp)
+    if (FAILED(hr) || !sp) {
+        g_lastShellHr.store(static_cast<long>(hr));
         return nullptr;
+    }
 
     void *coll = nullptr;
     hr = sp->QueryService(IID_IApplicationViewCollection, IID_IApplicationViewCollection, &coll);
     sp->Release();
-    if (FAILED(hr) || !coll)
+    if (FAILED(hr) || !coll) {
+        g_lastShellHr.store(static_cast<long>(hr));
         return nullptr;
+    }
 
     cached = static_cast<IApplicationViewCollectionSlim *>(coll);
+    com.keep = true; // cache lives for the process — do not tear the apartment down
+    spacelog::info(QStringLiteral("shell cloak backend ready (IApplicationView::SetCloak)"));
     return cached;
 }
 
@@ -127,12 +157,21 @@ bool hideViaApplicationView(HWND hwnd)
         return false;
     ComMark com;
     IApplicationViewSlim *view = nullptr;
-    if (FAILED(coll->GetViewForHwnd(hwnd, &view)) || !view)
+    HRESULT hr = coll->GetViewForHwnd(hwnd, &view);
+    if (FAILED(hr) || !view) {
+        g_lastShellHr.store(static_cast<long>(hr));
         return false;
-    const HRESULT hr = view->SetCloak(AVCT_DEFAULT, 1);
+    }
+    // Shell's own argument pair (virtual-desktop switching): (1, 2) cloaks,
+    // (1, 0) uncloaks. Anything else is not what Explorer does and may be
+    // rejected or dropped by newer builds.
+    const HRESULT hr2 = view->SetCloak(AVCT_DEFAULT, 2);
     view->Release();
-    if (FAILED(hr))
+    if (FAILED(hr2)) {
+        g_lastShellHr.store(static_cast<long>(hr2));
         return false;
+    }
+    g_lastShellHr.store(0);
     g_lastBackend.store(static_cast<int>(cloak::Backend::ImmersiveView));
     return true;
 }
@@ -144,11 +183,18 @@ bool showViaApplicationView(HWND hwnd)
         return false;
     ComMark com;
     IApplicationViewSlim *view = nullptr;
-    if (FAILED(coll->GetViewForHwnd(hwnd, &view)) || !view)
+    HRESULT hr = coll->GetViewForHwnd(hwnd, &view);
+    if (FAILED(hr) || !view) {
+        g_lastShellHr.store(static_cast<long>(hr));
         return false;
-    const HRESULT hr = view->SetCloak(AVCT_NONE, 0);
+    }
+    const HRESULT hr2 = view->SetCloak(AVCT_DEFAULT, 0);
     view->Release();
-    return SUCCEEDED(hr);
+    if (FAILED(hr2)) {
+        g_lastShellHr.store(static_cast<long>(hr2));
+        return false;
+    }
+    return true;
 }
 
 bool hideViaDwm(HWND hwnd)
@@ -245,6 +291,47 @@ void forget(HWND hwnd)
     g_hidden.erase(hwnd);
 }
 
+const char *howName(How how)
+{
+    switch (how) {
+    case How::Immersive:
+        return "ImmersiveView";
+    case How::Dwm:
+        return "DwmAttribute";
+    case How::ShowWindow:
+        return "ShowWindow";
+    case How::NotHidden:
+    default:
+        return "None";
+    }
+}
+
+// One TR line per real state transition (cloak::set early-returns on
+// no-ops, so this never fires for already-hidden/already-shown windows).
+// The shellHr suffix explains a fallback: shell SetCloak failed with that
+// HRESULT and the taskbar button will be missing for this window.
+void logCloakTransition(HWND hwnd, bool hiding, const char *backend, bool ok)
+{
+    // shellHr pinpoints WHY a non-shell backend ran (the shell attempt's
+    // HRESULT) — the single most useful line when taskbar buttons go missing.
+    QString suffix;
+    if (g_lastShellHr.load() != 0)
+        suffix = QStringLiteral(" shellHr=0x%1").arg(
+            static_cast<quint32>(g_lastShellHr.load()), 0, 16);
+    if (hiding) {
+        spacelog::info(QStringLiteral("cloak hide hwnd=0x%1 backend=%2%3")
+                           .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
+                           .arg(QLatin1String(backend))
+                           .arg(suffix));
+    } else {
+        spacelog::info(QStringLiteral("cloak show hwnd=0x%1 backend=%2 ok=%3%4")
+                           .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
+                           .arg(QLatin1String(backend))
+                           .arg(ok ? 1 : 0)
+                           .arg(suffix));
+    }
+}
+
 } // namespace
 
 namespace cloak {
@@ -279,6 +366,9 @@ bool set(HWND hwnd, bool enable)
             auto entry = g_hidden.find(hwnd);
             if (entry != g_hidden.end())
                 entry->second.transitionsForced = forced;
+            logCloakTransition(hwnd, true,
+                               entry != g_hidden.end() ? howName(entry->second.how) : "None",
+                               true);
         } else if (forced) {
             setTransitionsForced(hwnd, FALSE);
         }
@@ -316,6 +406,9 @@ bool set(HWND hwnd, bool enable)
     // Shown without a transition — hand the window its normal animations back.
     if (ok && restoreTransitions)
         setTransitionsForced(hwnd, FALSE);
+    if (ok)
+        g_lastShellHr.store(0); // success clears any stale fallback HRESULT
+    logCloakTransition(hwnd, false, howName(how), ok);
     return ok;
 }
 
@@ -350,6 +443,29 @@ Backend lastBackend()
 int hiddenCount()
 {
     return static_cast<int>(g_hidden.size());
+}
+
+Backend backendOf(HWND hwnd)
+{
+    auto it = g_hidden.find(hwnd);
+    if (it == g_hidden.end())
+        return Backend::None;
+    switch (it->second.how) {
+    case How::Immersive:
+        return Backend::ImmersiveView;
+    case How::Dwm:
+        return Backend::DwmAttribute;
+    case How::ShowWindow:
+        return Backend::ShowWindow;
+    case How::NotHidden:
+    default:
+        return Backend::None;
+    }
+}
+
+bool shellBackendAvailable()
+{
+    return viewCollection() != nullptr;
 }
 
 int showAllHidden()

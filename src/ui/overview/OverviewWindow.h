@@ -115,6 +115,8 @@ class OverviewWindow : public QWidget {
     bool addSpaceAndPlaceWindow(quint64 hwnd);
     // Click tile → commit that window's space, then focus/raise the HWND.
     bool activateWindowPreview(HWND hwnd);
+    // Header × on a tile → graceful WM_CLOSE (tile drops out via untrack).
+    void closeWindowPreview(HWND hwnd);
 
     SpaceManager *m_manager = nullptr;
     HMONITOR m_hmon = nullptr;

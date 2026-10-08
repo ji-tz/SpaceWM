@@ -1,5 +1,6 @@
 #include "SpaceManager.h"
 
+#include "core/log/Log.h"
 #include "core/window/CloakController.h"
 #include "core/capture/ThumbnailCapture.h"
 #include "core/window/WindowTracker.h"
@@ -28,7 +29,11 @@ SpaceManager::SpaceManager(QObject *parent)
 
 void SpaceManager::refreshMonitors()
 {
-    const auto list = monitors::enumerate();
+    applyMonitorEntries(monitors::enumerate());
+}
+
+void SpaceManager::applyMonitorEntries(const QVector<MonitorEntry> &list)
+{
     QHash<quintptr, MonitorSpaces> next;
 
     for (const auto &m : list) {
@@ -52,12 +57,25 @@ void SpaceManager::refreshMonitors()
     }
 
     m_monitors = std::move(next);
+
+    // A vanished handle takes its space lists down with it. Windows owned by
+    // it would otherwise appear in NO overview panel until they happen to be
+    // moved or clicked — and stay stuck cloaked if they were off-space.
+    // Only PREVIOUSLY-OWNED windows are re-homed here: their shots are cached,
+    // so no capture storm. Never-tracked windows re-enter through the normal
+    // LOCCHANGE → trackWindow path on their next move.
+    QVector<HWND> orphans;
     for (auto it = m_owner.begin(); it != m_owner.end();) {
-        if (!m_monitors.contains(it.value().hmon))
-            it = m_owner.erase(it);
-        else
+        if (m_monitors.contains(it.value().hmon)) {
             ++it;
+            continue;
+        }
+        if (::IsWindow(it.key()))
+            orphans.push_back(it.key());
+        it = m_owner.erase(it);
     }
+    for (HWND hwnd : orphans)
+        rehomeWindow(hwnd);
 
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it)
         applyVisibility(it.value().hmon);
@@ -65,6 +83,22 @@ void SpaceManager::refreshMonitors()
     seedScreenshots();
 
     emit monitorLayoutChanged();
+}
+
+void SpaceManager::rehomeWindow(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd) || m_owner.contains(hwnd))
+        return;
+    HMONITOR target = monitors::fromWindow(hwnd);
+    MonitorSpaces *m = monitorOf(target);
+    if (!m)
+        m = primaryMonitor();
+    if (!m)
+        return;
+    // Current space is the only sensible landing: the old space list is gone,
+    // and current means cloakWindow(false) — a stuck-cloaked survivor shows
+    // again instead of staying hidden until process exit.
+    assignWindow(hwnd, m->hmon, m->currentIndex);
 }
 
 QVector<MonitorSpaces *> SpaceManager::monitors()
@@ -628,6 +662,43 @@ bool SpaceManager::trackWindow(HWND hwnd)
         return false;
 
     return assignWindow(hwnd, h, m->currentIndex);
+}
+
+void SpaceManager::onWindowMoved(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd))
+        return;
+    const int owned = spaceOfWindow(hwnd);
+    if (owned < 0) {
+        // Not ours yet — normal discovery gates (visible / not cloaked / pid…).
+        trackWindow(hwnd);
+        return;
+    }
+    // OWNED windows re-home regardless of transient manageability: cloak
+    // state must never strand a window on the monitor it left.
+    HMONITOR target = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    ensureMonitor(target);
+    auto *m = monitorOf(target);
+    if (!m) {
+        spacelog::warn(QStringLiteral("windowMoved unknown monitor hwnd=0x%1 target=0x%2")
+                           .arg(quintptr(hwnd), 0, 16)
+                           .arg(quintptr(target), 0, 16));
+        return;
+    }
+    if (ownerMonitorOf(hwnd) != target) {
+        const HMONITOR from = ownerMonitorOf(hwnd);
+        const bool ok = assignWindow(hwnd, target, m->currentIndex);
+        spacelog::info(
+            QStringLiteral("windowMoved re-home hwnd=0x%1 from=0x%2 to=0x%3 space=%4 ok=%5")
+                .arg(quintptr(hwnd), 0, 16)
+                .arg(quintptr(from), 0, 16)
+                .arg(quintptr(target), 0, 16)
+                .arg(m->currentIndex)
+                .arg(ok ? 1 : 0));
+    } else {
+        // Same monitor: size/position changed — re-render that space preview.
+        refreshWindowAfterUpdate(hwnd);
+    }
 }
 
 void SpaceManager::untrackWindow(HWND hwnd)

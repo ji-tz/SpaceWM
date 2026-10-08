@@ -106,6 +106,59 @@ class TestCloak : public QObject {
                  "show must restore DWM transitions for the window");
     }
 
+    // backendOf is how tests (and TR logs) see WHICH mechanism hid a window —
+    // the shell SetCloak backend is the only one whose taskbar button
+    // survives, so silently degrading to DWM/ShowWindow must be observable.
+    void backendBookkeepingTracksHideState()
+    {
+        QCOMPARE(cloak::backendOf(m_hwnd), cloak::Backend::None);
+
+        QVERIFY(cloak::set(m_hwnd, true));
+        const auto b = cloak::backendOf(m_hwnd);
+        QVERIFY2(b == cloak::Backend::ImmersiveView || b == cloak::Backend::DwmAttribute ||
+                     b == cloak::Backend::ShowWindow,
+                 "a hidden window must report the backend that hid it");
+
+        QVERIFY(cloak::set(m_hwnd, false));
+        QCOMPARE(cloak::backendOf(m_hwnd), cloak::Backend::None);
+    }
+
+    // Contract: whenever the ImmersiveShell proxy resolves, cloak MUST take
+    // the IApplicationView::SetCloak path. The DWM/ShowWindow fallbacks strip
+    // the taskbar button (regression this guards: CLSCTX_INPROC_SERVER made
+    // activation fail with 0x80040154 and every window silently fell back).
+    void shellBackendPreferredWhenAvailable()
+    {
+        if (!cloak::shellBackendAvailable())
+            QSKIP("ImmersiveShell IApplicationViewCollection unavailable in this session");
+
+        // A brand-new window may not have a shell view yet (probe: 0-150ms
+        // registration lag) — retry cloak/show cycles before giving up.
+        HWND w = ::CreateWindowExW(0, L"STATIC", L"shell backend probe", WS_OVERLAPPEDWINDOW, 0,
+                                   0, 240, 120, nullptr, nullptr, ::GetModuleHandleW(nullptr),
+                                   nullptr);
+        QVERIFY(w != nullptr);
+        ::ShowWindow(w, SW_SHOWNORMAL);
+
+        bool viaShell = false;
+        for (int i = 0; i < 50 && !viaShell; ++i) {
+            QVERIFY(cloak::set(w, true));
+            viaShell = cloak::backendOf(w) == cloak::Backend::ImmersiveView;
+            if (!viaShell) {
+                QVERIFY(cloak::set(w, false)); // undo the fallback, retry the race
+                QTest::qWait(100);
+            }
+        }
+        const bool shown = cloak::set(w, false);
+        ::DestroyWindow(w);
+
+        QVERIFY(shown);
+        QVERIFY2(viaShell,
+                 "shell backend available but cloak fell back to DWM/ShowWindow — "
+                 "taskbar buttons would disappear");
+        QCOMPARE(cloak::backendOf(w), cloak::Backend::None);
+    }
+
   private:
     HWND m_hwnd = nullptr;
 };

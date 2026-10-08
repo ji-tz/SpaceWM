@@ -53,6 +53,16 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
+      # Inno Setup is needed by test_package's installer case (and by packaging).
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after install" }
+
       # offscreen 平台：GUI 单测（含 test_visual_capture 截图测试）无需桌面会话
       - name: Test (ctest + JUnit)
         env:
@@ -69,18 +79,14 @@ jobs:
             if (Test-Path $p) { Copy-Item $p diagnostics/ -Force }
           }
           Copy-Item build/Testing/Temporary/* diagnostics/ -Recurse -Force -ErrorAction SilentlyContinue
+          # Qt Test per-run result files (console output does not survive capture).
+          Copy-Item build/tests/*.out.txt diagnostics/ -Force -ErrorAction SilentlyContinue
           Get-ChildItem -Recurse -Filter *.log | Where-Object { $_.FullName -notlike '*\diagnostics\*' } |
             Select-Object -First 20 | ForEach-Object { Copy-Item $_.FullName "diagnostics/$($_.Name)" -Force }
 
-      - name: Package portable zip
+      - name: Package (portable zip + installer)
         shell: pwsh
-        run: |
-          $stage = "SpaceWM-win64"
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item build/SpaceWM.exe $stage/
-          Copy-Item lib/* $stage/ -Recurse
-          Compress-Archive -Path "$stage/*" -DestinationPath SpaceWM-win64.zip -Force
-          Get-Item SpaceWM-win64.zip | Select-Object Name, Length
+        run: .\scripts\package.ps1 -Installer
 
       - name: Upload artifacts (build / screenshots / diagnostics)
         if: always()
@@ -92,7 +98,8 @@ jobs:
             artifacts/screenshots/**
             junit.xml
             diagnostics/**
-            SpaceWM-win64.zip
+            dist/SpaceWM-win64.zip
+            dist/SpaceWM-Setup-x64.exe
           if-no-files-found: warn
           retention-days: 30
 
@@ -104,9 +111,9 @@ jobs:
         run: |
           gh release view "$env:GITHUB_REF_NAME" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "$env:GITHUB_REF_NAME" SpaceWM-win64.zip --title "$env:GITHUB_REF_NAME" --generate-notes
+            gh release create "$env:GITHUB_REF_NAME" dist/SpaceWM-win64.zip dist/SpaceWM-Setup-x64.exe --title "$env:GITHUB_REF_NAME" --generate-notes
           } else {
-            gh release upload "$env:GITHUB_REF_NAME" SpaceWM-win64.zip --clobber
+            gh release upload "$env:GITHUB_REF_NAME" dist/SpaceWM-win64.zip dist/SpaceWM-Setup-x64.exe --clobber
           }
 
   # ───────────────────────────────────────────────────────────────
