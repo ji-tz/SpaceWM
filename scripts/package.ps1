@@ -19,7 +19,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if (-not (Test-Path $BuildDir)) {
-    Write-Error "Build dir not found: '$BuildDir' — build SpaceWM first."
+    Write-Error "Build dir not found: '$BuildDir' - build SpaceWM first."
     exit 1
 }
 if (-not (Test-Path $LibDir)) {
@@ -32,7 +32,7 @@ $OutDir   = [System.IO.Path]::GetFullPath($OutDir)
 
 $exe = Join-Path $BuildDir "SpaceWM.exe"
 if (-not (Test-Path $exe)) {
-    Write-Error "SpaceWM.exe not found in '$BuildDir' — build first."
+    Write-Error "SpaceWM.exe not found in '$BuildDir' - build first."
     exit 1
 }
 if (-not (Test-Path (Join-Path $LibDir "Qt6Core.dll"))) {
@@ -40,21 +40,21 @@ if (-not (Test-Path (Join-Path $LibDir "Qt6Core.dll"))) {
     exit 1
 }
 
-# ── Stage ────────────────────────────────────────────────────────────────────
+# ---- Stage ------------------------------------------------------------------
 $stage = Join-Path $OutDir "SpaceWM-win64"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
-Copy-Item $exe $stage
+Copy-Item -LiteralPath $exe -Destination $stage
 Copy-Item (Join-Path $LibDir "*") $stage -Recurse
 
-# ── Zip + self-check ─────────────────────────────────────────────────────────
+# ---- Zip + self-check -------------------------------------------------------
 $zip = Join-Path $OutDir "SpaceWM-win64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -Force
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-# Windows' ZipArchive uses '\' as entry separator — normalize before comparing.
+# Windows' ZipArchive uses '\' as entry separator - normalize before comparing.
 $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
 $entries = @($archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
 $archive.Dispose()
@@ -73,7 +73,7 @@ if ($missing) {
 }
 Write-Host ("Zip: {0} ({1:N0} bytes, {2} entries)" -f $zip, (Get-Item $zip).Length, $entries.Count)
 
-# ── Installer (optional) ─────────────────────────────────────────────────────
+# ---- Installer (optional) ---------------------------------------------------
 if (-not $Installer) { exit 0 }
 
 function Find-Iscc {

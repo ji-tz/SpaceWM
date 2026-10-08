@@ -688,13 +688,13 @@ void SpaceManager::onWindowMoved(HWND hwnd)
     if (ownerMonitorOf(hwnd) != target) {
         const HMONITOR from = ownerMonitorOf(hwnd);
         const bool ok = assignWindow(hwnd, target, m->currentIndex);
-        spacelog::info(QStringLiteral(
-                           "windowMoved re-home hwnd=0x%1 from=0x%2 to=0x%3 space=%4 ok=%5")
-                           .arg(quintptr(hwnd), 0, 16)
-                           .arg(quintptr(from), 0, 16)
-                           .arg(quintptr(target), 0, 16)
-                           .arg(m->currentIndex)
-                           .arg(ok ? 1 : 0));
+        spacelog::info(
+            QStringLiteral("windowMoved re-home hwnd=0x%1 from=0x%2 to=0x%3 space=%4 ok=%5")
+                .arg(quintptr(hwnd), 0, 16)
+                .arg(quintptr(from), 0, 16)
+                .arg(quintptr(target), 0, 16)
+                .arg(m->currentIndex)
+                .arg(ok ? 1 : 0));
     } else {
         // Same monitor: size/position changed — re-render that space preview.
         refreshWindowAfterUpdate(hwnd);

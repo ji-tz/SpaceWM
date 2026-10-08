@@ -79,6 +79,8 @@ jobs:
             if (Test-Path $p) { Copy-Item $p diagnostics/ -Force }
           }
           Copy-Item build/Testing/Temporary/* diagnostics/ -Recurse -Force -ErrorAction SilentlyContinue
+          # Qt Test per-run result files (console output does not survive capture).
+          Copy-Item build/tests/*.out.txt diagnostics/ -Force -ErrorAction SilentlyContinue
           Get-ChildItem -Recurse -Filter *.log | Where-Object { $_.FullName -notlike '*\diagnostics\*' } |
             Select-Object -First 20 | ForEach-Object { Copy-Item $_.FullName "diagnostics/$($_.Name)" -Force }
 
