@@ -58,6 +58,18 @@ class SpaceManager : public QObject {
     // monitor's current space; unowned ones go through normal discovery.
     void onWindowMoved(HWND hwnd);
 
+    // Pure proportional map of a physical window RECT from src monitor rect
+    // to dst monitor rect: position and size keep their screen-relative
+    // fractions (identity when src == dst, input on degenerate rects).
+    static RECT mapRectToMonitor(const RECT &win, const RECT &src, const RECT &dst);
+
+    // Physically move hwnd onto target monitor, size/position scaled by the
+    // screen ratio (overview cross-monitor drop — ownership moves first via
+    // assignWindow, this makes the window actually LAND on the new display).
+    // Re-asserts the rect once if the app resizes on WM_DPICHANGED (mixed
+    // DPI). No-op when the mapped rect equals the current one; skips iconic.
+    bool moveWindowToMonitor(HWND hwnd, HMONITOR target);
+
     void setOverviewOpen(bool open);
     bool overviewOpen() const { return m_overviewOpen; }
 

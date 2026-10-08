@@ -701,6 +701,75 @@ void SpaceManager::onWindowMoved(HWND hwnd)
     }
 }
 
+RECT SpaceManager::mapRectToMonitor(const RECT &win, const RECT &src, const RECT &dst)
+{
+    const double srcW = double(src.right) - double(src.left);
+    const double srcH = double(src.bottom) - double(src.top);
+    const double dstW = double(dst.right) - double(dst.left);
+    const double dstH = double(dst.bottom) - double(dst.top);
+    if (srcW <= 0.0 || srcH <= 0.0 || dstW <= 0.0 || dstH <= 0.0)
+        return win;
+
+    const double fx = (double(win.left) - double(src.left)) / srcW;
+    const double fy = (double(win.top) - double(src.top)) / srcH;
+    const double fw = double(win.right - win.left) / srcW;
+    const double fh = double(win.bottom - win.top) / srcH;
+
+    RECT out{};
+    out.left = dst.left + std::lround(fx * dstW);
+    out.top = dst.top + std::lround(fy * dstH);
+    out.right = out.left + std::lround(fw * dstW);
+    out.bottom = out.top + std::lround(fh * dstH);
+    return out;
+}
+
+bool SpaceManager::moveWindowToMonitor(HWND hwnd, HMONITOR target)
+{
+    if (!hwnd || !::IsWindow(hwnd) || ::IsIconic(hwnd) || !target)
+        return false;
+    const HMONITOR src = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    RECT sr{}, dr{}, wr{};
+    if (!src || !monitors::physRectOf(src, &sr) || !monitors::physRectOf(target, &dr))
+        return false;
+    if (!::GetWindowRect(hwnd, &wr))
+        return false;
+
+    const RECT mapped = mapRectToMonitor(wr, sr, dr);
+    if (mapped.left == wr.left && mapped.top == wr.top && mapped.right == wr.right &&
+        mapped.bottom == wr.bottom)
+        return true; // already proportionally placed (e.g. same monitor)
+
+    const auto apply = [&](const RECT &r) {
+        return ::SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                              SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
+    };
+    bool ok = apply(mapped);
+    // Mixed-DPI screens: the app answers WM_DPICHANGED (typically synchronously
+    // inside the move above) by restoring its own size around our top-left.
+    // Re-assert once — the window already sits on the target monitor, so no
+    // further DPI change fires and the plain resize is accepted.
+    RECT now{};
+    if (ok && ::GetWindowRect(hwnd, &now) &&
+        (now.left != mapped.left || now.top != mapped.top || now.right != mapped.right ||
+         now.bottom != mapped.bottom))
+        ok = apply(mapped);
+    spacelog::trace(QStringLiteral(
+                        "moveWindowToMonitor hwnd=0x%1 src=0x%2 dst=0x%3 (%4,%5 %6x%7)->(%8,%9 %10x%11) ok=%12")
+                        .arg(quintptr(hwnd), 0, 16)
+                        .arg(quintptr(src), 0, 16)
+                        .arg(quintptr(target), 0, 16)
+                        .arg(wr.left)
+                        .arg(wr.top)
+                        .arg(wr.right - wr.left)
+                        .arg(wr.bottom - wr.top)
+                        .arg(mapped.left)
+                        .arg(mapped.top)
+                        .arg(mapped.right - mapped.left)
+                        .arg(mapped.bottom - mapped.top)
+                        .arg(ok ? 1 : 0));
+    return ok;
+}
+
 void SpaceManager::untrackWindow(HWND hwnd)
 {
     if (!m_owner.contains(hwnd))
