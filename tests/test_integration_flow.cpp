@@ -505,6 +505,114 @@ class TestIntegrationFlow : public QObject {
         QCOMPARE(cloak::backendOf(target), cloak::Backend::ImmersiveView);
     }
 
+    // Step 16: cross-monitor drop — dropping a window onto ANOTHER display's
+    // space card must re-home ownership there AND physically move the window
+    // onto that display, size/position scaled by the screen ratio (before
+    // this, the window stayed stranded on its original monitor).
+    void step16_crossMonitorDropMovesWindowWithScreenRatio()
+    {
+        if (m_sm.monitors().size() < 2)
+            QSKIP("cross-monitor drop needs at least 2 monitors");
+
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        syncPanelMonitor();
+        QTest::qWait(700);
+        QVERIFY(m_sm.overviewOpen());
+
+        // A live flow window owned by the PANEL monitor (the drop source).
+        HWND hwnd = nullptr;
+        for (HWND h : {m_hwndExpl, m_hwndWeb}) {
+            if (h && ::IsWindow(h) && m_sm.ownerMonitorOf(h) == m_hmon) {
+                hwnd = h;
+                break;
+            }
+        }
+        if (!hwnd)
+            QSKIP("no flow window on the panel monitor — nothing to drag across");
+
+        // The OTHER display's panel is the drop target (cross-screen DnD).
+        OverviewWindow *dstPanel = nullptr;
+        for (MonitorSpaces *mon : m_sm.monitors()) {
+            if (mon->hmon == m_hmon)
+                continue;
+            if (OverviewWindow *p = m_host.panelFor(mon->hmon); p && p->isOpen()) {
+                dstPanel = p;
+                break;
+            }
+        }
+        QVERIFY2(dstPanel, "no overview panel on the second monitor");
+        const HMONITOR dstMon = dstPanel->targetMonitor();
+
+        RECT srcPhys{}, dstPhys{};
+        QVERIFY(monitors::physRectOf(m_hmon, &srcPhys));
+        QVERIFY(monitors::physRectOf(dstMon, &dstPhys));
+        const int sw = srcPhys.right - srcPhys.left;
+        const int sh = srcPhys.bottom - srcPhys.top;
+        QVERIFY(sw > 0 && sh > 0);
+
+        // Park on the source screen at known fractions: (12.5%, 12.5%), 50% × 50%.
+        ::SetWindowPos(hwnd, nullptr, srcPhys.left + sw / 8, srcPhys.top + sh / 8, sw / 2, sh / 2,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT before{};
+        QVERIFY(::GetWindowRect(hwnd, &before));
+        const RECT expect = SpaceManager::mapRectToMonitor(before, srcPhys, dstPhys);
+        // placeWindowInSpace must not jump either display's viewed space.
+        const int srcCur = m_monitor->currentIndex;
+        MonitorSpaces *dstMonitor = m_sm.monitorOf(dstMon);
+        QVERIFY(dstMonitor);
+        const int dstCur = dstMonitor->currentIndex;
+
+        // Real DnD payload onto the target display's first card (same path as
+        // step05 — only the PANEL differs, which is what makes it cross-screen).
+        const auto cards = visibleCards(dstPanel);
+        QVERIFY(!cards.isEmpty());
+        SpaceCardWidget *target = cards.first();
+        const int targetSpace = target->spaceIndex();
+        QVERIFY(targetSpace >= 0);
+
+        QByteArray payload;
+        QDataStream ds(&payload, QIODevice::WriteOnly);
+        ds << quint64(hwnd);
+        QMimeData mime;
+        mime.setData(WindowPreviewWidget::kMimeType, payload);
+
+        const QPoint c = target->rect().center();
+        QDragEnterEvent enter(c, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &enter);
+        QVERIFY2(enter.isAccepted(), "cross-monitor space card rejected the drag");
+        QDropEvent drop(c, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &drop);
+        QVERIFY(drop.isAccepted());
+
+        // Ownership follows the drop…
+        QTRY_VERIFY_WITH_TIMEOUT(m_sm.ownerMonitorOf(hwnd) == dstMon &&
+                                     m_sm.spaceOfWindow(hwnd) == targetSpace,
+                                 3000);
+        // …and the window PHYSICALLY lands on the target screen…
+        QTRY_VERIFY_WITH_TIMEOUT(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == dstMon,
+                                 3000);
+        // …with size/position scaled by the screen ratio (±4 px slack).
+        RECT after{};
+        QVERIFY(::GetWindowRect(hwnd, &after));
+        QVERIFY2(qAbs(after.left - expect.left) <= 4,
+                 qPrintable(QStringLiteral("x off: got %1 want %2")
+                                .arg(after.left)
+                                .arg(expect.left)));
+        QVERIFY2(qAbs(after.top - expect.top) <= 4,
+                 qPrintable(QStringLiteral("y off: got %1 want %2")
+                                .arg(after.top)
+                                .arg(expect.top)));
+        QVERIFY2(qAbs((after.right - after.left) - (expect.right - expect.left)) <= 4,
+                 "width not scaled to screen ratio");
+        QVERIFY2(qAbs((after.bottom - after.top) - (expect.bottom - expect.top)) <= 4,
+                 "height not scaled to screen ratio");
+
+        // Neither display's viewed space jumped on drop.
+        QCOMPARE(m_monitor->currentIndex, srcCur);
+        QCOMPARE(dstMonitor->currentIndex, dstCur);
+    }
+
     void cleanupTestCase()
     {
         // Best-effort teardown — must leave the user's desktop untouched.
