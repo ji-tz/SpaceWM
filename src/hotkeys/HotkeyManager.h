@@ -81,6 +81,14 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     // plain Win tap still injects down+up so Start keeps working.
     static WinUpDecision winKeyUpDecision(bool deferredNotForwarded, bool chordKeyAte,
                                           bool foreignModifierHeld);
+    // Win modifier state for chord matching (unit-tested): held when the
+    // hook's per-key physical state OR the OS async bit says so. Per-key
+    // state is idempotent — only a real up clears it, so a duplicate/missed
+    // event cannot stack a phantom hold (the old per-press counter leaked
+    // and made every later bare Tab match Win+Tab and open the preview).
+    // Stale deferred state alone must never count: a MOD_WIN chord key
+    // (Tab for Win+Tab) is taken over ONLY while Win is really held.
+    static bool winModifierDown(bool lPhysDown, bool rPhysDown, bool asyncDown);
     // LL-hook auto-repeat guard (unit-tested): Windows repeats keyDOWN while
     // a key is held and MOD_NOREPEAT does not apply to hooks — without this
     // one long Ctrl+Alt+Space press toggles the overview twice (open → close).

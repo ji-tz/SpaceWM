@@ -30,6 +30,15 @@ Backend lastBackend();
 // Test/monitoring: how many windows we currently hold hidden.
 int hiddenCount();
 
+// Which backend currently hides hwnd (None = not held by us). Lets tests pin
+// the shell SetCloak path — the only backend that keeps the taskbar button.
+Backend backendOf(HWND hwnd);
+
+// True when the ImmersiveShell IApplicationViewCollection proxy resolves —
+// i.e. the shell SetCloak backend is usable at all in this session. When it
+// is, cloak() MUST pick ImmersiveView; DWM/ShowWindow are last-resort only.
+bool shellBackendAvailable();
+
 // Graceful exit: reverse EVERY hide this process performed (all backends).
 // Only touches HWNDs we recorded in this process — never shell-hidden windows.
 // Returns how many windows were restored.

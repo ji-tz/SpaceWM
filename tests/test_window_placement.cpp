@@ -9,7 +9,10 @@
 #include "ui/preview/WindowPreviewWidget.h"
 
 #include <QDropEvent>
+#include <QLabel>
+#include <QLayout>
 #include <QMimeData>
+#include <QPushButton>
 #include <QScrollArea>
 
 #include <Windows.h>
@@ -50,11 +53,12 @@ class TestWindowPlacement : public QObject {
             WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 20, 10 + 15), imageTopLeft, box, pm);
         QCOMPARE(nearCorner, QPoint(20, 15));
 
-        // Title below the image clamps into the pixmap (x still follows the click).
-        const QPoint onTitle = WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 50, 10 + 120 + 8),
-                                                                      imageTopLeft, box, pm);
+        // Title row sits ABOVE the image — pressing it clamps into the pixmap
+        // (x still follows the click, y clamps to the top edge).
+        const QPoint onTitle =
+            WindowPreviewWidget::mapPressToHotSpot(QPoint(10 + 50, 10 - 8), imageTopLeft, box, pm);
         QCOMPARE(onTitle.x(), 50);
-        QCOMPARE(onTitle.y(), pm.height() - 1);
+        QCOMPARE(onTitle.y(), 0);
 
         // Letterboxed pixmap smaller than box: scale press into pixmap space.
         const QSize pmSmall(160, 90);
@@ -497,9 +501,9 @@ class TestWindowPlacement : public QObject {
         b.setImageBoxSize(QSize(160, 240)); // 2:3
         QCOMPARE(a.imageBoxSize(), QSize(320, 180));
         QCOMPARE(b.imageBoxSize(), QSize(160, 240));
-        // Frame height includes label chrome (~40); width includes frame+margins (~20).
-        QCOMPARE(a.height(), 180 + 40);
-        QCOMPARE(b.height(), 240 + 40);
+        // Frame height includes header chrome (~42); width includes frame+margins (~20).
+        QCOMPARE(a.height(), 180 + 42);
+        QCOMPARE(b.height(), 240 + 42);
         QCOMPARE(a.width(), 320 + 20);
         QCOMPARE(b.width(), 160 + 20);
         // Different aspects must yield different widget sizes.
@@ -705,13 +709,61 @@ class TestWindowPlacement : public QObject {
         QCOMPARE(spy.first().at(0).toULongLong(), quint64(0xABC));
     }
 
-    // Widget chrome (+20/+40) must be part of packing math — consecutive tiles
+    // Header (title left + close button right) sits ABOVE the image, and the
+    // fixed-size budget is image box + chrome 20×42.
+    void windowPreviewTitleAboveImageWithCloseButton()
+    {
+        WindowPreviewWidget tile;
+        tile.setImageBoxSize(QSize(184, 104));
+        QImage img(80, 50, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(30, 40, 50));
+        tile.setWindow(reinterpret_cast<HWND>(0xABC), QStringLiteral("hello"), img);
+        tile.layout()->activate();
+
+        auto *title = tile.findChild<QLabel *>(QStringLiteral("TitleLabel"));
+        auto *image = tile.findChild<QLabel *>(QStringLiteral("ImageLabel"));
+        auto *close = tile.findChild<QPushButton *>(QStringLiteral("CloseButton"));
+        QVERIFY(title && image && close);
+        QVERIFY2(title->y() < image->y(), "title must render ABOVE the image");
+        QVERIFY(title->y() + title->height() <= image->y()); // no overlap
+        QVERIFY2(close->x() > title->x(), "close button sits to the title's right");
+        QCOMPARE(tile.size(), QSize(184 + 20, 104 + 42));
+        QVERIFY(close->isEnabled()); // hwnd set → actionable
+    }
+
+    // × emits closeRequested with the hwnd and must NOT activate the tile
+    // (child consumes the click); without an hwnd the button stays disabled.
+    void windowPreviewCloseButtonEmitsCloseRequested()
+    {
+        WindowPreviewWidget tile;
+        QImage img(80, 50, QImage::Format_ARGB32_Premultiplied);
+        img.fill(QColor(30, 40, 50));
+        tile.setWindow(reinterpret_cast<HWND>(0xABC), QStringLiteral("T"), img);
+        QSignalSpy closed(&tile, &WindowPreviewWidget::closeRequested);
+        QSignalSpy activated(&tile, &WindowPreviewWidget::activated);
+        auto *close = tile.findChild<QPushButton *>(QStringLiteral("CloseButton"));
+        QVERIFY(close);
+
+        QTest::mouseClick(close, Qt::LeftButton);
+        QCOMPARE(closed.count(), 1);
+        QCOMPARE(closed.first().at(0).toULongLong(), quint64(0xABC));
+        QCOMPARE(activated.count(), 0);
+
+        WindowPreviewWidget fresh;
+        auto *freshBtn = fresh.findChild<QPushButton *>(QStringLiteral("CloseButton"));
+        QVERIFY(freshBtn);
+        QVERIFY2(!freshBtn->isEnabled(), "close must be inert before setWindow");
+        QTest::mouseClick(freshBtn, Qt::LeftButton);
+        QCOMPARE(closed.count(), 1); // unchanged
+    }
+
+    // Widget chrome (+20/+42) must be part of packing math — consecutive tiles
     // on the same row cannot overlap when cell = image + chrome + gap.
     void packingAccountsForTileChrome()
     {
         constexpr int gap = 14;
         constexpr int chromeW = 20;
-        constexpr int chromeH = 40;
+        constexpr int chromeH = 42;
         const int imageW = 300;
         const int imageH = 180;
         const int cellW = imageW + chromeW + gap;

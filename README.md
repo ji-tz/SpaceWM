@@ -8,8 +8,17 @@ C++20 · Qt 6.8.3 Widgets · CMake + Ninja + MSVC · 仅支持 Windows 10/11 x64
 
 ## 下载
 
-- **[Releases 最新版本](https://github.com/ji-tz/SpaceWM/releases/latest)**：`SpaceWM-win64.zip`（便携版，解压后直接运行 `SpaceWM.exe`，运行时已在包内）。
-- 每次 `main` 构建通过后，也可在 [Actions · CI](https://github.com/ji-tz/SpaceWM/actions/workflows/ci.yml) 最近一次成功运行的 **Artifacts** 中下载 `SpaceWM-win64`。
+- **[Releases 最新版本](https://github.com/ji-tz/SpaceWM/releases/latest)**
+  - `SpaceWM-Setup-x64.exe`：**安装版**（见下方「安装」）。
+  - `SpaceWM-win64.zip`：**便携版**，解压后直接运行 `SpaceWM.exe`，运行时已在包内。
+- 每次 `main` 构建通过后，也可在 [Actions · CI](https://github.com/ji-tz/SpaceWM/actions/workflows/ci.yml) 最近一次成功运行的 **Artifacts** 中下载上述两个包。
+
+## 安装
+
+- **安装版**：运行 `SpaceWM-Setup-x64.exe`，按向导完成即可（向导界面为英文——Inno Setup 未附带中文语言包，选项仅「创建桌面快捷方式」一项）。默认装到 `%LocalAppData%\Programs\SpaceWM`，**无需管理员权限**。卸载：开始菜单 →「卸载 SpaceWM」，或 设置 → 应用 → SpaceWM（卸载时一并清理 TR/EH 运行日志）。
+- **便携版**：解压 `SpaceWM-win64.zip` 到任意可写目录，直接运行 `SpaceWM.exe`；删除目录即完成卸载。
+
+两种方式行为一致：托盘 **Quit** 会恢复本进程隐藏过的所有窗口。
 
 ## 功能
 
@@ -75,9 +84,18 @@ cmd /c "`"$vcvars`" && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -
 - **`build/` 不入库**（本地生成）；**`lib/` 入库**（可移植运行时，约 60MB）。
 - 克隆后需本机 Qt 编译出 `build/SpaceWM.exe`；运行时依赖已在 `lib/`，与 exe 并列即可启动，无需再手动部署 Qt DLL。
 
+### 打包 / 安装包
+
+```powershell
+.\scripts\package.ps1              # dist/SpaceWM-win64.zip（便携包，产出后自动校验条目）
+.\scripts\package.ps1 -Installer   # 额外产出 dist/SpaceWM-Setup-x64.exe（需 Inno Setup 6，如 winget install JRSoftware.InnoSetup）
+```
+
+安装包脚本见 [`installer/SpaceWM.iss`](installer/SpaceWM.iss)；CI 在每次构建与 `v*` Tag Release 中自动产出这两个包。
+
 ## 测试
 
-12 个 Qt Test 可执行文件，通过 CTest 统一调度：
+16 个 Qt Test 可执行文件，通过 CTest 统一调度：
 
 ```powershell
 # 构建 + 全量回归（AGENTS.md 要求：任何源码修改后必须全量通过）
@@ -96,11 +114,15 @@ cmd /c "`"$vcvars`" && cmake --build build --parallel && ctest --test-dir build 
 | `test_thumbnail` | 整屏截图、壁纸兜底、PrintWindow |
 | `test_hotkeys` | 全局热键注册与分发 |
 | `test_settings` | 热键序列 / System 预设 / 开机自启 |
+| `test_log` | spdlog TR/EH 落盘 |
 | `test_space_card` | 卡片宽高比、紧凑模式、拖放 |
 | `test_overview` | 单屏总览开关、按键、快速连开 |
 | `test_overview_host` | 多屏同时总览 |
 | `test_window_placement` | 软预览、悬停离开、拖放停原 space、tile DPI、全量预览 |
 | `test_flash_overlay` | 切换 flash 动画 |
+| `test_tray` | 托盘菜单动作 |
+| `test_package` | 打包 zip 条目自校验 / 安装包构建（装有 Inno Setup 时，否则 skip） |
+| `test_integration_flow` | 实模式 14 步集成流程（`SPACEWM_IT=1` 显式开启） |
 
 新增 / 修改功能必须同步测试，详见 [`AGENTS.md` §2](AGENTS.md)。
 
@@ -135,7 +157,9 @@ SpaceWM/
 ├── CMakeLists.txt        # 主构建：spacewm_core 静态库 + SpaceWM.exe + 测试
 ├── lib/                  # 可移植运行时（Qt DLL + 插件 + CRT，已入库）
 ├── cmake/CopyCrt.cmake   # 拷贝 MSVC CRT 到 lib/
-├── scripts/              # 测试脚本、Windows Sandbox 启用
+├── installer/SpaceWM.iss # Inno Setup 安装包脚本
+├── scripts/              # 测试、打包（package.ps1）、Windows Sandbox 启用
+├── resources/donate/     # 打赏收款码
 ├── src/
 │   ├── main.cpp          # 装配：DPI、单实例、信号连接、热键、托盘
 │   ├── core/
@@ -159,3 +183,11 @@ SpaceWM/
 3. 点卡片 / `Enter` → 只切该屏；约 0.2s 后全部淡出。
 4. `Esc` → 全部取消并恢复原 space。
 5. `Ctrl+Alt+←/→` 只切光标所在屏；最小化窗口不被弹出。
+
+## 打赏
+
+如果 SpaceWM 对你有帮助，欢迎打赏支持项目继续维护。
+
+<p align="center">
+  <img src="resources/donate/wechat-pay.jpg" alt="微信支付收款码" width="260">
+</p>
