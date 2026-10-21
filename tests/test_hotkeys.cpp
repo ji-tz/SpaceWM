@@ -84,6 +84,28 @@ class TestHotkeys : public QObject {
                  HotkeyManager::WinUpDecision::Pass);
     }
 
+    // Takeover gate for MOD_WIN chords (Win+Tab): at the trigger key's own
+    // event the hook samples the PHYSICAL Win state — held → take over,
+    // released → hand the key back. Stale bookkeeping must never fake a
+    // hold: the old per-press counter / deferred override let a bare Tab
+    // match Win+Tab and open the preview with Win not pressed (regression).
+    void winHeldGateForWinTabChord()
+    {
+        QVERIFY(HotkeyManager::winModifierDown(/*l*/ true, /*r*/ false, /*async*/ false));
+        QVERIFY(HotkeyManager::winModifierDown(/*l*/ false, /*r*/ true, /*async*/ false));
+        QVERIFY(HotkeyManager::winModifierDown(/*l*/ false, /*r*/ false, /*async*/ true));
+        QVERIFY(!HotkeyManager::winModifierDown(/*l*/ false, /*r*/ false, /*async*/ false));
+
+        // End-to-end decision the hook makes for a Tab event: the Win+Tab
+        // binding only matches (i.e. only then is Tab swallowed/taken over).
+        QVERIFY(!HotkeyManager::modifiersMatch(MOD_WIN, false, false, false,
+                                               /*win=*/HotkeyManager::winModifierDown(false, false,
+                                                                                       false)));
+        QVERIFY(HotkeyManager::modifiersMatch(MOD_WIN, false, false, false,
+                                              /*win=*/HotkeyManager::winModifierDown(true, false,
+                                                                                      false)));
+    }
+
     // Auto-repeat keyDOWNs while a binding key is held must not re-emit the
     // action — one long Ctrl+Alt+Space press would otherwise toggle the
     // overview twice (open → immediate close flash).
