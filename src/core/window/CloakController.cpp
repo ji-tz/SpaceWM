@@ -122,7 +122,7 @@ IApplicationViewCollectionSlim *viewCollection()
         if (!warned) {
             warned = true;
             spacelog::info(QStringLiteral("shell cloak unavailable: CoCreateInstance "
-                                         "ImmersiveShell hr=0x%1 (fallback active)")
+                                          "ImmersiveShell hr=0x%1 (fallback active)")
                                .arg(static_cast<quint32>(hr), 0, 16));
         }
         return nullptr;
@@ -316,8 +316,8 @@ void logCloakTransition(HWND hwnd, bool hiding, const char *backend, bool ok)
     // HRESULT) — the single most useful line when taskbar buttons go missing.
     QString suffix;
     if (g_lastShellHr.load() != 0)
-        suffix = QStringLiteral(" shellHr=0x%1").arg(
-            static_cast<quint32>(g_lastShellHr.load()), 0, 16);
+        suffix =
+            QStringLiteral(" shellHr=0x%1").arg(static_cast<quint32>(g_lastShellHr.load()), 0, 16);
     if (hiding) {
         spacelog::info(QStringLiteral("cloak hide hwnd=0x%1 backend=%2%3")
                            .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
@@ -367,8 +367,7 @@ bool set(HWND hwnd, bool enable)
             if (entry != g_hidden.end())
                 entry->second.transitionsForced = forced;
             logCloakTransition(hwnd, true,
-                               entry != g_hidden.end() ? howName(entry->second.how) : "None",
-                               true);
+                               entry != g_hidden.end() ? howName(entry->second.how) : "None", true);
         } else if (forced) {
             setTransitionsForced(hwnd, FALSE);
         }
