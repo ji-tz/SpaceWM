@@ -91,7 +91,13 @@ std::atomic<bool> g_winDeferred{false};  // saw Win down, not yet forwarded to t
 std::atomic<bool> g_winForwarded{false}; // deferred Win down was flushed via SendInput
 std::atomic<bool> g_ateChordKey{false};  // a MOD_WIN binding swallowed its trigger key
 UINT g_pendingWinVk = VK_LWIN;
-int g_winDownCount = 0; // physical LWIN/RWIN downs seen by the hook
+// Physical Win key state, per key — idempotent: set on down, cleared on ANY
+// up (even an unmatched one, which self-heals). The old per-press counter
+// could leak (a duplicate down with a single up left it >0 forever) and made
+// every later bare Tab read "Win held" → match Win+Tab → open the preview
+// with Win not pressed.
+bool g_winLPhys = false;
+bool g_winRPhys = false;
 
 // Tracked modifiers (updated even for swallowed keys). OR'd with async state.
 bool g_tCtrl = false;
@@ -199,9 +205,14 @@ void readMods(bool *ctrl, bool *alt, bool *shift, bool *win)
     *ctrl = g_tCtrl || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
     *alt = g_tAlt || ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
     *shift = g_tShift || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
-    // Deferred Win was never forwarded — rely on the hook-local count.
-    *win = g_winDownCount > 0 ||
-           ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+    // Sample the PHYSICAL Win state at this key's own event time (the hook
+    // tracked the Win down BEFORE swallowing it, so per-key state covers the
+    // deferred case even when GetAsyncKeyState misses it). Deliberately no
+    // override from g_winDeferred: a stale deferred flag must never fake
+    // "Win held" for a bare Tab.
+    *win = HotkeyManager::winModifierDown(
+        g_winLPhys, g_winRPhys,
+        ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) != 0);
 }
 
 LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -216,12 +227,14 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
             if (isModVk(vk)) {
                 if (vk == VK_LWIN || vk == VK_RWIN) {
-                    if (isDown) {
-                        ++g_winDownCount;
+                    // Idempotent per-key state: down sets, up clears (an
+                    // unmatched up still clears — self-heals a stuck flag).
+                    if (isDown)
+                        (vk == VK_LWIN ? g_winLPhys : g_winRPhys) = true;
+                    else
+                        (vk == VK_LWIN ? g_winLPhys : g_winRPhys) = false;
+                    if (isDown)
                         g_pendingWinVk = vk;
-                    } else if (g_winDownCount > 0) {
-                        --g_winDownCount;
-                    }
                 } else if (isDown || isUp) {
                     trackModifier(vk, isDown);
                 }
@@ -279,9 +292,10 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
             bool c = false, a = false, s = false, w = false;
             readMods(&c, &a, &s, &w);
-            // While Win is deferred, GetAsyncKeyState may not report it; force on.
-            if (g_winDeferred && !g_winForwarded)
-                w = true;
+            // No deferred override here: the physical Win state read above
+            // already covers a deferred (swallowed-but-tracked) Win down, and
+            // forcing w=true off g_winDeferred is exactly what let a stale
+            // flag hand a bare Tab to the Win+Tab binding.
 
             // Snapshot — the hook thread must not touch main-owned m_bindings.
             QVector<HotkeyManager::Binding> bindings;
@@ -392,7 +406,7 @@ HotkeyManager::~HotkeyManager()
         g_manager = nullptr;
         g_winArmed = false;
         resetWinChordState();
-        g_winDownCount = 0;
+        g_winLPhys = g_winRPhys = false;
         g_tCtrl = g_tAlt = g_tShift = false;
         g_consumeEscape.store(false);
         QMutexLocker lock(&g_hookBindingsMutex);
@@ -623,6 +637,15 @@ HotkeyManager::WinUpDecision HotkeyManager::winKeyUpDecision(bool deferredNotFor
         return WinUpDecision::Swallow;
     // Plain Win tap: replay down+up so Start still opens.
     return WinUpDecision::InjectTap;
+}
+
+bool HotkeyManager::winModifierDown(bool lPhysDown, bool rPhysDown, bool asyncDown)
+{
+    // Physical hook state first (covers a deferred Win down that
+    // GetAsyncKeyState may not yet report), async as the fallback. A MOD_WIN
+    // chord key (Tab for Win+Tab) takes over ONLY when this is true — with
+    // Win released it must stay false so the bare Tab passes through.
+    return lPhysDown || rPhysDown || asyncDown;
 }
 
 bool HotkeyManager::usesWinBindings() const

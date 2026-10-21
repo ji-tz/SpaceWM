@@ -573,6 +573,89 @@ class TestSpaceManager : public QObject {
                        SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
+    // Cross-monitor drop geometry: the window RECT keeps its screen-relative
+    // position AND size fractions when mapped between monitor rects of any
+    // size (identity for src == dst, input preserved on degenerate rects).
+    void mapRectToMonitorKeepsScreenFractions()
+    {
+        const RECT src{0, 0, 1920, 1080};
+        const RECT win{480, 270, 1440, 810}; // (0.25, 0.25), size 0.5 × 0.5
+
+        // Same-size neighbour: pure translation.
+        RECT m = SpaceManager::mapRectToMonitor(win, src, RECT{1920, 0, 3840, 1080});
+        QCOMPARE(m.left, 1920 + 480);
+        QCOMPARE(m.top, 270);
+        QCOMPARE(m.right, 1920 + 1440);
+        QCOMPARE(m.bottom, 810);
+
+        // Different resolution: 2560×1440 scales size by 4/3 as well.
+        m = SpaceManager::mapRectToMonitor(win, src, RECT{0, 0, 2560, 1440});
+        QCOMPARE(m.left, 640);
+        QCOMPARE(m.top, 360);
+        QCOMPARE(m.right, 1920);
+        QCOMPARE(m.bottom, 1080);
+
+        // Identity: src == dst leaves the rect untouched.
+        m = SpaceManager::mapRectToMonitor(win, src, src);
+        QCOMPARE(m.left, win.left);
+        QCOMPARE(m.top, win.top);
+        QCOMPARE(m.right, win.right);
+        QCOMPARE(m.bottom, win.bottom);
+
+        // Degenerate source rect → input returned unchanged.
+        m = SpaceManager::mapRectToMonitor(win, RECT{10, 10, 10, 500}, RECT{1920, 0, 3840, 1080});
+        QCOMPARE(m.left, win.left);
+        QCOMPARE(m.top, win.top);
+        QCOMPARE(m.right, win.right);
+        QCOMPARE(m.bottom, win.bottom);
+    }
+
+    // Overview cross-monitor drop: moveWindowToMonitor physically relocates
+    // the window onto the target screen with screen-ratio scaled size and
+    // position; a same-monitor call must not touch geometry at all.
+    void moveWindowToMonitorScalesOntoTargetScreen()
+    {
+        SpaceManager sm;
+        if (sm.monitors().size() < 2)
+            QSKIP("cross-monitor proportional move needs at least 2 monitors");
+        auto *a = sm.monitors().first();
+        auto *b = sm.monitors().last();
+        QVERIFY(a->hmon != b->hmon);
+
+        // Park on A at known fractions: pos (12.5%, 12.5%), size 50% × 50%.
+        const RECT aw = a->physRect;
+        const int sw = aw.right - aw.left;
+        const int sh = aw.bottom - aw.top;
+        QVERIFY(sw > 0 && sh > 0);
+        ::SetWindowPos(m_hwnd, nullptr, aw.left + sw / 8, aw.top + sh / 8, sw / 2, sh / 2,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT before{};
+        QVERIFY(::GetWindowRect(m_hwnd, &before));
+        const RECT expect = SpaceManager::mapRectToMonitor(before, aw, b->physRect);
+
+        QVERIFY(sm.moveWindowToMonitor(m_hwnd, b->hmon));
+        RECT after{};
+        QVERIFY(::GetWindowRect(m_hwnd, &after));
+        QCOMPARE(::MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST), b->hmon);
+        // Proportional landing (±4 px: rounding + possible WM_DPICHANGED slack).
+        QVERIFY(qAbs(after.left - expect.left) <= 4);
+        QVERIFY(qAbs(after.top - expect.top) <= 4);
+        QVERIFY(qAbs((after.right - after.left) - (expect.right - expect.left)) <= 4);
+        QVERIFY(qAbs((after.bottom - after.top) - (expect.bottom - expect.top)) <= 4);
+
+        // Same-monitor repeat: geometry must be byte-identical (no SetWindowPos).
+        QVERIFY(sm.moveWindowToMonitor(m_hwnd, b->hmon));
+        RECT again{};
+        QVERIFY(::GetWindowRect(m_hwnd, &again));
+        QCOMPARE(again.left, after.left);
+        QCOMPARE(again.top, after.top);
+        QCOMPARE(again.right, after.right);
+        QCOMPARE(again.bottom, after.bottom);
+
+        // Restore the initTestCase placement for whatever runs next.
+        ::SetWindowPos(m_hwnd, nullptr, 10, 10, 300, 200, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
   private:
     // Grow the monitor to at least n spaces (cold start is 1 — issue #8).
     static void ensureSpaces(SpaceManager &sm, MonitorSpaces *m, int n)

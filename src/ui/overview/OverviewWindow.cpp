@@ -228,6 +228,10 @@ bool OverviewWindow::placeWindowInSpace(HWND hwnd, int spaceIndex)
                 .arg(quintptr(srcMon), 0, 16)
                 .arg(quintptr(m_hmon), 0, 16)
                 .arg(spaceIndex));
+        // Ownership moved above — now make the window actually LAND on the
+        // target display: size/position remapped by the screen ratio, so it
+        // is not left stranded on the monitor it came from.
+        m_manager->moveWindowToMonitor(hwnd, m_hmon);
     }
 
     // Destination card (window now lives there — may be hidden).
