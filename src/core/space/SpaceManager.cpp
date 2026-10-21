@@ -753,20 +753,21 @@ bool SpaceManager::moveWindowToMonitor(HWND hwnd, HMONITOR target)
         (now.left != mapped.left || now.top != mapped.top || now.right != mapped.right ||
          now.bottom != mapped.bottom))
         ok = apply(mapped);
-    spacelog::trace(QStringLiteral(
-                        "moveWindowToMonitor hwnd=0x%1 src=0x%2 dst=0x%3 (%4,%5 %6x%7)->(%8,%9 %10x%11) ok=%12")
-                        .arg(quintptr(hwnd), 0, 16)
-                        .arg(quintptr(src), 0, 16)
-                        .arg(quintptr(target), 0, 16)
-                        .arg(wr.left)
-                        .arg(wr.top)
-                        .arg(wr.right - wr.left)
-                        .arg(wr.bottom - wr.top)
-                        .arg(mapped.left)
-                        .arg(mapped.top)
-                        .arg(mapped.right - mapped.left)
-                        .arg(mapped.bottom - mapped.top)
-                        .arg(ok ? 1 : 0));
+    spacelog::trace(
+        QStringLiteral(
+            "moveWindowToMonitor hwnd=0x%1 src=0x%2 dst=0x%3 (%4,%5 %6x%7)->(%8,%9 %10x%11) ok=%12")
+            .arg(quintptr(hwnd), 0, 16)
+            .arg(quintptr(src), 0, 16)
+            .arg(quintptr(target), 0, 16)
+            .arg(wr.left)
+            .arg(wr.top)
+            .arg(wr.right - wr.left)
+            .arg(wr.bottom - wr.top)
+            .arg(mapped.left)
+            .arg(mapped.top)
+            .arg(mapped.right - mapped.left)
+            .arg(mapped.bottom - mapped.top)
+            .arg(ok ? 1 : 0));
     return ok;
 }
 

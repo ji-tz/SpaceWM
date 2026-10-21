@@ -98,12 +98,12 @@ class TestHotkeys : public QObject {
 
         // End-to-end decision the hook makes for a Tab event: the Win+Tab
         // binding only matches (i.e. only then is Tab swallowed/taken over).
-        QVERIFY(!HotkeyManager::modifiersMatch(MOD_WIN, false, false, false,
-                                               /*win=*/HotkeyManager::winModifierDown(false, false,
-                                                                                       false)));
-        QVERIFY(HotkeyManager::modifiersMatch(MOD_WIN, false, false, false,
-                                              /*win=*/HotkeyManager::winModifierDown(true, false,
-                                                                                      false)));
+        QVERIFY(!HotkeyManager::modifiersMatch(
+            MOD_WIN, false, false, false,
+            /*win=*/HotkeyManager::winModifierDown(false, false, false)));
+        QVERIFY(HotkeyManager::modifiersMatch(
+            MOD_WIN, false, false, false,
+            /*win=*/HotkeyManager::winModifierDown(true, false, false)));
     }
 
     // Auto-repeat keyDOWNs while a binding key is held must not re-emit the

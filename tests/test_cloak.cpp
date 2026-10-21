@@ -134,9 +134,9 @@ class TestCloak : public QObject {
 
         // A brand-new window may not have a shell view yet (probe: 0-150ms
         // registration lag) — retry cloak/show cycles before giving up.
-        HWND w = ::CreateWindowExW(0, L"STATIC", L"shell backend probe", WS_OVERLAPPEDWINDOW, 0,
-                                   0, 240, 120, nullptr, nullptr, ::GetModuleHandleW(nullptr),
-                                   nullptr);
+        HWND w =
+            ::CreateWindowExW(0, L"STATIC", L"shell backend probe", WS_OVERLAPPEDWINDOW, 0, 0, 240,
+                              120, nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
         QVERIFY(w != nullptr);
         ::ShowWindow(w, SW_SHOWNORMAL);
 
@@ -153,9 +153,8 @@ class TestCloak : public QObject {
         ::DestroyWindow(w);
 
         QVERIFY(shown);
-        QVERIFY2(viaShell,
-                 "shell backend available but cloak fell back to DWM/ShowWindow — "
-                 "taskbar buttons would disappear");
+        QVERIFY2(viaShell, "shell backend available but cloak fell back to DWM/ShowWindow — "
+                           "taskbar buttons would disappear");
         QCOMPARE(cloak::backendOf(w), cloak::Backend::None);
     }
 

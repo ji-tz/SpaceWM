@@ -586,23 +586,20 @@ class TestIntegrationFlow : public QObject {
         QVERIFY(drop.isAccepted());
 
         // Ownership follows the drop…
-        QTRY_VERIFY_WITH_TIMEOUT(m_sm.ownerMonitorOf(hwnd) == dstMon &&
-                                     m_sm.spaceOfWindow(hwnd) == targetSpace,
-                                 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            m_sm.ownerMonitorOf(hwnd) == dstMon && m_sm.spaceOfWindow(hwnd) == targetSpace, 3000);
         // …and the window PHYSICALLY lands on the target screen…
         QTRY_VERIFY_WITH_TIMEOUT(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == dstMon,
                                  3000);
         // …with size/position scaled by the screen ratio (±4 px slack).
         RECT after{};
         QVERIFY(::GetWindowRect(hwnd, &after));
-        QVERIFY2(qAbs(after.left - expect.left) <= 4,
-                 qPrintable(QStringLiteral("x off: got %1 want %2")
-                                .arg(after.left)
-                                .arg(expect.left)));
-        QVERIFY2(qAbs(after.top - expect.top) <= 4,
-                 qPrintable(QStringLiteral("y off: got %1 want %2")
-                                .arg(after.top)
-                                .arg(expect.top)));
+        QVERIFY2(
+            qAbs(after.left - expect.left) <= 4,
+            qPrintable(QStringLiteral("x off: got %1 want %2").arg(after.left).arg(expect.left)));
+        QVERIFY2(
+            qAbs(after.top - expect.top) <= 4,
+            qPrintable(QStringLiteral("y off: got %1 want %2").arg(after.top).arg(expect.top)));
         QVERIFY2(qAbs((after.right - after.left) - (expect.right - expect.left)) <= 4,
                  "width not scaled to screen ratio");
         QVERIFY2(qAbs((after.bottom - after.top) - (expect.bottom - expect.top)) <= 4,
