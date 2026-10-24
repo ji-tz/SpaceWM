@@ -48,8 +48,10 @@ int actionToId(int action)
 int idToAction(int id)
 {
     switch (id) {
+    case kIdPrev + 100:
     case kIdPrev:
         return HotkeyManager::SwitchPrevSpace;
+    case kIdNext + 100:
     case kIdNext:
         return HotkeyManager::SwitchNextSpace;
     case kIdOverview:
@@ -684,7 +686,11 @@ bool HotkeyManager::armFromBindings()
     const bool llOk = g_llHookHandle != nullptr;
     if (!llOk) {
         for (const auto &b : m_bindings) {
-            const int id = actionToId(b.action);
+            const int baseId = actionToId(b.action);
+            const int id = baseId + (((b.modifiers & MOD_WIN) &&
+                                      (b.action == SwitchPrevSpace || b.action == SwitchNextSpace))
+                                         ? 100
+                                         : 0);
             if (!id)
                 continue;
             if (::RegisterHotKey(nullptr, id, b.modifiers | MOD_NOREPEAT, b.vk)) {
@@ -710,6 +716,16 @@ bool HotkeyManager::registerDefaults()
             if (sequenceToBinding(a, defaultSequence(a), &b))
                 m_bindings.push_back(b);
         }
+    }
+    // Direct space navigation always occupies Ctrl+Win arrows, alongside the
+    // configured shortcuts. Remove collisions so a chord has exactly one action.
+    for (int action : {SwitchPrevSpace, SwitchNextSpace}) {
+        Binding navigation;
+        sequenceToBinding(action, systemSequence(action), &navigation);
+        m_bindings.removeIf([&](const Binding &b) {
+            return b.vk == navigation.vk && b.modifiers == navigation.modifiers;
+        });
+        m_bindings.push_back(navigation);
     }
     return armFromBindings();
 }

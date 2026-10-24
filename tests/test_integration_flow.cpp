@@ -1,3 +1,5 @@
+#include "NativeDragCancellation.h"
+#include "ui/effects/SwitchFlashOverlay.h"
 #include <QtTest>
 
 #include "core/log/Log.h"
@@ -14,7 +16,6 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
-#include <QDrag>
 #include <QElapsedTimer>
 #include <QGraphicsOpacityEffect>
 #include <QMimeData>
@@ -660,28 +661,85 @@ class TestIntegrationFlow : public QObject {
         QVERIFY(source);
         bool placed = false;
         bool survived = false;
-        QTimer cancelDrag;
-        cancelDrag.setInterval(50);
-        connect(&cancelDrag, &QTimer::timeout, panel, []() { QDrag::cancel(); });
+        QSignalSpy finished(source, &WindowPreviewWidget::dragFinished);
         connect(source, &WindowPreviewWidget::dragStarted, panel, [&]() {
             placed = panel->placeWindowInSpace(m_hwndExpl, destination);
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
             survived = !source.isNull();
-            cancelDrag.start();
+            QVERIFY(dragtest::queueNativeRelease(panel));
         });
         QTest::mousePress(source, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
         const QPointF pos(50, 50);
         QMouseEvent move(QEvent::MouseMove, pos, source->mapToGlobal(pos.toPoint()), Qt::NoButton,
                          Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(source, &move);
-        cancelDrag.stop();
         QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        QCOMPARE(finished.count(), 1);
         QVERIFY(placed);
         QVERIFY2(survived, "drop refresh deleted the source during the drag call");
         QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), destination);
         QTRY_VERIFY(source.isNull());
         m_host.closeAll(false);
         QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
+    }
+
+    // Same foreground entry as main; simulate the activation notification so
+    // this remains deterministic even when Windows denies foreground stealing.
+    void step19_foregroundSwitchesToOwningSpace()
+    {
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        // Step 18 may already have left this monitor on `away`.
+        m_sm.switchSpace(mon, away, false);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), away);
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        QHash<quintptr, int> others;
+        for (auto *m : m_sm.monitors())
+            if (m->hmon != mon)
+                others.insert(quintptr(m->hmon), m->currentIndex);
+        const auto activation =
+            connect(&m_tracker, &WindowTracker::windowForeground, &m_sm,
+                    [this](quint64 h) { m_sm.onWindowForeground(reinterpret_cast<HWND>(h)); });
+        m_tracker.handle(EVENT_SYSTEM_FOREGROUND, m_hwndExpl, OBJID_WINDOW);
+        disconnect(activation);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QCOMPARE(m_sm.ownerMonitorOf(m_hwndExpl), mon);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        for (auto *m : m_sm.monitors())
+            if (m->hmon != mon)
+                QCOMPARE(m->currentIndex, others.value(quintptr(m->hmon)));
+    }
+
+    void step20_directAndForegroundSwitchAnimate()
+    {
+        // isOpen() becomes false at fade-out start; wait for allClosed state.
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        SpaceSwitchAnimator animation(&m_sm);
+        m_sm.setAnimationEnabled(true);
+        m_sm.switchSpace(mon, owned, false);
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        QVERIFY(m_sm.switchSpace(mon, away, true, 1));
+        QVERIFY(animation.isPlaying(mon));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        QVERIFY(m_sm.onWindowForeground(m_hwndExpl));
+        QVERIFY(animation.isPlaying(mon));
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
     }
 
     void cleanupTestCase()

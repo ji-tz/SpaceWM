@@ -363,7 +363,10 @@ void SpaceCardWidget::mouseMoveEvent(QMouseEvent *event)
             m_draggingReorder = true;
         }
         if (m_draggingReorder) {
-            QWidget *w = QApplication::widgetAt(event->globalPosition().toPoint());
+            // The pressed card owns this mouse sequence. Resolve its sibling
+            // inside the same overview, without a desktop-wide native hit test.
+            QWidget *root = window();
+            QWidget *w = root->childAt(root->mapFromGlobal(event->globalPosition().toPoint()));
             while (w && w != this) {
                 if (auto *card = qobject_cast<SpaceCardWidget *>(w)) {
                     const int target = card->spaceIndex();

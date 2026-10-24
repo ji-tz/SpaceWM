@@ -33,7 +33,8 @@ class SpaceManager : public QObject {
     int currentSpaceIndex(HMONITOR hmon) const;
     QString spaceName(HMONITOR hmon, int index) const;
 
-    bool switchSpace(HMONITOR hmon, int index, bool animateHint = true);
+    // directionHint preserves left/right travel across the circular strip seam.
+    bool switchSpace(HMONITOR hmon, int index, bool animateHint = true, int directionHint = 0);
 
     // Live-preview a space while the overview overlay is open:
     // updates currentIndex + cloak immediately (no flash). Same index still
@@ -57,6 +58,10 @@ class SpaceManager : public QObject {
     // a cross-monitor move re-homes an OWNED window into the target
     // monitor's current space; unowned ones go through normal discovery.
     void onWindowMoved(HWND hwnd);
+
+    // Foreground activation follows the existing owner; never moves the window.
+    // Returns true for a live, non-minimized managed window.
+    bool onWindowForeground(HWND hwnd);
 
     // Pure proportional map of a physical window RECT from src monitor rect
     // to dst monitor rect: position and size keep their screen-relative
@@ -86,7 +91,7 @@ class SpaceManager : public QObject {
 
     // Composite wallpaper (full-bleed) + cached window shots in Z-order.
     // Call only when that space's membership changes (or once on overview open).
-    void rebuildSpaceScreenshot(HMONITOR hmon, int index);
+    void rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize &maxSize = QSize(640, 360));
 
     // Overview entry: rebuild EVERY space on EVERY monitor once, then cache.
     void buildAllSpacePreviews();
@@ -123,7 +128,9 @@ class SpaceManager : public QObject {
     void monitorLayoutChanged();
     void windowTracked(quint64 hwnd);
     void windowUntracked(quint64 hwnd);
-    void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex);
+    // Synchronous: shots are ready, currentIndex/cloak still describe the source.
+    // Listeners must paint an opaque first frame before returning.
+    void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex, int direction);
     // A space's screenshot was re-rendered — overview cards should reload it.
     void spacePreviewInvalidated(quint64 hmon, int spaceIndex);
 

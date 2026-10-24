@@ -1,3 +1,4 @@
+#include "NativeDragCancellation.h"
 #include <QtTest>
 
 #include "core/space/SpaceManager.h"
@@ -9,7 +10,6 @@
 #include "ui/preview/WindowPreviewWidget.h"
 
 #include <QDropEvent>
-#include <QDrag>
 #include <QPointer>
 #include <QTimer>
 #include <QLabel>
@@ -46,15 +46,17 @@ class TestWindowPlacement : public QObject {
         overview.openOnMonitor(hmon);
         QTRY_VERIFY(!overview.isAnimating());
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-        auto tiles = overview.findChildren<WindowPreviewWidget *>();
-        QVERIFY(!tiles.isEmpty());
-        QPointer<WindowPreviewWidget> source = tiles.first();
+        // Desktop hover can select the empty card while the enter animation runs.
+        QVERIFY(overview.previewSpace(0));
+        QPointer<WindowPreviewWidget> source;
+        for (auto *tile : overview.findChildren<WindowPreviewWidget *>())
+            if (tile->windowHandle() == hwnd)
+                source = tile;
+        QVERIFY(source);
         bool refreshed = false;
         bool survivedRefresh = false;
         bool placed = false;
-        QTimer cancelDrag;
-        cancelDrag.setInterval(50);
-        connect(&cancelDrag, &QTimer::timeout, &overview, []() { QDrag::cancel(); });
+        QSignalSpy finished(source, &WindowPreviewWidget::dragFinished);
         connect(source, &WindowPreviewWidget::dragStarted, &overview, [&]() {
             // Exercise model/UI invalidation inside the active drag call stack.
             // Flush deletion just as a nested event loop is allowed to do.
@@ -65,15 +67,15 @@ class TestWindowPlacement : public QObject {
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
             refreshed = true;
             survivedRefresh = !source.isNull();
-            cancelDrag.start();
+            QVERIFY(dragtest::queueNativeRelease(&overview));
         });
         QTest::mousePress(source, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
         const QPointF pos(50, 50);
         QMouseEvent move(QEvent::MouseMove, pos, source->mapToGlobal(pos.toPoint()), Qt::NoButton,
                          Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(source, &move);
-        cancelDrag.stop();
         QTest::mouseRelease(&overview, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        QCOMPARE(finished.count(), 1);
         QVERIFY(refreshed);
         QVERIFY2(survivedRefresh, "preview refresh destroyed the active drag source");
         QTRY_VERIFY(source.isNull()); // rebuild resumes after the drag call returns

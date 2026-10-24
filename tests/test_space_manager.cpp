@@ -63,6 +63,71 @@ class TestSpaceManager : public QObject {
         QVERIFY(!sm.switchSpace(m->hmon, -1, false));
     }
 
+    void foregroundFollowsOwner_data()
+    {
+        QTest::addColumn<bool>("overviewOpen");
+        QTest::newRow("desktop") << false;
+        QTest::newRow("overview") << true;
+    }
+
+    void foregroundFollowsOwner()
+    {
+        QFETCH(bool, overviewOpen);
+        SpaceManager sm;
+        // Use the last monitor, regardless of the window's physical location:
+        // activation follows ownership and never silently re-homes the window.
+        auto *m = sm.monitors().last();
+        const HMONITOR mon = m->hmon;
+        ensureSpaces(sm, m, 2);
+        QWidget peer;
+        peer.setWindowTitle(QStringLiteral("foreground source space"));
+        peer.show();
+        const HWND peerHwnd = reinterpret_cast<HWND>(peer.winId());
+        QVERIFY(sm.assignWindow(peerHwnd, mon, 0));
+        QVERIFY(sm.assignWindow(m_hwnd, mon, 1));
+        sm.setOverviewOpen(overviewOpen);
+        QSignalSpy changed(&sm, &SpaceManager::spaceChanged);
+        QSignalSpy animation(&sm, &SpaceManager::requestSwitchAnimation);
+        QHash<quintptr, int> others;
+        for (auto *other : sm.monitors())
+            if (other->hmon != mon)
+                others.insert(quintptr(other->hmon), other->currentIndex);
+
+        QVERIFY(sm.onWindowForeground(m_hwnd));
+        QCOMPARE(sm.currentSpaceIndex(mon), 1);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 1);
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), mon);
+        QVERIFY(!cloak::isCloaked(m_hwnd));
+        QVERIFY(cloak::isCloaked(peerHwnd));
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(animation.count(), overviewOpen ? 0 : 1);
+        for (auto *other : sm.monitors())
+            if (other->hmon != mon)
+                QCOMPARE(other->currentIndex, others.value(quintptr(other->hmon)));
+        QVERIFY(sm.onWindowForeground(m_hwnd));
+        QCOMPARE(changed.count(), 1); // repeated activation must not switch again
+        QVERIFY(!sm.onWindowForeground(nullptr));
+        QVERIFY(!sm.onWindowForeground(::GetDesktopWindow()));
+        sm.setOverviewOpen(false);
+        sm.untrackWindow(peerHwnd);
+        sm.untrackWindow(m_hwnd);
+    }
+
+    void foregroundIgnoresMinimizedWindow()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        ::ShowWindow(m_hwnd, SW_MINIMIZE);
+        QVERIFY(sm.switchSpace(m->hmon, 1, false));
+        QVERIFY(!sm.onWindowForeground(m_hwnd));
+        QCOMPARE(m->currentIndex, 1);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 0);
+        sm.untrackWindow(m_hwnd);
+        ::ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
+    }
+
     void wraparoundHelpersInAppUseModulo()
     {
         // Document expected wrap used by hotkeys: (i + n) % n

@@ -260,7 +260,7 @@ void SpaceManager::warmWindowShots()
     }
 }
 
-bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
+bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint, int directionHint)
 {
     auto *m = monitorOf(hmon);
     if (!m || index < 0 || index >= m->spaces.size())
@@ -274,18 +274,31 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint)
     }
 
     const int from = m->currentIndex;
-    if (!m_overviewOpen)
+    const bool animate = animateHint && m_animationEnabled && !m_overviewOpen;
+    if (animate) {
+        // Refresh visible sources before any overlay; hidden sources keep their
+        // last good PrintWindow image. Build the whole strip before cloaking.
+        for (const Space &sp : m->spaces)
+            for (HWND hwnd : sp.windows)
+                if (::IsWindow(hwnd) && !::IsIconic(hwnd) && thumbs::canSampleScreen(hwnd))
+                    thumbs::refreshWindow(hwnd);
+        const QSize fullSize(m->physRect.right - m->physRect.left,
+                             m->physRect.bottom - m->physRect.top);
+        for (int i = 0; i < m->spaces.size(); ++i)
+            rebuildSpaceScreenshot(hmon, i, fullSize);
+        emit requestSwitchAnimation(reinterpret_cast<quint64>(hmon), from, index,
+                                    directionHint ? directionHint : (index > from ? 1 : -1));
+    } else if (!m_overviewOpen) {
         captureSpaceScreenshot(hmon, from);
+    }
 
+    // The synchronous animation listener paints its first frame BEFORE this
+    // visibility change. The destination is ready underneath the opaque strip.
     m->currentIndex = index;
     applyVisibility(hmon);
-
-    if (!m_overviewOpen)
+    if (!animate && !m_overviewOpen)
         captureSpaceScreenshot(hmon, index);
-
     emit spaceChanged(reinterpret_cast<quint64>(hmon), index);
-    if (animateHint && m_animationEnabled && !m_overviewOpen)
-        emit requestSwitchAnimation(reinterpret_cast<quint64>(hmon), from, index);
     return true;
 }
 
@@ -308,7 +321,7 @@ bool SpaceManager::previewSpace(HMONITOR hmon, int index)
     return true;
 }
 
-void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
+void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize &maxSize)
 {
     auto *m = monitorOf(hmon);
     if (!m || index < 0 || index >= m->spaces.size())
@@ -320,16 +333,9 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index)
 
     Space &sp = m->spaces[index];
 
-    // Canvas matches monitor aspect, fitted into 640×360.
-    const double monAspect = double(monW) / double(monH);
-    int cw = 640;
-    int ch = int(std::lround(cw / monAspect));
-    if (ch > 360 || ch <= 0) {
-        ch = 360;
-        cw = int(std::lround(ch * monAspect));
-        if (cw <= 0)
-            cw = 640;
-    }
+    const QSize canvasSize = QSize(monW, monH).scaled(maxSize, Qt::KeepAspectRatio);
+    const int cw = qMax(1, canvasSize.width());
+    const int ch = qMax(1, canvasSize.height());
 
     // Background: wallpaper (or solid) filling the ENTIRE canvas — no letterbox gaps.
     QImage canvas = thumbs::wallpaperFilled(m->physRect, QSize(cw, ch));
@@ -672,6 +678,28 @@ bool SpaceManager::trackWindow(HWND hwnd)
         return false;
 
     return assignWindow(hwnd, h, m->currentIndex);
+}
+
+bool SpaceManager::onWindowForeground(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd) || ::IsIconic(hwnd))
+        return false;
+    const HMONITOR mon = ownerMonitorOf(hwnd);
+    const int space = spaceOfWindow(hwnd);
+    auto *m = monitorOf(mon);
+    if (!m || space < 0 || space >= m->spaces.size())
+        return false;
+
+    if (m->currentIndex != space) {
+        spacelog::info(QStringLiteral("foreground follows owner hwnd=0x%1 mon=0x%2 from=%3 to=%4")
+                           .arg(quintptr(hwnd), 0, 16)
+                           .arg(quintptr(mon), 0, 16)
+                           .arg(m->currentIndex)
+                           .arg(space));
+    }
+    // The animation is input-transparent and never takes foreground focus.
+    switchSpace(mon, space, /*animateHint=*/true);
+    return true;
 }
 
 void SpaceManager::onWindowMoved(HWND hwnd)

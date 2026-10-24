@@ -5,6 +5,37 @@
 class TestSpaceCard : public QObject {
     Q_OBJECT
   private slots:
+    void capturedReorderUsesItsOwnWindow()
+    {
+        QWidget panel;
+        panel.resize(800, 400);
+        SpaceCardWidget first(&panel), second(&panel);
+        first.setSpace(0, QStringLiteral("First"), false);
+        second.setSpace(1, QStringLiteral("Second"), false);
+        first.move(10, 10);
+        second.move(410, 10);
+        panel.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&panel));
+        QWidget cover(nullptr, Qt::Tool | Qt::WindowStaysOnTopHint);
+        cover.setGeometry(QRect(second.mapToGlobal(QPoint()), second.size()));
+        cover.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&cover));
+        QSignalSpy reordered(&first, &SpaceCardWidget::reorderRequested);
+        QSignalSpy activated(&first, &SpaceCardWidget::activated);
+        const QPoint press(20, 20);
+        const QPoint global = second.mapToGlobal(second.rect().center());
+        QTest::mousePress(&first, Qt::LeftButton, Qt::NoModifier, press);
+        QMouseEvent move(QEvent::MouseMove, first.mapFromGlobal(global), global, Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&first, &move);
+        QApplication::sendEvent(&first, &move); // one reorder per target
+        QTest::mouseRelease(&first, Qt::LeftButton, Qt::NoModifier, first.mapFromGlobal(global));
+        QCOMPARE(reordered.count(), 1);
+        QCOMPARE(reordered.first().at(0).toInt(), 0);
+        QCOMPARE(reordered.first().at(1).toInt(), 1);
+        QCOMPARE(activated.count(), 0);
+    }
+
     void setSpaceUpdatesLabels()
     {
         SpaceCardWidget card;
