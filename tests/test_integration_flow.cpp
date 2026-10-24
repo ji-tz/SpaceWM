@@ -14,11 +14,15 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QDrag>
 #include <QElapsedTimer>
+#include <QGraphicsOpacityEffect>
 #include <QMimeData>
 #include <QProcess>
 #include <QPushButton>
+#include <QPointer>
 #include <QSignalSpy>
+#include <QTimer>
 
 #include <Windows.h>
 
@@ -608,6 +612,76 @@ class TestIntegrationFlow : public QObject {
         // Neither display's viewed space jumped on drop.
         QCOMPARE(m_monitor->currentIndex, srcCur);
         QCOMPARE(dstMonitor->currentIndex, dstCur);
+    }
+
+    void step17_reopenStartsDarkThenFadesContent()
+    {
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        for (MonitorSpaces *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QVERIFY(panel && panel->isVisible());
+            QCOMPARE(panel->windowOpacity(), 1.0);
+            auto *content = panel->findChild<QWidget *>(QStringLiteral("OverviewPanel"));
+            QVERIFY(content);
+            auto *effect = qobject_cast<QGraphicsOpacityEffect *>(content->graphicsEffect());
+            QVERIFY(effect);
+            QCOMPARE(effect->opacity(), 0.0);
+        }
+        auto *active = m_host.activePanel();
+        QVERIFY(active);
+        QTRY_VERIFY_WITH_TIMEOUT(!active->isAnimating(), 2000);
+        QVERIFY(m_host.isOpen());
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
+    }
+
+    void step18_windowDragSurvivesDropTriggeredRefresh()
+    {
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int origin = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && origin >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        const int destination = (origin + 1) % m_sm.spaceCount(mon);
+        m_host.openAll();
+        auto *panel = m_host.panelFor(mon);
+        QVERIFY(panel);
+        QVERIFY(panel->previewSpace(origin));
+        QTRY_VERIFY(!panel->isAnimating());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QPointer<WindowPreviewWidget> source;
+        for (auto *tile : panel->findChildren<WindowPreviewWidget *>())
+            if (tile->windowHandle() == m_hwndExpl)
+                source = tile;
+        QVERIFY(source);
+        bool placed = false;
+        bool survived = false;
+        QTimer cancelDrag;
+        cancelDrag.setInterval(50);
+        connect(&cancelDrag, &QTimer::timeout, panel, []() { QDrag::cancel(); });
+        connect(source, &WindowPreviewWidget::dragStarted, panel, [&]() {
+            placed = panel->placeWindowInSpace(m_hwndExpl, destination);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            survived = !source.isNull();
+            cancelDrag.start();
+        });
+        QTest::mousePress(source, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        const QPointF pos(50, 50);
+        QMouseEvent move(QEvent::MouseMove, pos, source->mapToGlobal(pos.toPoint()), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(source, &move);
+        cancelDrag.stop();
+        QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        QVERIFY(placed);
+        QVERIFY2(survived, "drop refresh deleted the source during the drag call");
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), destination);
+        QTRY_VERIFY(source.isNull());
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
     }
 
     void cleanupTestCase()

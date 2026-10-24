@@ -94,14 +94,11 @@ class SpaceManager : public QObject {
     // Fill null screenshots only (cheap). Prefer buildAllSpacePreviews on open.
     void seedScreenshots();
 
-    // Preview open step 1 — desktop intact, BEFORE the overview masks are up:
-    // drop + recapture every on-screen managed window. The screen fallback is
-    // only honest at this point (after masks it would bake the overlay in).
+    // Synchronous refresh for diagnostics/non-animation callers; honors the
+    // screen-sampling switch and preserves previous shots on capture failure.
     void refreshVisibleShots();
 
-    // Preview open step 2 — behind the masks: uncloak every managed window,
-    // then capture only windows still missing a shot (keeps switch-time shots
-    // for off-space windows — recapturing them has no screen fallback).
+    // Behind the masks: uncloak every managed window, then fill missing shots.
     // Close re-cloaks via setOverviewOpen(false).
     void warmWindowShots();
 

@@ -9,6 +9,9 @@
 #include "ui/preview/WindowPreviewWidget.h"
 
 #include <QDropEvent>
+#include <QDrag>
+#include <QPointer>
+#include <QTimer>
 #include <QLabel>
 #include <QLayout>
 #include <QMimeData>
@@ -21,6 +24,68 @@
 class TestWindowPlacement : public QObject {
     Q_OBJECT
   private slots:
+    void refreshWhileStartingWindowDragKeepsSourceAlive_data()
+    {
+        QTest::addColumn<bool>("drop");
+        QTest::newRow("screenshot-refresh") << false;
+        QTest::newRow("space-drop") << true;
+    }
+
+    void refreshWhileStartingWindowDragKeepsSourceAlive()
+    {
+        QFETCH(bool, drop);
+        QWidget target;
+        target.resize(300, 200);
+        target.show();
+        const HWND hwnd = reinterpret_cast<HWND>(target.winId());
+        SpaceManager sm;
+        OverviewWindow overview(&sm);
+        const HMONITOR hmon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, hmon, 0));
+        QVERIFY(sm.addSpace(hmon));
+        overview.openOnMonitor(hmon);
+        QTRY_VERIFY(!overview.isAnimating());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        auto tiles = overview.findChildren<WindowPreviewWidget *>();
+        QVERIFY(!tiles.isEmpty());
+        QPointer<WindowPreviewWidget> source = tiles.first();
+        bool refreshed = false;
+        bool survivedRefresh = false;
+        bool placed = false;
+        QTimer cancelDrag;
+        cancelDrag.setInterval(50);
+        connect(&cancelDrag, &QTimer::timeout, &overview, []() { QDrag::cancel(); });
+        connect(source, &WindowPreviewWidget::dragStarted, &overview, [&]() {
+            // Exercise model/UI invalidation inside the active drag call stack.
+            // Flush deletion just as a nested event loop is allowed to do.
+            if (drop)
+                placed = overview.placeWindowInSpace(hwnd, 1);
+            else
+                sm.rebuildSpaceScreenshot(hmon, 0);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            refreshed = true;
+            survivedRefresh = !source.isNull();
+            cancelDrag.start();
+        });
+        QTest::mousePress(source, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        const QPointF pos(50, 50);
+        QMouseEvent move(QEvent::MouseMove, pos, source->mapToGlobal(pos.toPoint()), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(source, &move);
+        cancelDrag.stop();
+        QTest::mouseRelease(&overview, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        QVERIFY(refreshed);
+        QVERIFY2(survivedRefresh, "preview refresh destroyed the active drag source");
+        QTRY_VERIFY(source.isNull()); // rebuild resumes after the drag call returns
+        if (drop) {
+            QVERIFY(placed);
+            QCOMPARE(sm.spaceOfWindow(hwnd), 1);
+            QCOMPARE(overview.windowPreviewCount(), 0);
+        }
+        overview.forceHide();
+        sm.untrackWindow(hwnd);
+    }
+
     void mimeRoundTrip()
     {
         quint64 h = quint64(0x1234);

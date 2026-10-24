@@ -364,8 +364,9 @@ class TestSpaceManager : public QObject {
         QCOMPARE(spy.last().at(1).toInt(), 0);
     }
 
-    // Open step 1 (pre-mask): on-screen windows are dropped + recaptured so
-    // the screen fallback can fill PrintWindow-black frames with honest pixels.
+    // Open (masks are UP first): on-screen windows are recaptured so cards
+    // stay fresh — PrintWindow-only behind the mask (screen sampling off);
+    // a failed capture must never wipe the previous shot.
     void refreshVisibleShotsRecapturesOnScreenWindows()
     {
         thumbs::clearWindowCache();
@@ -386,6 +387,16 @@ class TestSpaceManager : public QObject {
         QVERIFY2(refreshed.constBits() != seeded.constBits(),
                  "refreshVisibleShots kept the stale cache entry");
 
+        // Behind-mask conditions: overview open → screen sampling off. The
+        // refresh must still land a fresh PrintWindow capture (no fallback).
+        thumbs::setScreenSamplingEnabled(false);
+        sm.refreshVisibleShots();
+        const QImage behindMask = thumbs::windowShot(m_hwnd);
+        QVERIFY(!behindMask.isNull());
+        QVERIFY2(behindMask.constBits() != refreshed.constBits(),
+                 "behind-mask refresh did not recapture (PrintWindow-only)");
+        thumbs::setScreenSamplingEnabled(true);
+
         // Cloaked (off-space) windows are NOT touched — no honest screen
         // source exists for them, their existing shot must survive refresh.
         QVERIFY(::cloak::set(m_hwnd, true));
@@ -399,6 +410,32 @@ class TestSpaceManager : public QObject {
         QCOMPARE(thumbs::windowShot(m_hwnd).constBits(), cloakedKept.constBits());
         ::cloak::set(m_hwnd, false);
         ::cloak::set(m_hwnd, false);
+
+        thumbs::clearWindowCache();
+    }
+
+    // refreshWindow must never wipe known-good pixels: a refused capture
+    // (minimized → nothing honest to grab) keeps the old shot in the cache.
+    void refreshWindowFailureKeepsOldShot()
+    {
+        QWidget target;
+        target.setStyleSheet(QStringLiteral("background: white;"));
+        target.resize(280, 180);
+        target.show();
+        const HWND hwnd = reinterpret_cast<HWND>(target.winId());
+        thumbs::clearWindowCache();
+        const QImage seeded = thumbs::windowShot(hwnd);
+        QVERIFY(!seeded.isNull());
+        const int count = thumbs::windowCacheCount();
+
+        ::ShowWindow(hwnd, SW_MINIMIZE);
+        QTRY_VERIFY_WITH_TIMEOUT(::IsIconic(hwnd), 1500);
+        QVERIFY2(!thumbs::refreshWindow(hwnd), "refreshWindow must refuse an iconic window");
+
+        ::ShowWindow(hwnd, SW_RESTORE);
+        QTRY_VERIFY_WITH_TIMEOUT(!::IsIconic(hwnd), 1500);
+        QCOMPARE(thumbs::windowCacheCount(), count);
+        QCOMPARE(thumbs::windowShot(hwnd).constBits(), seeded.constBits());
 
         thumbs::clearWindowCache();
     }

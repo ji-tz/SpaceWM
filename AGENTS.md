@@ -92,11 +92,11 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | showAllHidden 退出恢复 | `test_cloak` | 有 |
 | 拖拽热点 mapPressToHotSpot；点击 tile → activated | `test_window_placement` | 有 |
 | 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
-| 遮罩前刷新可见截图（screen fallback）/ warm 只补缺不清缓存 | `test_space_manager` | 有 |
+| **遮罩先起**（热键即黑屏）+ 遮罩后 PrintWindow-only 刷新（失败保旧图）/ warm 只补缺不清缓存 | `test_space_manager` · `test_overview` | 有 |
 | 显示器句柄变化**不丢窗口**（purge→re-home、不扫收未追踪窗口、卡住的 cloak 恢复）；**跨 monitor move re-home**（`onWindowMoved`，main/流程共用） | `test_space_manager` · `test_integration_flow` | 有 |
 | **跨 monitor 拖 window 到另一屏 space**：归属迁移 + 窗口物理迁移到目标屏、大小/位置按屏幕比例缩放（`moveWindowToMonitor` / `mapRectToMonitor`） | `test_space_manager` · `test_integration_flow` (step16) | 有 |
 | **tile 标题在图上方 + 右侧 × 关闭窗口**（不触发 activated；strip 经 untrack 自愈） | `test_window_placement` · `test_integration_flow` | 有 |
-| **实模式 16 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
+| **实模式 18 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
 | **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
 | 确认/退出时**先 cloak 再撤遮罩**（防闪现） | `test_space_manager` · `test_overview_host` | 有 |
 | **cloak 后端 = shell `IApplicationView::SetCloak`（保任务栏按钮）**，shell 可用时禁回退 DWM/ShowWindow | `test_cloak` · `test_integration_flow` (step15) | 有 |
@@ -146,6 +146,8 @@ $env:SPACEWM_IT = $null
 | 14 | 点击 tile 右侧 **×**：记事本收到 WM_CLOSE 退出、不触发 activated、strip 移除该 tile | `step14_tileCloseButtonClosesWindow` |
 | 15 | 真实切换隐藏真实窗口时 cloak 必须走 shell `SetCloak` 后端（任务栏按钮保留契约） | `step15_cloakHidesViaShellBackend` |
 | 16 | 跨 monitor 拖 window 到另一屏 space 卡：归属迁到目标屏，窗口物理落到目标屏且大小/位置按屏幕比例缩放 | `step16_crossMonitorDropMovesWindowWithScreenRatio` |
+| 17 | 再次呼出时首帧为暗色遮罩，内容从透明淡入 | `step17_reopenStartsDarkThenFadesContent` |
+| 18 | 窗口拖拽调用期间落入另一 space 触发刷新，源控件保留到拖拽返回后再重建 | `step18_windowDragSurvivesDropTriggeredRefresh` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与

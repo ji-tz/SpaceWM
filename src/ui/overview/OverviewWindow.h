@@ -29,12 +29,14 @@ class OverviewWindow : public QWidget {
     void openOnMonitor(HMONITOR hmon, bool takeFocus = true);
 
     // Host open sequence:
-    //   1) beginPanelOpen — show the dark mask (no capture yet)
-    //   2) SpaceManager warm + buildAll (uncloak/capture behind the mask)
+    //   1) beginPanelOpen — show the dark mask FIRST (content held at
+    //      opacity 0; repaint() flushes the black cover before slow work)
+    //   2) SpaceManager overview-open + refresh/warm/build behind the mask
     //   3) phased populate, applied to ALL panels lockstep by the host so one
     //      monitor's heavy work never delays the other's reveal:
     //        populateCards → populateTiles → startPanelEnterAnimation
-    //      (single-panel path: populateOpenContent() runs the three phases).
+    //      (single-panel path: populateOpenContent() runs the three phases;
+    //      the enter animation brightens m_root 0→1 on the opaque mask).
     void beginPanelOpen(HMONITOR hmon, bool takeFocus = true);
     void populateCards();
     void populateTiles();
@@ -125,6 +127,8 @@ class OverviewWindow : public QWidget {
     bool m_closePending = false;
     bool m_hostManaged = false;
     bool m_exitStarted = false;
+    bool m_windowDragActive = false;
+    bool m_windowRebuildPending = false;
     int m_selected = 0;
     int m_originSpace = 0;
     int m_pendingCommit = -1;

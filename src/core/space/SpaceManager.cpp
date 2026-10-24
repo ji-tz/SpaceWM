@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QColor>
 #include <QCursor>
+#include <QElapsedTimer>
 #include <QPainter>
 #include <QPoint>
 
@@ -206,16 +207,25 @@ void SpaceManager::buildAllSpacePreviews()
 
 void SpaceManager::refreshVisibleShots()
 {
-    // Open step 1 — masks are NOT up yet: PrintWindow-black windows can still
-    // fall back to an honest screen sample of what the user sees right now.
+    // Open, behind the masks: screen sampling is already off (setOverviewOpen
+    // ran first), so this is a PrintWindow-only refresh — a failed capture
+    // keeps the old shot instead of wiping the cache to nothing.
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
         const MonitorSpaces &m = it.value();
         for (const Space &sp : m.spaces) {
             for (HWND hwnd : sp.windows) {
                 if (!::IsWindow(hwnd) || ::IsIconic(hwnd) || !thumbs::canSampleScreen(hwnd))
                     continue;
-                thumbs::invalidateWindow(hwnd);
-                thumbs::windowShot(hwnd); // recapture with screen fallback allowed
+                QElapsedTimer captureTimer;
+                captureTimer.start();
+                const bool refreshed = thumbs::refreshWindow(hwnd);
+                wchar_t className[128]{};
+                ::GetClassNameW(hwnd, className, 128);
+                spacelog::info(QStringLiteral("overview capture hwnd=0x%1 class=%2 ms=%3 ok=%4")
+                                   .arg(quintptr(hwnd), 0, 16)
+                                   .arg(QString::fromWCharArray(className))
+                                   .arg(captureTimer.elapsed())
+                                   .arg(refreshed ? 1 : 0));
             }
         }
     }
@@ -235,8 +245,8 @@ void SpaceManager::warmWindowShots()
         }
     }
 
-    // Fill MISSING shots only. Visible windows were refreshed pre-mask by
-    // refreshVisibleShots(); off-space windows keep their switch-time shots
+    // Fill MISSING shots only. Visible windows were refreshed behind the mask
+    // by refreshVisibleShots(); off-space windows keep their switch-time shots
     // (a blind clear+recapture here would trade known-good pixels for
     // PrintWindow-only frames that come back black for GPU windows).
     for (auto it = m_monitors.begin(); it != m_monitors.end(); ++it) {
