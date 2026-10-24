@@ -96,13 +96,10 @@ void OverviewHost::openAll()
     QElapsedTimer t;
     t.start();
 
-    // 1) Desktop intact: refresh shots for on-screen windows. The screen
-    //    fallback is honest only now — once the mask is up it would bake
-    //    the overlay into other spaces' cards.
-    m_manager->refreshVisibleShots();
-    const qint64 msRefresh = t.restart();
-
-    // 2) Dark masks up first — uncloak/capture must not flash on the desktop.
+    // 1) Dark masks up FIRST — the hotkey must slam black onto the desktop
+    //    immediately; every slow step below runs behind the cover.
+    //    beginPanelOpen repaints synchronously so the mask is composited
+    //    before refresh blocks the main thread for hundreds of ms.
     for (OverviewWindow *w : std::as_const(m_panels)) {
         if (w->targetMonitor() == cursor)
             continue;
@@ -132,19 +129,17 @@ void OverviewHost::openAll()
     }
     const qint64 msMasks = t.restart();
 
-    // 3) Behind the mask: mark overview open, unhide, capture whatever is
-    //    still missing (off-space windows), then composite space cards.
+    // 2) Refresh screenshots behind the dark mask; screen sampling stays off.
     m_manager->setOverviewOpen(true);
+    m_manager->refreshVisibleShots();
+    const qint64 msRefresh = t.restart();
     m_manager->warmWindowShots();
     const qint64 msWarm = t.restart();
     m_manager->buildAllSpacePreviews();
     const qint64 msBuild = t.restart();
 
-    // 4) Lockstep populate: ALL panels reveal cards and start their enter
-    //    fade together FIRST — one monitor's heavy tile build must never
-    //    delay the other monitor's reveal (was: sequential full populate per
-    //    panel, which showed the secondary much later). Tiles fill in while
-    //    the panels are already fading in.
+    // 3) Populate all panels on the same event-loop tick so their content
+    //    fades in together after screenshots are ready.
     for (OverviewWindow *w : std::as_const(m_panels)) {
         QElapsedTimer pt;
         pt.start();
@@ -168,10 +163,10 @@ void OverviewHost::openAll()
     const qint64 msTiles = t.restart();
 
     spacelog::info(
-        QStringLiteral("overview open timings: refresh=%1ms masks=%2ms warm=%3ms build=%4ms "
+        QStringLiteral("overview open timings: masks=%1ms refresh=%2ms warm=%3ms build=%4ms "
                        "cards=%5ms anims=%6ms tiles=%7ms panels=%8")
-            .arg(msRefresh)
             .arg(msMasks)
+            .arg(msRefresh)
             .arg(msWarm)
             .arg(msBuild)
             .arg(msCards)

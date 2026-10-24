@@ -76,7 +76,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 
 ### 2.2 功能 ↔ 测试（摘要）
 
-当前 **16** 个测试二进制：`cloak` / `monitors` / `space_manager` / `window_tracker` / `thumbnail` / `hotkeys` / `settings` / `log` / `space_card` / `overview` / `overview_host` / `window_placement` / `flash_overlay` / `tray` / `package` / `integration_flow`。
+当前 **17** 个测试二进制：`cloak` / `monitors` / `space_manager` / `window_tracker` / `thumbnail` / `hotkeys` / `settings` / `log` / `space_card` / `overview` / `overview_host` / `window_placement` / `flash_overlay` / `space_switch_animation` / `tray` / `package` / `integration_flow`。
 
 | 能力（本会话 + 近期 commit） | 测试 | 状态 |
 |------------------------------|------|------|
@@ -92,17 +92,19 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | showAllHidden 退出恢复 | `test_cloak` | 有 |
 | 拖拽热点 mapPressToHotSpot；点击 tile → activated | `test_window_placement` | 有 |
 | 渲染 Z 序 / 源截图刷新 | `test_space_manager` | 有 |
-| 遮罩前刷新可见截图（screen fallback）/ warm 只补缺不清缓存 | `test_space_manager` | 有 |
+| **遮罩先起**（热键即黑屏）+ 遮罩后 PrintWindow-only 刷新（失败保旧图）/ warm 只补缺不清缓存 | `test_space_manager` · `test_overview` | 有 |
 | 显示器句柄变化**不丢窗口**（purge→re-home、不扫收未追踪窗口、卡住的 cloak 恢复）；**跨 monitor move re-home**（`onWindowMoved`，main/流程共用） | `test_space_manager` · `test_integration_flow` | 有 |
 | **跨 monitor 拖 window 到另一屏 space**：归属迁移 + 窗口物理迁移到目标屏、大小/位置按屏幕比例缩放（`moveWindowToMonitor` / `mapRectToMonitor`） | `test_space_manager` · `test_integration_flow` (step16) | 有 |
 | **tile 标题在图上方 + 右侧 × 关闭窗口**（不触发 activated；strip 经 untrack 自愈） | `test_window_placement` · `test_integration_flow` | 有 |
-| **实模式 16 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
+| **任务栏 / Alt+Tab 前台激活**：切换所属屏幕到窗口原 space，保留归属及其它屏幕状态 | `test_space_manager` · `test_integration_flow` (step19，模拟前台事件)；真实点击见 §5 | 有 |
+| **截图画带切换动画（缩小 / 平移 / 放大），Ctrl+Win+左右及任务栏前台激活触发** | `test_space_switch_animation` · `test_flash_overlay` · `test_hotkeys` · `test_integration_flow` (step20) | 有 |
+| **实模式 20 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
 | **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
 | 确认/退出时**先 cloak 再撤遮罩**（防闪现） | `test_space_manager` · `test_overview_host` | 有 |
 | **cloak 后端 = shell `IApplicationView::SetCloak`（保任务栏按钮）**，shell 可用时禁回退 DWM/ShowWindow | `test_cloak` · `test_integration_flow` (step15) | 有 |
 | 托盘 UI / SettingsDialog 交互 / `main` 装配 / LL 吞键端到端 / drag ghost 80% | — | **无单测**；手动冒烟 §5 |
 
-已知缺口优先补：`main` 前台 re-home、`+` 拖入 UI、`windowForeground`、`spacePreviewInvalidated` 直连。
+已知缺口优先补：`main` 前台事件装配、`+` 拖入 UI、`spacePreviewInvalidated` 直连。
 
 ### 2.3 新增 test
 
@@ -146,6 +148,10 @@ $env:SPACEWM_IT = $null
 | 14 | 点击 tile 右侧 **×**：记事本收到 WM_CLOSE 退出、不触发 activated、strip 移除该 tile | `step14_tileCloseButtonClosesWindow` |
 | 15 | 真实切换隐藏真实窗口时 cloak 必须走 shell `SetCloak` 后端（任务栏按钮保留契约） | `step15_cloakHidesViaShellBackend` |
 | 16 | 跨 monitor 拖 window 到另一屏 space 卡：归属迁到目标屏，窗口物理落到目标屏且大小/位置按屏幕比例缩放 | `step16_crossMonitorDropMovesWindowWithScreenRatio` |
+| 17 | 再次呼出时首帧为暗色遮罩，内容从透明淡入 | `step17_reopenStartsDarkThenFadesContent` |
+| 18 | 窗口拖拽调用期间落入另一 space 触发刷新，源控件保留到拖拽返回后再重建 | `step18_windowDragSurvivesDropTriggeredRefresh` |
+| 19 | 前台激活其它 space 的窗口时切换所属屏幕到该 space，保留窗口归属及其它屏幕当前 space | `step19_foregroundSwitchesToOwningSpace` |
+| 20 | 直接切换及前台激活触发截图画带缩小、平移、放大动画，结束后 cloak 与归属正确 | `step20_directAndForegroundSwitchAnimate` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与
@@ -201,7 +207,7 @@ spacelog       → spdlog → TR/trace.log + EH/error.log
 3. 悬停 space → 底部为该 space 窗口；移到面板外缘 → 回 current。
 4. 点卡片 / Enter 切换；**+** 加 space；有窗口卡片 **×** 删除；拖卡片排序。
 5. `Ctrl+Alt+←/→`；System 预设吞 `Win+Tab` / `Ctrl+Win+←/→`。
-6. overview 开时点任务栏程序 → 关总览、窗口落当前 space。
+6. 点任务栏中其它 space 的程序 → 所属屏幕切换到该程序的 space，窗口归属不变；overview 开时同时关闭总览。
 7. 托盘 Quit → 本进程 hide 过的窗口全部恢复；`EH/error.log` 无意外 critical。
 8. overview 开着时按 **Esc**（含焦点被弹回前台窗口时）→ 取消退出；TR 有
    `hotkey action=` 行（热键仍活），无 `hotkey action` = 钩子被卸（查 §3 不变量）。

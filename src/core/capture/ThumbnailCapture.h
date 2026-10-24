@@ -13,8 +13,10 @@
 // PrintWindow BOOL stays TRUE for black buffers on GPU/composition windows).
 // Screen BitBlt is the last-resort fallback, honest only when sampling is on
 // (overview mask down) and the rect is visible / not cloaked / on-screen.
-// Preview open: SpaceManager::refreshVisibleShots() runs BEFORE the masks go
-// up (recaptures on-screen windows with the screen fallback); behind the mask
+// Preview open: masks go up FIRST (instant black cover on hotkey), then
+// SpaceManager::refreshVisibleShots() runs BEHIND them with screen sampling
+// already off — a PrintWindow-only refresh whose failed captures keep the
+// previous shot (refreshWindow never wipes the cache); behind the mask
 // warmWindowShots() uncloaks + fills only MISSING shots, keeping switch-time
 // shots for off-space windows. Bottom strip and space composites share that
 // cache for one open.
@@ -30,6 +32,9 @@ QImage windowShot(HWND hwnd, const QSize &maxSize = QSize());
 
 // Drop one HWND from the window-shot cache (window closed / content must refresh).
 void invalidateWindow(HWND hwnd);
+// Force a fresh capture; the cache is replaced ONLY on success so a failed
+// PrintWindow behind the mask never wipes known-good pixels. True = refreshed.
+bool refreshWindow(HWND hwnd);
 void clearWindowCache();
 // Number of cached window shots (tests).
 int windowCacheCount();

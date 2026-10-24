@@ -324,15 +324,14 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
     if (m_closePending)
         return;
 
-    // Desktop intact: refresh on-screen shots (screen fallback honest here).
-    if (m_manager && !m_hostManaged)
-        m_manager->refreshVisibleShots();
-
-    // 1) Dark mask first so uncloak/capture is never visible on the desktop.
+    // 1) Dark mask first — instant black cover on hotkey (content held at
+    //    opacity 0); uncloak/capture must never be visible on the desktop.
     beginPanelOpen(hmon, takeFocus);
 
     if (m_manager && !m_hostManaged) {
+        // 2) Refresh behind the mask without sampling the covered screen.
         m_manager->setOverviewOpen(true);
+        m_manager->refreshVisibleShots();
         m_manager->warmWindowShots();
         m_manager->buildAllSpacePreviews();
     }
@@ -364,7 +363,12 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
     m_closePending = false;
     m_pendingCommit = -1;
 
-    show();
+    // Content starts invisible ON the dark veil — the enter animation ramps
+    // m_root 0→1 so the black cover itself never flickers transparent.
+    auto *eff = new QGraphicsOpacityEffect(m_root);
+    eff->setOpacity(0.0);
+    m_root->setGraphicsEffect(eff);
+
     // Stale content must not be visible while warm/build runs behind the
     // mask (old CURRENT pill / old tiles for seconds on heavy machines) —
     // populateOpenContent shows them again once cards are rebuilt.
@@ -373,8 +377,16 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
     if (m_windowScroll)
         m_windowScroll->hide();
     setWindowOpacity(1.0);
+    // Disable the OS show transition: Qt already animates content over the
+    // mask. Windows must not reveal/animate a stale backing store first.
+    const BOOL disableTransitions = TRUE;
+    ::DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), DWMWA_TRANSITIONS_FORCEDISABLED,
+                            &disableTransitions, sizeof(disableTransitions));
+    pinToMonitorPhysically();
+    show();
     pinToMonitorPhysically();
     raise();
+    repaint();
     if (takeFocus) {
         activateWindow();
         setFocus(Qt::ActiveWindowFocusReason);
@@ -570,6 +582,8 @@ void OverviewWindow::cancelAnimations()
     }
     if (graphicsEffect())
         setGraphicsEffect(nullptr);
+    if (m_root && m_root->graphicsEffect())
+        m_root->setGraphicsEffect(nullptr);
 
     for (SpaceCardWidget *card : std::as_const(m_cards)) {
         if (card && card->graphicsEffect())
@@ -705,6 +719,13 @@ void OverviewWindow::rebuildWindowPreviews()
     auto *m = m_manager ? m_manager->monitorOf(m_hmon) : nullptr;
     if (!m || !m_windowStack)
         return;
+
+    // QDrag::exec processes nested events. Deleting its source row here also
+    // deletes the QDrag while it is still executing (refresh/drop re-entry).
+    if (m_windowDragActive) {
+        m_windowRebuildPending = true;
+        return;
+    }
 
     // Clear previous rows and tiles.
     while (QLayoutItem *item = m_windowStack->takeAt(0)) {
@@ -880,6 +901,21 @@ void OverviewWindow::rebuildWindowPreviews()
         // Full-resolution cached shot — tile scales once to physical pixels (DPR).
         QImage shot = thumbs::windowShot(it.hwnd);
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
+        connect(tile, &WindowPreviewWidget::dragStarted, this, [this](quint64) {
+            m_windowDragActive = true;
+            cancelSoftPreviewHold();
+        });
+        connect(tile, &WindowPreviewWidget::dragFinished, this, [this]() {
+            m_windowDragActive = false;
+            if (!m_windowRebuildPending)
+                return;
+            m_windowRebuildPending = false;
+            // Rebuild only after startDrag/mouseMoveEvent have returned.
+            QTimer::singleShot(0, this, [this]() {
+                if (m_open && !m_closePending)
+                    rebuildWindowPreviews();
+            });
+        });
         connect(tile, &WindowPreviewWidget::activated, this,
                 [this](quint64 h) { activateWindowPreview(reinterpret_cast<HWND>(h)); });
         connect(tile, &WindowPreviewWidget::closeRequested, this,
@@ -1132,9 +1168,14 @@ void OverviewWindow::playEnterAnimation()
 {
     m_animating = true;
 
-    auto *eff = new QGraphicsOpacityEffect(this);
-    eff->setOpacity(1.0);
-    setGraphicsEffect(eff);
+    // Ramp the CONTENT over the opaque mask — the window itself (dark veil)
+    // stays at opacity 1 so the desktop never shows through mid-fade; the
+    // panel content brightens 0→1 on top of the black cover.
+    auto *eff = qobject_cast<QGraphicsOpacityEffect *>(m_root ? m_root->graphicsEffect() : nullptr);
+    if (!eff) {
+        eff = new QGraphicsOpacityEffect(m_root);
+        m_root->setGraphicsEffect(eff);
+    }
 
     auto *anim = new QPropertyAnimation(eff, "opacity", this);
     m_fadeAnim = anim;
@@ -1145,8 +1186,8 @@ void OverviewWindow::playEnterAnimation()
     connect(anim, &QPropertyAnimation::finished, this, [this]() {
         if (m_fadeAnim == sender()) {
             m_fadeAnim = nullptr;
-            if (graphicsEffect())
-                setGraphicsEffect(nullptr);
+            if (m_root && m_root->graphicsEffect())
+                m_root->setGraphicsEffect(nullptr);
         }
         if (!m_closePending)
             m_animating = false;
