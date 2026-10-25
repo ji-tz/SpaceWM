@@ -128,6 +128,9 @@ class SpaceManager : public QObject {
     void monitorLayoutChanged();
     void windowTracked(quint64 hwnd);
     void windowUntracked(quint64 hwnd);
+    // Synchronous: capture the original monitor and cover it BEFORE any
+    // per-window capture. Never emitted while overview is open.
+    void requestSwitchCover(quint64 hmon, int fromIndex);
     // Synchronous: shots are ready, currentIndex/cloak still describe the source.
     // Listeners must paint an opaque first frame before returning.
     void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex, int direction);

@@ -63,10 +63,10 @@ jobs:
           }
           if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after install" }
 
-      # offscreen 平台：GUI 单测（含 test_visual_capture 截图测试）无需桌面会话
-      - name: Test (ctest + JUnit)
+      # 使用 Windows 原生桌面平台，实际验证 HWND、DWM 和整屏截图行为。
+      - name: Test (Windows desktop + JUnit)
         env:
-          QT_QPA_PLATFORM: offscreen
+          QT_QPA_PLATFORM: windows
         run: |
           ctest --test-dir build --output-on-failure --timeout 60 --output-junit junit.xml
 

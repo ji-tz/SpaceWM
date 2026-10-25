@@ -98,7 +98,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | **tile 标题在图上方 + 右侧 × 关闭窗口**（不触发 activated；strip 经 untrack 自愈） | `test_window_placement` · `test_integration_flow` | 有 |
 | **任务栏 / Alt+Tab 前台激活**：切换所属屏幕到窗口原 space，保留归属及其它屏幕状态 | `test_space_manager` · `test_integration_flow` (step19，模拟前台事件)；真实点击见 §5 | 有 |
 | **截图画带切换动画（缩小 / 平移 / 放大），Ctrl+Win+左右及任务栏前台激活触发** | `test_space_switch_animation` · `test_flash_overlay` · `test_hotkeys` · `test_integration_flow` (step20) | 有 |
-| **实模式 20 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
+| **实模式 22 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
 | **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
 | 确认/退出时**先 cloak 再撤遮罩**（防闪现） | `test_space_manager` · `test_overview_host` | 有 |
 | **cloak 后端 = shell `IApplicationView::SetCloak`（保任务栏按钮）**，shell 可用时禁回退 DWM/ShowWindow | `test_cloak` · `test_integration_flow` (step15) | 有 |
@@ -152,6 +152,8 @@ $env:SPACEWM_IT = $null
 | 18 | 窗口拖拽调用期间落入另一 space 触发刷新，源控件保留到拖拽返回后再重建 | `step18_windowDragSurvivesDropTriggeredRefresh` |
 | 19 | 前台激活其它 space 的窗口时切换所属屏幕到该 space，保留窗口归属及其它屏幕当前 space | `step19_foregroundSwitchesToOwningSpace` |
 | 20 | 直接切换及前台激活触发截图画带缩小、平移、放大动画，结束后 cloak 与归属正确 | `step20_directAndForegroundSwitchAnimate` |
+| 21 | 前台目标提前露出时，先盖屏，再在禁止屏幕采样的遮罩后合成并播放动画 | `step21_foregroundCoveredBeforeCapture` |
+| 22 | 切换首帧使用本屏完整截图（包含未追踪窗口），逐窗口截图仅在遮罩后进行，原屏截图保留为动画离场画面 | `step22_switchStartsWithOriginalMonitorCopy` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与

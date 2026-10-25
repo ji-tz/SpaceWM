@@ -5,6 +5,7 @@
 #include <QPainter>
 #include <algorithm>
 #include <cmath>
+#include <dwmapi.h>
 
 namespace {
 constexpr int durationMs = 520;
@@ -29,6 +30,31 @@ SwitchFlashOverlay::SwitchFlashOverlay(QWidget *parent)
     });
 }
 
+void SwitchFlashOverlay::present(const QRect &geometry, const RECT &physical)
+{
+    setGeometry(geometry);
+    show();
+    ::SetWindowPos(reinterpret_cast<HWND>(winId()), HWND_TOPMOST, physical.left, physical.top,
+                   physical.right - physical.left, physical.bottom - physical.top, SWP_NOACTIVATE);
+    repaint();
+    ::DwmFlush(); // submit the opaque cover before synchronous capture can block
+}
+
+void SwitchFlashOverlay::cover(const QRect &geometry, const RECT &physical, const QImage &source)
+{
+    if (geometry.isEmpty())
+        return;
+    m_timer.stop();
+    m_clock.invalidate();
+    m_source = source;
+    m_preparing = true;
+    m_shots = {source}; // null source uses the opaque background, never screen capture
+    m_from = m_to = 0;
+    m_direction = 1;
+    m_playing = true;
+    present(geometry, physical);
+}
+
 void SwitchFlashOverlay::play(const QRect &geometry, const RECT &physical,
                               const QVector<QImage> &shots, int from, int to, int direction)
 {
@@ -36,16 +62,22 @@ void SwitchFlashOverlay::play(const QRect &geometry, const RECT &physical,
         to >= shots.size() || from == to)
         return;
     m_shots = shots;
+    // The outgoing tile stays the exact desktop captured before the cover.
+    // Replacing it with a window composite here would visibly change the image
+    // at the start of the shrink animation (taskbar, untracked windows, etc.).
+    if (m_preparing && !m_source.isNull())
+        m_shots[from] = m_source;
+    else
+        m_source = shots[from];
+    m_preparing = false;
     m_from = from;
     m_to = to;
     m_direction = direction;
     m_playing = true;
-    setGeometry(geometry);
-    show();
-    ::SetWindowPos(reinterpret_cast<HWND>(winId()), HWND_TOPMOST, physical.left, physical.top,
-                   physical.right - physical.left, physical.bottom - physical.top, SWP_NOACTIVATE);
+    m_timer.stop();
+    m_clock.invalidate(); // replay must not paint using the previous run's elapsed time
+    present(geometry, physical);
     m_clock.start();
-    repaint(); // first full source frame before SpaceManager changes cloak
     m_timer.start();
 }
 
@@ -56,6 +88,8 @@ void SwitchFlashOverlay::stop()
     m_playing = false;
     hide();
     m_shots.clear();
+    m_source = {};
+    m_preparing = false;
     if (wasPlaying)
         emit finished();
 }
@@ -103,17 +137,26 @@ SpaceSwitchAnimator::SpaceSwitchAnimator(SpaceManager *manager, QObject *parent)
     : QObject(parent),
       m_manager(manager)
 {
+    connect(manager, &SpaceManager::requestSwitchCover, this, [this](quint64 handle, int from) {
+        auto *m = m_manager->monitorOf(reinterpret_cast<HMONITOR>(handle));
+        if (!m || from < 0 || from >= m->spaces.size())
+            return;
+        // One full-resolution monitor copy is all that precedes the cover.
+        // Do not rebuild a space or capture individual windows on this path.
+        // A repeated switch can capture the still-visible previous animation;
+        // overview itself never requests a switch cover.
+        QImage source = thumbs::captureMonitor(m->physRect, QSize());
+        if (source.isNull())
+            source = m->spaces[from].screenshot;
+        thumbs::setScreenSamplingEnabled(false);
+        overlayFor(handle)->cover(m->geometry, m->physRect, source);
+    });
     connect(manager, &SpaceManager::requestSwitchAnimation, this,
             [this](quint64 handle, int from, int to, int direction) {
                 auto *m = m_manager->monitorOf(reinterpret_cast<HMONITOR>(handle));
                 if (!m)
                     return;
-                auto *&overlay = m_overlays[quintptr(handle)];
-                if (!overlay) {
-                    overlay = new SwitchFlashOverlay;
-                    connect(overlay, &SwitchFlashOverlay::finished, this,
-                            &SpaceSwitchAnimator::updateSampling);
-                }
+                auto *overlay = overlayFor(handle);
                 QVector<QImage> shots;
                 for (const Space &space : m->spaces)
                     shots.push_back(space.screenshot);
@@ -121,6 +164,16 @@ SpaceSwitchAnimator::SpaceSwitchAnimator(SpaceManager *manager, QObject *parent)
                 overlay->play(m->geometry, m->physRect, shots, from, to, direction);
             });
     connect(manager, &SpaceManager::monitorLayoutChanged, this, &SpaceSwitchAnimator::stopAll);
+}
+
+SwitchFlashOverlay *SpaceSwitchAnimator::overlayFor(quint64 handle)
+{
+    auto *&overlay = m_overlays[quintptr(handle)];
+    if (!overlay) {
+        overlay = new SwitchFlashOverlay;
+        connect(overlay, &SwitchFlashOverlay::finished, this, &SpaceSwitchAnimator::updateSampling);
+    }
+    return overlay;
 }
 
 SpaceSwitchAnimator::~SpaceSwitchAnimator()

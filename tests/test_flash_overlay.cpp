@@ -6,6 +6,35 @@
 class TestFlashOverlay : public QObject {
     Q_OBJECT
   private slots:
+    void coverHoldsSourceUntilShotsAreReady()
+    {
+        SwitchFlashOverlay overlay;
+        const QRect geometry(0, 0, 400, 300);
+        const RECT physical{0, 0, 400, 300};
+        QImage source(400, 300, QImage::Format_RGB32);
+        source.fill(Qt::red);
+        QImage destination = source;
+        destination.fill(Qt::blue);
+        overlay.play(geometry, physical, {source, destination}, 0, 1, 1);
+        QTest::qWait(300); // the previous clock must not affect the next first frame
+        overlay.cover(geometry, physical, source);
+        QTest::qWait(600); // slow capture must neither move nor expire the cover
+        QVERIFY(overlay.isPlaying());
+        QVERIFY(overlay.isVisible());
+        QCOMPARE(overlay.grab().toImage().pixelColor(200, 150), QColor(Qt::red));
+        QImage rebuiltSource = source;
+        rebuiltSource.fill(Qt::green);
+        overlay.play(geometry, physical, {rebuiltSource, destination}, 0, 1, 1);
+        // Window composites prepared behind the cover cannot replace the
+        // original screen copy used for the outgoing animation tile.
+        QCOMPARE(overlay.grab().toImage().pixelColor(200, 150), QColor(Qt::red));
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.isPlaying(), 3000);
+
+        overlay.cover(geometry, physical, {}); // cold cache is still opaque
+        QCOMPARE(overlay.grab().toImage().pixelColor(200, 150), QColor(18, 20, 28));
+        overlay.stop();
+        QVERIFY(!overlay.isVisible());
+    }
     void stripShrinksSlidesAndExpands_data()
     {
         QTest::addColumn<int>("from");

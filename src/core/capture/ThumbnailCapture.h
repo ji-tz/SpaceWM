@@ -47,7 +47,8 @@ bool canSampleScreen(HWND hwnd);
 void setScreenSamplingEnabled(bool on);
 bool screenSamplingEnabled();
 
-// Full monitor screenshot in physical pixels (BitBlt). Not used for space cards.
+// Full monitor screenshot in physical pixels (BitBlt). Used once before the
+// switch cover; never for space cards or while overview is open.
 QImage captureMonitor(const RECT &physRect, const QSize &maxSize = QSize(640, 360));
 
 // Desktop wallpaper scaled to fit physRect (cold-start / empty-space preview).

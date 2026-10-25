@@ -14,6 +14,7 @@ class SwitchFlashOverlay : public QWidget {
     Q_OBJECT
   public:
     explicit SwitchFlashOverlay(QWidget *parent = nullptr);
+    void cover(const QRect &geometry, const RECT &physical, const QImage &source);
     void play(const QRect &geometry, const RECT &physical, const QVector<QImage> &shots, int from,
               int to, int direction);
     void stop();
@@ -28,7 +29,10 @@ class SwitchFlashOverlay : public QWidget {
     void paintEvent(QPaintEvent *) override;
 
   private:
+    void present(const QRect &geometry, const RECT &physical);
     QVector<QImage> m_shots;
+    QImage m_source;
+    bool m_preparing = false;
     int m_from = 0, m_to = 0, m_direction = 1;
     bool m_playing = false;
     QElapsedTimer m_clock;
@@ -45,6 +49,7 @@ class SpaceSwitchAnimator : public QObject {
     bool isPlaying(HMONITOR monitor) const;
 
   private:
+    SwitchFlashOverlay *overlayFor(quint64 handle);
     void updateSampling();
     SpaceManager *m_manager;
     QHash<quintptr, SwitchFlashOverlay *> m_overlays;

@@ -3,6 +3,7 @@
 #include <QtTest>
 
 #include "core/log/Log.h"
+#include "core/capture/ThumbnailCapture.h"
 #include "core/space/SpaceManager.h"
 #include "core/window/CloakController.h"
 #include "core/window/WindowTracker.h"
@@ -26,6 +27,7 @@
 #include <QTimer>
 
 #include <Windows.h>
+#include <dwmapi.h>
 
 #include <memory>
 
@@ -739,6 +741,96 @@ class TestIntegrationFlow : public QObject {
         QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
         QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
         QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+    }
+
+    void step21_foregroundCoveredBeforeCapture()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        m_sm.switchSpace(mon, away, false);
+        SpaceSwitchAnimator animation(&m_sm);
+        bool covered = false;
+        bool rebuilt = false;
+        // Model the shell exposing its activated app before our notification.
+        QVERIFY(cloak::set(m_hwndExpl, false));
+        const auto coverConnection =
+            connect(&m_sm, &SpaceManager::requestSwitchCover, this, [&](quint64 h, int from) {
+                QCOMPARE(h, quint64(quintptr(mon)));
+                QCOMPARE(from, away);
+                QCOMPARE(m_sm.currentSpaceIndex(mon), away);
+                QVERIFY(animation.isPlaying(mon));
+                QVERIFY(!thumbs::screenSamplingEnabled());
+                covered = true;
+            });
+        const auto rebuildConnection =
+            connect(&m_sm, &SpaceManager::spacePreviewInvalidated, this, [&](quint64, int) {
+                QVERIFY(covered);
+                QVERIFY(animation.isPlaying(mon));
+                QVERIFY(!thumbs::screenSamplingEnabled());
+                rebuilt = true;
+            });
+        const auto activation =
+            connect(&m_tracker, &WindowTracker::windowForeground, &m_sm,
+                    [this](quint64 h) { m_sm.onWindowForeground(reinterpret_cast<HWND>(h)); });
+        m_tracker.handle(EVENT_SYSTEM_FOREGROUND, m_hwndExpl, OBJID_WINDOW);
+        disconnect(activation);
+        disconnect(coverConnection);
+        disconnect(rebuildConnection);
+        QVERIFY(covered);
+        QVERIFY(rebuilt);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(thumbs::screenSamplingEnabled());
+    }
+
+    void step22_switchStartsWithOriginalMonitorCopy()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        auto *m = m_sm.monitorOf(mon);
+        QVERIFY(m);
+        SpaceSwitchAnimator animation(&m_sm);
+        QWidget marker(nullptr, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+        marker.setGeometry(m->geometry);
+        marker.setAutoFillBackground(true);
+        QPalette palette;
+        palette.setColor(QPalette::Window, Qt::magenta);
+        marker.setPalette(palette);
+        marker.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&marker));
+        QVERIFY(::SetWindowPos(reinterpret_cast<HWND>(marker.winId()), HWND_TOPMOST,
+                               m->physRect.left, m->physRect.top,
+                               m->physRect.right - m->physRect.left,
+                               m->physRect.bottom - m->physRect.top, SWP_NOACTIVATE));
+        marker.repaint();
+        ::DwmFlush();
+        auto markerIsOnScreen = [&]() {
+            const QImage frame = thumbs::captureMonitor(m->physRect);
+            return !frame.isNull() &&
+                   frame.pixelColor(frame.width() / 2, frame.height() / 2) == QColor(Qt::magenta);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(markerIsOnScreen(), 3000);
+        bool verified = false;
+        const auto connection =
+            connect(&m_sm, &SpaceManager::requestSwitchCover, this, [&](quint64, int) {
+                for (auto *widget : QApplication::topLevelWidgets()) {
+                    auto *overlay = qobject_cast<SwitchFlashOverlay *>(widget);
+                    if (!overlay || !overlay->isVisible())
+                        continue;
+                    const QImage frame = overlay->grab().toImage();
+                    QCOMPARE(frame.pixelColor(frame.width() / 2, frame.height() / 2),
+                             QColor(Qt::magenta));
+                    verified = true;
+                }
+            });
+        const int target = (m->currentIndex + 1) % int(m->spaces.size());
+        QVERIFY(m_sm.switchSpace(mon, target));
+        disconnect(connection);
+        QVERIFY(verified);
         QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
     }
 

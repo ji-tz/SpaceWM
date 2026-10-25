@@ -276,8 +276,10 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint, int d
     const int from = m->currentIndex;
     const bool animate = animateHint && m_animationEnabled && !m_overviewOpen;
     if (animate) {
-        // Refresh visible sources before any overlay; hidden sources keep their
-        // last good PrintWindow image. Build the whole strip before cloaking.
+        // Copy the original monitor once and cover immediately, before any
+        // per-window capture or space-composite work.
+        emit requestSwitchCover(reinterpret_cast<quint64>(hmon), from);
+        // The cover disables screen sampling; PrintWindow failures keep caches.
         for (const Space &sp : m->spaces)
             for (HWND hwnd : sp.windows)
                 if (::IsWindow(hwnd) && !::IsIconic(hwnd) && thumbs::canSampleScreen(hwnd))
