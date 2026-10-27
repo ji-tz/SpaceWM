@@ -8,6 +8,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -24,22 +25,50 @@ WindowPreviewWidget::WindowPreviewWidget(QWidget *parent)
     setCursor(Qt::OpenHandCursor);
 
     auto *root = new QVBoxLayout(this);
-    // Budget must match setImageBoxSize: frame(4) + margins(16) + spacing(6) + title(14) = 40.
+    // Budget must match setImageBoxSize: frame(4) + margins(16) + spacing(6) + header(16) = 42.
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(6);
 
-    m_imageLabel = new QLabel(this);
-    m_imageLabel->setAlignment(Qt::AlignCenter);
-    m_imageLabel->setStyleSheet(QStringLiteral(
-        "QLabel { border-radius: 6px; border: 1px solid rgba(255,255,255,35); background: #101018; }"));
-    root->addWidget(m_imageLabel);
+    // Header ABOVE the image: title left, close button right. The button is a
+    // child, so its clicks never reach this frame (no drag / no activation).
+    auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(4);
 
     m_label = new QLabel(this);
+    m_label->setObjectName(QStringLiteral("TitleLabel"));
     m_label->setStyleSheet(QStringLiteral(
         "QLabel { color: #e8e8f0; font-size: 12px; border: none; background: transparent; }"));
     m_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_label->setFixedHeight(14);
-    root->addWidget(m_label);
+    m_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    header->addWidget(m_label, 1);
+
+    m_closeBtn = new QPushButton(QStringLiteral("×"), this);
+    m_closeBtn->setObjectName(QStringLiteral("CloseButton"));
+    m_closeBtn->setFixedSize(16, 16);
+    m_closeBtn->setFocusPolicy(Qt::NoFocus);
+    m_closeBtn->setCursor(Qt::PointingHandCursor);
+    m_closeBtn->setToolTip(tr("Close window"));
+    m_closeBtn->setEnabled(false); // until setWindow supplies an hwnd
+    m_closeBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { color: rgba(255,255,255,130); background: transparent; border: none;"
+        " border-radius: 8px; font-size: 11px; font-weight: 600; padding: 0; }"
+        "QPushButton:hover { color: white; background: rgba(255,86,86,230); }"
+        "QPushButton:pressed { background: rgba(255,86,86,255); }"));
+    connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
+        if (m_hwnd)
+            emit closeRequested(reinterpret_cast<quint64>(m_hwnd));
+    });
+    header->addWidget(m_closeBtn, 0, Qt::AlignVCenter);
+    root->addLayout(header);
+
+    m_imageLabel = new QLabel(this);
+    m_imageLabel->setObjectName(QStringLiteral("ImageLabel"));
+    m_imageLabel->setAlignment(Qt::AlignCenter);
+    m_imageLabel->setStyleSheet(QStringLiteral(
+        "QLabel { border-radius: 6px; border: 1px solid rgba(255,255,255,35); background: #101018; }"));
+    root->addWidget(m_imageLabel);
 
     setStyleSheet(QStringLiteral(
         "#WindowPreview { background: rgba(40, 44, 58, 230); border: 2px solid rgba(255,255,255,35);"
@@ -62,8 +91,8 @@ void WindowPreviewWidget::setImageBoxSize(const QSize &imageBox)
     if (m_imageLabel)
         m_imageLabel->setFixedSize(m_box);
     // QFrame stylesheet border is 2px each side — include it so the image box isn't clipped.
-    // width: frame(4) + margins(16) = 20; height: frame(4) + margins(16) + spacing(6) + title(14) = 40.
-    setFixedSize(m_box.width() + 20, m_box.height() + 40);
+    // width: frame(4) + margins(16) = 20; height: frame(4) + margins(16) + spacing(6) + header(16) = 42.
+    setFixedSize(m_box.width() + 20, m_box.height() + 42);
     applyPixmap();
 }
 
@@ -73,6 +102,8 @@ void WindowPreviewWidget::setWindow(HWND hwnd, const QString &title, const QImag
     m_title = title;
     m_image = preview;
     m_label->setText(title.isEmpty() ? tr("Untitled") : title);
+    if (m_closeBtn)
+        m_closeBtn->setEnabled(m_hwnd != nullptr);
     applyPixmap();
 }
 

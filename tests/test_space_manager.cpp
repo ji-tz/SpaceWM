@@ -442,6 +442,220 @@ class TestSpaceManager : public QObject {
         thumbs::clearWindowCache();
     }
 
+    // A monitor-handle change (sleep/wake, dock, GPU reset) replaces the
+    // MonitorSpaces wholesale. Entries on the gone handle used to be purged
+    // WITHOUT re-adoption: the window then appeared in NO overview panel —
+    // and stayed stuck cloaked if it was off-space — until it happened to
+    // move or get clicked. Survivors must re-home onto a live monitor.
+    void monitorHandleChangeRehomesAndUncloaksLostWindows()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
+        m->currentIndex = 0;
+        const HMONITOR realH = m->hmon;
+        // rehomeWindow() adopts the monitor physically under the window; first()
+        // sorts by x, so on multi-monitor machines (negative-x secondary) the
+        // window at (10,10) sits elsewhere. Pin it to the monitor under test.
+        ::SetWindowPos(m_hwnd, nullptr, m->physRect.left + 40, m->physRect.top + 40, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // Off-space → cloaked (the stuck-hidden case).
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 1));
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwnd), 1500);
+
+        // Old handle "vanishes": only a fake monitor survives the refresh.
+        MonitorEntry fake;
+        fake.handle = reinterpret_cast<HMONITOR>(quintptr(0x00C0FFEE));
+        sm.applyMonitorEntries({fake});
+
+        // Survived the purge: owned by the live monitor's current space, and
+        // the stale cloak was cleared (visibility restored).
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), fake.handle);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwnd), 1500);
+
+        // Real handles come back — membership must land on the REAL monitor.
+        sm.applyMonitorEntries(monitors::enumerate());
+        auto *back = sm.monitorOf(realH);
+        QVERIFY(back);
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), realH);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), back->currentIndex);
+        QVERIFY(back->spaces[back->currentIndex].windows.contains(m_hwnd));
+
+        sm.untrackWindow(m_hwnd);
+        ::cloak::set(m_hwnd, false);
+    }
+
+    // Refresh with surviving handles must leave ownership and off-space
+    // cloak untouched — recovery only kicks in for vanished handles.
+    void monitorRefreshPreservesOwnershipWhenHandlesSurvive()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 3);
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 2));
+        const HMONITOR realH = m->hmon;
+
+        sm.applyMonitorEntries(monitors::enumerate());
+
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), realH);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 2);
+        // Still off-space → refresh must not have uncloaked it.
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwnd), 1500);
+
+        sm.untrackWindow(m_hwnd);
+        ::cloak::set(m_hwnd, false);
+    }
+
+    // Refresh must NOT sweep untracked desktop windows into management: batch
+    // adoption used to recapture every foreign window per assign (PrintWindow
+    // has no timeout — one hung app froze the whole refresh). Only orphans
+    // (previously owned, shots cached) are re-homed.
+    void monitorRefreshDoesNotSweepUntrackedWindows()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0)); // owned survives below
+
+        // Every foreign manageable window is untracked in this fresh manager.
+        const QVector<HWND> foreign = WindowTracker::snapshotManageableWindows();
+        sm.applyMonitorEntries(monitors::enumerate());
+        for (HWND h : foreign)
+            QVERIFY2(
+                sm.spaceOfWindow(h) == -1,
+                qPrintable(
+                    QStringLiteral("refresh swept untracked window 0x%1").arg(quintptr(h), 0, 16)));
+        // The owned window keeps its membership (no-op refresh path).
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 0);
+
+        sm.untrackWindow(m_hwnd);
+        ::cloak::set(m_hwnd, false);
+    }
+
+    // Cross-monitor move re-homes the OWNED window into the target monitor's
+    // current space — even while it is cloaked (off-space): cloak state must
+    // never strand a window on the monitor it left (main + flow share
+    // SpaceManager::onWindowMoved).
+    void windowMovedRehomesAcrossMonitors()
+    {
+        SpaceManager sm;
+        if (sm.monitors().size() < 2)
+            QSKIP("cross-monitor re-home needs at least 2 monitors");
+        auto *a = sm.monitors().first();
+        auto *b = sm.monitors().last();
+        QVERIFY(a->hmon != b->hmon);
+        ensureSpaces(sm, a, 2);
+
+        RECT before{};
+        ::GetWindowRect(m_hwnd, &before);
+        QVERIFY(sm.assignWindow(m_hwnd, a->hmon, 1)); // off-space → cloaked
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwnd), 1500);
+
+        // Physically move onto monitor B, then deliver the move event.
+        const int cx = (b->physRect.left + b->physRect.right) / 2;
+        const int cy = (b->physRect.top + b->physRect.bottom) / 2;
+        ::SetWindowPos(m_hwnd, nullptr, cx - 150, cy - 100, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE);
+        sm.onWindowMoved(m_hwnd);
+
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), b->hmon);
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), b->currentIndex);
+        // Landed in B's CURRENT space → the stale cloak must be cleared.
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwnd), 1500);
+
+        // Same-monitor repeat is a refresh no-op (ownership unchanged).
+        sm.onWindowMoved(m_hwnd);
+        QCOMPARE(sm.ownerMonitorOf(m_hwnd), b->hmon);
+
+        sm.untrackWindow(m_hwnd);
+        ::cloak::set(m_hwnd, false);
+        ::SetWindowPos(m_hwnd, nullptr, before.left, before.top, 0, 0,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // Cross-monitor drop geometry: the window RECT keeps its screen-relative
+    // position AND size fractions when mapped between monitor rects of any
+    // size (identity for src == dst, input preserved on degenerate rects).
+    void mapRectToMonitorKeepsScreenFractions()
+    {
+        const RECT src{0, 0, 1920, 1080};
+        const RECT win{480, 270, 1440, 810}; // (0.25, 0.25), size 0.5 × 0.5
+
+        // Same-size neighbour: pure translation.
+        RECT m = SpaceManager::mapRectToMonitor(win, src, RECT{1920, 0, 3840, 1080});
+        QCOMPARE(m.left, 1920 + 480);
+        QCOMPARE(m.top, 270);
+        QCOMPARE(m.right, 1920 + 1440);
+        QCOMPARE(m.bottom, 810);
+
+        // Different resolution: 2560×1440 scales size by 4/3 as well.
+        m = SpaceManager::mapRectToMonitor(win, src, RECT{0, 0, 2560, 1440});
+        QCOMPARE(m.left, 640);
+        QCOMPARE(m.top, 360);
+        QCOMPARE(m.right, 1920);
+        QCOMPARE(m.bottom, 1080);
+
+        // Identity: src == dst leaves the rect untouched.
+        m = SpaceManager::mapRectToMonitor(win, src, src);
+        QCOMPARE(m.left, win.left);
+        QCOMPARE(m.top, win.top);
+        QCOMPARE(m.right, win.right);
+        QCOMPARE(m.bottom, win.bottom);
+
+        // Degenerate source rect → input returned unchanged.
+        m = SpaceManager::mapRectToMonitor(win, RECT{10, 10, 10, 500}, RECT{1920, 0, 3840, 1080});
+        QCOMPARE(m.left, win.left);
+        QCOMPARE(m.top, win.top);
+        QCOMPARE(m.right, win.right);
+        QCOMPARE(m.bottom, win.bottom);
+    }
+
+    // Overview cross-monitor drop: moveWindowToMonitor physically relocates
+    // the window onto the target screen with screen-ratio scaled size and
+    // position; a same-monitor call must not touch geometry at all.
+    void moveWindowToMonitorScalesOntoTargetScreen()
+    {
+        SpaceManager sm;
+        if (sm.monitors().size() < 2)
+            QSKIP("cross-monitor proportional move needs at least 2 monitors");
+        auto *a = sm.monitors().first();
+        auto *b = sm.monitors().last();
+        QVERIFY(a->hmon != b->hmon);
+
+        // Park on A at known fractions: pos (12.5%, 12.5%), size 50% × 50%.
+        const RECT aw = a->physRect;
+        const int sw = aw.right - aw.left;
+        const int sh = aw.bottom - aw.top;
+        QVERIFY(sw > 0 && sh > 0);
+        ::SetWindowPos(m_hwnd, nullptr, aw.left + sw / 8, aw.top + sh / 8, sw / 2, sh / 2,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT before{};
+        QVERIFY(::GetWindowRect(m_hwnd, &before));
+        const RECT expect = SpaceManager::mapRectToMonitor(before, aw, b->physRect);
+
+        QVERIFY(sm.moveWindowToMonitor(m_hwnd, b->hmon));
+        RECT after{};
+        QVERIFY(::GetWindowRect(m_hwnd, &after));
+        QCOMPARE(::MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST), b->hmon);
+        // Proportional landing (±4 px: rounding + possible WM_DPICHANGED slack).
+        QVERIFY(qAbs(after.left - expect.left) <= 4);
+        QVERIFY(qAbs(after.top - expect.top) <= 4);
+        QVERIFY(qAbs((after.right - after.left) - (expect.right - expect.left)) <= 4);
+        QVERIFY(qAbs((after.bottom - after.top) - (expect.bottom - expect.top)) <= 4);
+
+        // Same-monitor repeat: geometry must be byte-identical (no SetWindowPos).
+        QVERIFY(sm.moveWindowToMonitor(m_hwnd, b->hmon));
+        RECT again{};
+        QVERIFY(::GetWindowRect(m_hwnd, &again));
+        QCOMPARE(again.left, after.left);
+        QCOMPARE(again.top, after.top);
+        QCOMPARE(again.right, after.right);
+        QCOMPARE(again.bottom, after.bottom);
+
+        // Restore the initTestCase placement for whatever runs next.
+        ::SetWindowPos(m_hwnd, nullptr, 10, 10, 300, 200, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
   private:
     // Grow the monitor to at least n spaces (cold start is 1 — issue #8).
     static void ensureSpaces(SpaceManager &sm, MonitorSpaces *m, int n)

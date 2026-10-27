@@ -17,6 +17,7 @@
 #include <QElapsedTimer>
 #include <QMimeData>
 #include <QProcess>
+#include <QPushButton>
 #include <QSignalSpy>
 
 #include <Windows.h>
@@ -58,9 +59,9 @@ class TestIntegrationFlow : public QObject {
         connect(&m_tracker, &WindowTracker::windowDestroyed, &m_sm,
                 [this](quint64 h) { m_sm.untrackWindow(reinterpret_cast<HWND>(h)); });
         connect(&m_tracker, &WindowTracker::windowMoved, &m_sm, [this](quint64 h) {
-            HWND hwnd = reinterpret_cast<HWND>(h);
-            if (m_sm.spaceOfWindow(hwnd) >= 0)
-                m_sm.refreshWindowAfterUpdate(hwnd);
+            // Same entry as main.cpp — cross-monitor moves re-home (fidelity:
+            // the flow used to only refresh, which main never does).
+            m_sm.onWindowMoved(reinterpret_cast<HWND>(h));
         });
         connect(&m_host, &OverviewHost::spaceChosen, &m_sm, [this](quint64 h, int space) {
             m_sm.switchSpace(reinterpret_cast<HMONITOR>(h), space,
@@ -237,7 +238,8 @@ class TestIntegrationFlow : public QObject {
         QVERIFY(m_allClosedSpy->count() >= 1);
 
         QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
-        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndExpl), 3000);
+        if (explOnPanel())
+            QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndExpl), 3000);
         dumpWebState("step07");
         if (webStableIn(0)) // pre-swap: browser must live on S1 (idx 0)
             QVERIFY(cloak::isCloaked(m_hwndWeb));
@@ -302,7 +304,8 @@ class TestIntegrationFlow : public QObject {
         QCOMPARE(m_monitor->spaces[1].name, m_nameS1);
         // Notepad lives on S2 which moved to index 0 …
         QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceOfWindow(m_hwndNote), 0, 3000);
-        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
+        if (explOnPanel())
+            QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
         if (webStableIn(1)) // post-swap: S1 sits at index 1
             QCOMPARE(m_sm.spaceOfWindow(m_hwndWeb), 1);
         // … and the desktop stayed on S2 (currentIndex followed the move).
@@ -344,7 +347,267 @@ class TestIntegrationFlow : public QObject {
         }
         QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndNote), 3000);
         QCOMPARE(m_sm.spaceOfWindow(m_hwndNote), 0);
-        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
+        if (explOnPanel())
+            QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), 1);
+    }
+
+    // Step 13: a monitor refresh whose handles change must not lose windows —
+    // survivors re-home onto a live monitor's current space (SpaceManager::
+    // applyMonitorEntries purge → re-home), and a window that was OFF-space
+    // (cloaked) before the change becomes visible again instead of staying
+    // stuck hidden until process exit.
+    void step13_monitorRefreshRehomesLostWindows()
+    {
+        // State from step 12: Notepad lives off the current space → cloaked.
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(m_hwndNote), 3000);
+        const HMONITOR realH = m_hmon;
+
+        // 1) Every real handle "vanishes" — only a fake monitor survives.
+        MonitorEntry fake;
+        fake.handle = reinterpret_cast<HMONITOR>(quintptr(0x00C0FFEE));
+        m_sm.applyMonitorEntries({fake});
+
+        // No flow window may fall out of management…
+        for (HWND h : {m_hwndNote, m_hwndExpl, m_hwndWeb}) {
+            if (!h || !::IsWindow(h))
+                continue;
+            QVERIFY2(
+                m_sm.spaceOfWindow(h) >= 0,
+                qPrintable(
+                    QStringLiteral("monitor refresh lost window 0x%1").arg(quintptr(h), 0, 16)));
+        }
+        // …and the previously off-space Notepad is visible again.
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
+
+        // 2) Real handles come back — everyone lands on a LIVE monitor.
+        m_sm.applyMonitorEntries(monitors::enumerate());
+        m_monitor = m_sm.monitorOf(realH); // m_monitors was rebuilt — re-sync
+        QVERIFY(m_monitor);
+        for (HWND h : {m_hwndNote, m_hwndExpl, m_hwndWeb}) {
+            if (!h || !::IsWindow(h))
+                continue;
+            QVERIFY2(m_sm.monitorOf(m_sm.ownerMonitorOf(h)) != nullptr,
+                     "window re-homed onto a monitor that no longer exists");
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!cloak::isCloaked(m_hwndNote), 3000);
+    }
+
+    // Step 14: tile header — title ABOVE the image; × on the right closes the
+    // window via graceful WM_CLOSE without activating the tile, and the strip
+    // drops the dead window through untrack.
+    void step14_tileCloseButtonClosesWindow()
+    {
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        syncPanelMonitor();
+        QTest::qWait(700);
+        QVERIFY(m_sm.overviewOpen());
+
+        // Notepad may sit on any monitor's panel (per-monitor spaces).
+        WindowPreviewWidget *tile = nullptr;
+        OverviewWindow *tilePanel = nullptr;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto *p = qobject_cast<OverviewWindow *>(w);
+            if (!p || !p->isOpen())
+                continue;
+            for (auto *t : p->findChildren<WindowPreviewWidget *>()) {
+                if (t->windowHandle() == m_hwndNote) {
+                    tile = t;
+                    tilePanel = p;
+                    break;
+                }
+            }
+            if (tile)
+                break;
+        }
+        QVERIFY2(tile, "Notepad tile not found in any panel strip");
+        QVERIFY(tilePanel);
+
+        auto *btn = tile->findChild<QPushButton *>(QStringLiteral("CloseButton"));
+        QVERIFY(btn && btn->isEnabled());
+        QSignalSpy activated(tile, &WindowPreviewWidget::activated);
+
+        QTest::mouseClick(btn, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!::IsWindow(m_hwndNote), 5000);
+        QCOMPARE(activated.count(), 0);
+
+        // The strip rebuilds without the dead window (windowUntracked).
+        QTRY_VERIFY_WITH_TIMEOUT(
+            [&] {
+                for (auto *t : tilePanel->findChildren<WindowPreviewWidget *>()) {
+                    if (t->windowHandle() == m_hwndNote)
+                        return false;
+                }
+                return true;
+            }(),
+            3000);
+
+        m_hwndNote = nullptr; // closed on purpose — cleanup skips it
+    }
+
+    // Step 15: cloak backend contract — after a REAL switch hides a REAL
+    // foreign window, the hide must have gone through the shell
+    // IApplicationView::SetCloak backend: the only one that keeps the
+    // window's taskbar button (the DWM/ShowWindow fallbacks silently drop
+    // it — regression guarded in test_cloak too).
+    void step15_cloakHidesViaShellBackend()
+    {
+        if (!cloak::shellBackendAvailable())
+            QSKIP("shell IApplicationViewCollection unavailable — cannot pin cloak backend");
+
+        // Step14 left the preview open with Notepad closed (its premise).
+        OverviewWindow *panel = m_host.activePanel();
+        QVERIFY(panel && panel->isOpen());
+        syncPanelMonitor();
+
+        // Step13's monitor-handle refresh rebuilt monitors with the default
+        // single space — a second one is needed for a switch to hide anything.
+        if (m_sm.spaceCount(m_hmon) < 2) {
+            auto *btn = panel->findChild<AddSpaceButton *>();
+            QVERIFY(btn);
+            const QPoint c = btn->rect().center();
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(c), btn->mapToGlobal(c),
+                              btn->mapToGlobal(c), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(btn, &press);
+            QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceCount(m_hmon), 2, 3000);
+        }
+
+        // A flow window in the CURRENT space of the PANEL monitor is what the
+        // switch below hides (per-monitor spaces — same guard style as
+        // explOnPanel/webStableIn for windows parked on the other display).
+        HWND target = nullptr;
+        for (HWND h : {m_hwndExpl, m_hwndWeb}) {
+            if (h && ::IsWindow(h) && m_sm.ownerMonitorOf(h) == m_hmon &&
+                m_sm.spaceOfWindow(h) == m_monitor->currentIndex) {
+                target = h;
+                break;
+            }
+        }
+        if (!target) {
+            QWARN("no flow window in the panel monitor's current space — "
+                  "skipping shell-backend assert");
+            return;
+        }
+
+        const int cur = m_monitor->currentIndex;
+        const int other = cur == 0 ? 1 : 0;
+        auto cards = visibleCards(panel);
+        QCOMPARE(cards.size(), 2);
+
+        QSignalSpy chosen(&m_host, &OverviewHost::spaceChosen);
+        clickWidget(cards[other]);
+        QTRY_COMPARE_WITH_TIMEOUT(chosen.count(), 1, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(m_monitor->currentIndex, other, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 5000);
+
+        // The switch hid `target` for real — and via the SHELL backend.
+        QTRY_VERIFY_WITH_TIMEOUT(cloak::isCloaked(target), 3000);
+        QCOMPARE(cloak::backendOf(target), cloak::Backend::ImmersiveView);
+    }
+
+    // Step 16: cross-monitor drop — dropping a window onto ANOTHER display's
+    // space card must re-home ownership there AND physically move the window
+    // onto that display, size/position scaled by the screen ratio (before
+    // this, the window stayed stranded on its original monitor).
+    void step16_crossMonitorDropMovesWindowWithScreenRatio()
+    {
+        if (m_sm.monitors().size() < 2)
+            QSKIP("cross-monitor drop needs at least 2 monitors");
+
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        syncPanelMonitor();
+        QTest::qWait(700);
+        QVERIFY(m_sm.overviewOpen());
+
+        // A live flow window owned by the PANEL monitor (the drop source).
+        HWND hwnd = nullptr;
+        for (HWND h : {m_hwndExpl, m_hwndWeb}) {
+            if (h && ::IsWindow(h) && m_sm.ownerMonitorOf(h) == m_hmon) {
+                hwnd = h;
+                break;
+            }
+        }
+        if (!hwnd)
+            QSKIP("no flow window on the panel monitor — nothing to drag across");
+
+        // The OTHER display's panel is the drop target (cross-screen DnD).
+        OverviewWindow *dstPanel = nullptr;
+        for (MonitorSpaces *mon : m_sm.monitors()) {
+            if (mon->hmon == m_hmon)
+                continue;
+            if (OverviewWindow *p = m_host.panelFor(mon->hmon); p && p->isOpen()) {
+                dstPanel = p;
+                break;
+            }
+        }
+        QVERIFY2(dstPanel, "no overview panel on the second monitor");
+        const HMONITOR dstMon = dstPanel->targetMonitor();
+
+        RECT srcPhys{}, dstPhys{};
+        QVERIFY(monitors::physRectOf(m_hmon, &srcPhys));
+        QVERIFY(monitors::physRectOf(dstMon, &dstPhys));
+        const int sw = srcPhys.right - srcPhys.left;
+        const int sh = srcPhys.bottom - srcPhys.top;
+        QVERIFY(sw > 0 && sh > 0);
+
+        // Park on the source screen at known fractions: (12.5%, 12.5%), 50% × 50%.
+        ::SetWindowPos(hwnd, nullptr, srcPhys.left + sw / 8, srcPhys.top + sh / 8, sw / 2, sh / 2,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT before{};
+        QVERIFY(::GetWindowRect(hwnd, &before));
+        const RECT expect = SpaceManager::mapRectToMonitor(before, srcPhys, dstPhys);
+        // placeWindowInSpace must not jump either display's viewed space.
+        const int srcCur = m_monitor->currentIndex;
+        MonitorSpaces *dstMonitor = m_sm.monitorOf(dstMon);
+        QVERIFY(dstMonitor);
+        const int dstCur = dstMonitor->currentIndex;
+
+        // Real DnD payload onto the target display's first card (same path as
+        // step05 — only the PANEL differs, which is what makes it cross-screen).
+        const auto cards = visibleCards(dstPanel);
+        QVERIFY(!cards.isEmpty());
+        SpaceCardWidget *target = cards.first();
+        const int targetSpace = target->spaceIndex();
+        QVERIFY(targetSpace >= 0);
+
+        QByteArray payload;
+        QDataStream ds(&payload, QIODevice::WriteOnly);
+        ds << quint64(hwnd);
+        QMimeData mime;
+        mime.setData(WindowPreviewWidget::kMimeType, payload);
+
+        const QPoint c = target->rect().center();
+        QDragEnterEvent enter(c, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &enter);
+        QVERIFY2(enter.isAccepted(), "cross-monitor space card rejected the drag");
+        QDropEvent drop(c, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &drop);
+        QVERIFY(drop.isAccepted());
+
+        // Ownership follows the drop…
+        QTRY_VERIFY_WITH_TIMEOUT(
+            m_sm.ownerMonitorOf(hwnd) == dstMon && m_sm.spaceOfWindow(hwnd) == targetSpace, 3000);
+        // …and the window PHYSICALLY lands on the target screen…
+        QTRY_VERIFY_WITH_TIMEOUT(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == dstMon,
+                                 3000);
+        // …with size/position scaled by the screen ratio (±4 px slack).
+        RECT after{};
+        QVERIFY(::GetWindowRect(hwnd, &after));
+        QVERIFY2(
+            qAbs(after.left - expect.left) <= 4,
+            qPrintable(QStringLiteral("x off: got %1 want %2").arg(after.left).arg(expect.left)));
+        QVERIFY2(
+            qAbs(after.top - expect.top) <= 4,
+            qPrintable(QStringLiteral("y off: got %1 want %2").arg(after.top).arg(expect.top)));
+        QVERIFY2(qAbs((after.right - after.left) - (expect.right - expect.left)) <= 4,
+                 "width not scaled to screen ratio");
+        QVERIFY2(qAbs((after.bottom - after.top) - (expect.bottom - expect.top)) <= 4,
+                 "height not scaled to screen ratio");
+
+        // Neither display's viewed space jumped on drop.
+        QCOMPARE(m_monitor->currentIndex, srcCur);
+        QCOMPARE(dstMonitor->currentIndex, dstCur);
     }
 
     void cleanupTestCase()
@@ -423,6 +686,23 @@ class TestIntegrationFlow : public QObject {
                 .arg(cloak::isCloaked(m_hwndWeb) ? 1 : 0)
                 .arg(::IsWindowVisible(m_hwndWeb) ? 1 : 0)
                 .arg(m_monitor->currentIndex)));
+    }
+
+    // Explorer windows land wherever the shell decides (cursor/taskbar —
+    // varies run to run): like webStableIn, membership/cloak asserts are only
+    // meaningful when it sits on the PANEL's monitor.
+    bool explOnPanel()
+    {
+        if (!m_hwndExpl || !::IsWindow(m_hwndExpl)) {
+            QWARN("explorer window died mid-flow — skipping explorer asserts");
+            return false;
+        }
+        if (m_sm.ownerMonitorOf(m_hwndExpl) != m_hmon) {
+            QWARN("explorer sits on another display — its monitor's spaces are "
+                  "independent; skipping explorer asserts");
+            return false;
+        }
+        return true;
     }
 
     // A browser assertion is only meaningful when the window lives on the

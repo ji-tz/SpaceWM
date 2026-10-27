@@ -103,27 +103,11 @@ int main(int argc, char *argv[])
                      [&](quint64 h) { manager.trackWindow(reinterpret_cast<HWND>(h)); });
     QObject::connect(&tracker, &WindowTracker::windowDestroyed, &manager,
                      [&](quint64 h) { manager.untrackWindow(reinterpret_cast<HWND>(h)); });
-    // When a window moves across monitors, re-home it to the new monitor's current space.
-    QObject::connect(&tracker, &WindowTracker::windowMoved, &manager, [&](quint64 h) {
-        HWND hwnd = reinterpret_cast<HWND>(h);
-        if (!WindowTracker::isManageable(hwnd))
-            return;
-        HMONITOR target = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        auto *m = manager.monitorOf(target);
-        if (!m)
-            return;
-        const int owned = manager.spaceOfWindow(hwnd);
-        if (owned < 0) {
-            manager.trackWindow(hwnd);
-            return;
-        }
-        if (manager.ownerMonitorOf(hwnd) != target) {
-            manager.assignWindow(hwnd, target, m->currentIndex);
-        } else {
-            // Same monitor: size/position changed — re-render that space preview.
-            manager.refreshWindowAfterUpdate(hwnd);
-        }
-    });
+    // When a window moves across monitors, re-home it to the new monitor's
+    // current space (shared entry with the integration flow — see
+    // SpaceManager::onWindowMoved).
+    QObject::connect(&tracker, &WindowTracker::windowMoved, &manager,
+                     [&](quint64 h) { manager.onWindowMoved(reinterpret_cast<HWND>(h)); });
 
     // Taskbar / Alt+Tab while overview is open → land on the CURRENT space
     // and close the overlay so the app is visible on the live desktop.
