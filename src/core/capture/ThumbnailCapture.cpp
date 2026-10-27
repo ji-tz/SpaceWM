@@ -436,6 +436,12 @@ void invalidateWindow(HWND hwnd)
         g_windowShots.remove(hwnd);
 }
 
+QImage cachedWindowShot(HWND hwnd, const QSize &maxSize)
+{
+    const auto it = g_windowShots.constFind(hwnd);
+    return it == g_windowShots.constEnd() ? QImage() : scaleToFit(it.value(), maxSize);
+}
+
 bool refreshWindow(HWND hwnd)
 {
     if (!hwnd || !::IsWindow(hwnd) || ::IsIconic(hwnd))

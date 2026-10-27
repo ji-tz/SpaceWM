@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <dwmapi.h>
+#include <QScopedValueRollback>
+#include "core/log/Log.h"
 
 namespace {
 constexpr int durationMs = 520;
@@ -133,19 +135,37 @@ void SwitchFlashOverlay::paintEvent(QPaintEvent *)
     }
 }
 
-SpaceSwitchAnimator::SpaceSwitchAnimator(SpaceManager *manager, QObject *parent)
+SpaceSwitchAnimator::SpaceSwitchAnimator(SpaceManager *manager, QObject *parent,
+                                         MonitorCapture capture)
     : QObject(parent),
-      m_manager(manager)
+      m_manager(manager),
+      m_capture(capture ? std::move(capture) : MonitorCapture([](const RECT &rect) {
+          return thumbs::captureMonitor(rect, QSize());
+      }))
 {
+    m_taskbarTimer.setSingleShot(true);
+    m_taskbarTimer.setInterval(600);
+    connect(&m_taskbarTimer, &QTimer::timeout, this, &SpaceSwitchAnimator::releaseTaskbarCovers);
     connect(manager, &SpaceManager::requestSwitchCover, this, [this](quint64 handle, int from) {
         auto *m = m_manager->monitorOf(reinterpret_cast<HMONITOR>(handle));
         if (!m || from < 0 || from >= m->spaces.size())
             return;
+        const quintptr key = quintptr(handle);
+        if (m_taskbarCovers.value(key, -1) == from) {
+            // Retain the clean PRE-click frame. Taking another screen copy now
+            // could include the app Explorer has just exposed.
+            m_taskbarCovers.remove(key);
+            releaseTaskbarCovers();
+            return;
+        }
         // One full-resolution monitor copy is all that precedes the cover.
         // Do not rebuild a space or capture individual windows on this path.
         // A repeated switch can capture the still-visible previous animation;
         // overview itself never requests a switch cover.
-        QImage source = thumbs::captureMonitor(m->physRect, QSize());
+        // Without a successful pre-click cover (Alt+Tab, timeout), foreground
+        // notifications arrive too late to trust live monitor pixels.
+        QImage source = m_manager->foregroundSwitchInProgress() ? m->spaces[from].screenshot
+                                                                : m_capture(m->physRect);
         if (source.isNull())
             source = m->spaces[from].screenshot;
         thumbs::setScreenSamplingEnabled(false);
@@ -164,6 +184,61 @@ SpaceSwitchAnimator::SpaceSwitchAnimator(SpaceManager *manager, QObject *parent)
                 overlay->play(m->geometry, m->physRect, shots, from, to, direction);
             });
     connect(manager, &SpaceManager::monitorLayoutChanged, this, &SpaceSwitchAnimator::stopAll);
+}
+
+bool SpaceSwitchAnimator::prepareTaskbarSwitch()
+{
+    if (m_preparingTaskbar || m_manager->overviewOpen())
+        return false;
+    if (!m_taskbarCovers.isEmpty()) {
+        m_taskbarTimer.start(); // a long press is protected again on release
+        return true;
+    }
+    for (auto *overlay : m_overlays)
+        if (overlay->isPlaying())
+            return false;
+    QScopedValueRollback<bool> preparing(m_preparingTaskbar, true);
+    QElapsedTimer timer;
+    timer.start();
+    QHash<quintptr, QImage> sources;
+    for (auto *mon : m_manager->monitors()) {
+        bool hasOtherWindows = false;
+        for (int i = 0; i < mon->spaces.size(); ++i)
+            if (i != mon->currentIndex && m_manager->spaceHasWindows(mon->hmon, i))
+                hasOtherWindows = true;
+        if (!hasOtherWindows)
+            continue;
+        QImage source = m_capture(mon->physRect);
+        if (source.isNull())
+            source = mon->spaces[mon->currentIndex].screenshot;
+        sources.insert(quintptr(mon->hmon), source);
+        m_taskbarCovers.insert(quintptr(mon->hmon), mon->currentIndex);
+    }
+    // Capture all candidates before any overlay becomes visible.
+    for (auto it = sources.constBegin(); it != sources.constEnd(); ++it) {
+        auto *mon = m_manager->monitorOf(reinterpret_cast<HMONITOR>(it.key()));
+        if (mon)
+            overlayFor(quint64(it.key()))->cover(mon->geometry, mon->physRect, it.value());
+    }
+    if (sources.isEmpty())
+        return false;
+    thumbs::setScreenSamplingEnabled(false);
+    m_taskbarTimer.start();
+    spacelog::info(QStringLiteral("taskbar pre-activation cover monitors=%1 ms=%2")
+                       .arg(sources.size())
+                       .arg(timer.elapsed()));
+    return true;
+}
+
+void SpaceSwitchAnimator::releaseTaskbarCovers()
+{
+    m_taskbarTimer.stop();
+    const auto pending = m_taskbarCovers;
+    m_taskbarCovers.clear();
+    for (auto it = pending.constBegin(); it != pending.constEnd(); ++it)
+        if (auto *overlay = m_overlays.value(it.key()))
+            overlay->stop();
+    updateSampling();
 }
 
 SwitchFlashOverlay *SpaceSwitchAnimator::overlayFor(quint64 handle)
@@ -198,6 +273,8 @@ void SpaceSwitchAnimator::updateSampling()
 
 void SpaceSwitchAnimator::stopAll()
 {
+    m_taskbarTimer.stop();
+    m_taskbarCovers.clear();
     for (auto *overlay : m_overlays)
         overlay->stop();
     updateSampling();

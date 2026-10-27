@@ -12,7 +12,7 @@
 class FirstFrameProbe : public QObject {
   public:
     bool sawShow = false;
-    bool darkAtShow = false;
+    bool coveredAtShow = false;
     bool eventFilter(QObject *object, QEvent *event) override
     {
         if (event->type() == QEvent::Show) {
@@ -22,8 +22,8 @@ class FirstFrameProbe : public QObject {
             auto *scroll = w->findChild<QWidget *>(QStringLiteral("WindowScroll"));
             auto *effect = qobject_cast<QGraphicsOpacityEffect *>(panel->graphicsEffect());
             sawShow = true;
-            darkAtShow = w->windowOpacity() == 1.0 && effect && effect->opacity() == 0.0 &&
-                         strip->isHidden() && scroll->isHidden();
+            coveredAtShow = w->windowOpacity() == 1.0 && effect && effect->opacity() == 0.0 &&
+                            strip->isHidden() && scroll->isHidden();
         }
         return false;
     }
@@ -264,10 +264,10 @@ class TestOverview : public QObject {
         QTRY_VERIFY_WITH_TIMEOUT(!w.isDismissing(), 3000);
     }
 
-    // Hotkey open must slam the black cover down first (window opacity stays
+    // Hotkey open must slam the opaque entry cover down first (window opacity stays
     // 1 — the veil itself never dips transparent), with the panel content
-    // held at 0 and only the enter animation brightening it on top of black.
-    void maskOpaqueContentFadesInOnTop()
+    // held at 0 and only the enter animation brightening it on top of the backdrop.
+    void frozenDesktopStaysOpaqueWhileContentFadesIn()
     {
         SpaceManager sm;
         OverviewWindow w(&sm);
@@ -279,7 +279,7 @@ class TestOverview : public QObject {
         w.installEventFilter(&probe);
         w.beginPanelOpen(m->hmon);
         QVERIFY(probe.sawShow);
-        QVERIFY2(probe.darkAtShow, "mask/content state must be ready BEFORE Show");
+        QVERIFY2(probe.coveredAtShow, "opaque entry/content state must be ready BEFORE Show");
         QVERIFY(w.isOpen());
         QCOMPARE(w.windowOpacity(), 1.0);
 

@@ -28,16 +28,9 @@ class OverviewWindow : public QWidget {
     void assignMonitor(HMONITOR hmon) { m_hmon = hmon; }
     void openOnMonitor(HMONITOR hmon, bool takeFocus = true);
 
-    // Host open sequence:
-    //   1) beginPanelOpen — show the dark mask FIRST (content held at
-    //      opacity 0; repaint() flushes the black cover before slow work)
-    //   2) SpaceManager overview-open + refresh/warm/build behind the mask
-    //   3) phased populate, applied to ALL panels lockstep by the host so one
-    //      monitor's heavy work never delays the other's reveal:
-    //        populateCards → populateTiles → startPanelEnterAnimation
-    //      (single-panel path: populateOpenContent() runs the three phases;
-    //      the enter animation brightens m_root 0→1 on the opaque mask).
-    void beginPanelOpen(HMONITOR hmon, bool takeFocus = true);
+    // Capture all entry backdrops before showing any host panels. Each panel
+    // holds its frozen desktop until its current-space content is ready.
+    void beginPanelOpen(HMONITOR hmon, bool takeFocus = true, const QImage &backdrop = QImage());
     void populateCards();
     void populateTiles();
     void startPanelEnterAnimation();
@@ -59,6 +52,8 @@ class OverviewWindow : public QWidget {
     int selectedIndex() const { return m_selected; }
     int cardCount() const { return m_cards.size(); }
     int windowPreviewCount() const { return m_windowPreviews.size(); }
+    bool isSpaceStripExpanded() const { return m_spaceStripExpanded; }
+    bool isContentReady() const { return m_contentReady; }
     // Image box / hwnd of the i-th bottom tile (tests: never exceed real size).
     QSize windowPreviewBoxSize(int i) const;
     HWND windowPreviewHandle(int i) const;
@@ -88,15 +83,19 @@ class OverviewWindow : public QWidget {
     void spacePreviewed(int spaceIndex);
     // Clicked a bottom tile: will switch to that window's space and focus it.
     void windowActivated(quint64 hwnd);
+    void spacePreparationRequested(int spaceIndex);
 
   protected:
     void keyPressEvent(QKeyEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
 
   private:
     void rebuildCards();
+    void setSpaceStripExpanded(bool expanded);
+    bool isSpaceStripWidget(QObject *object) const;
     void rebuildWindowPreviews();
     void refreshCardBadges();
     void refreshCardScreenshot(int index);
@@ -129,16 +128,20 @@ class OverviewWindow : public QWidget {
     bool m_exitStarted = false;
     bool m_windowDragActive = false;
     bool m_windowRebuildPending = false;
+    bool m_spaceStripExpanded = false;
+    bool m_contentReady = false;
+    QImage m_entryBackdrop;
+    QImage m_wallpaper;
+    QRect m_backdropSource;
     int m_selected = 0;
     int m_originSpace = 0;
     int m_pendingCommit = -1;
     int m_holdMs = 1000;
     HWND m_frontHwnd = nullptr; // focus after commit close
     QTimer *m_holdTimer = nullptr;
+    QTimer *m_stripCollapseTimer = nullptr;
 
     QWidget *m_root = nullptr;
-    QLabel *m_header = nullptr;
-    QLabel *m_hint = nullptr;
     QHBoxLayout *m_cardRow = nullptr;
     QWidget *m_spaceStripHost = nullptr;
     AddSpaceButton *m_addSpaceBtn = nullptr;

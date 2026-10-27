@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <Windows.h>
+#include <functional>
 
 class SpaceManager;
 
@@ -43,14 +44,29 @@ class SwitchFlashOverlay : public QWidget {
 class SpaceSwitchAnimator : public QObject {
     Q_OBJECT
   public:
-    explicit SpaceSwitchAnimator(SpaceManager *manager, QObject *parent = nullptr);
+    using MonitorCapture = std::function<QImage(const RECT &)>;
+    explicit SpaceSwitchAnimator(SpaceManager *manager, QObject *parent = nullptr,
+                                 MonitorCapture capture = {});
     ~SpaceSwitchAnimator() override;
     void stopAll();
     bool isPlaying(HMONITOR monitor) const;
+    // Runs synchronously on the GUI thread before Explorer receives the click.
+    // False when overview/another animation already covers the desktop.
+    bool prepareTaskbarSwitch();
+    void finishTaskbarPress() { releaseTaskbarCovers(); }
+    bool hasTaskbarCover(HMONITOR monitor) const
+    {
+        return m_taskbarCovers.contains(quintptr(monitor));
+    }
 
   private:
     SwitchFlashOverlay *overlayFor(quint64 handle);
     void updateSampling();
+    void releaseTaskbarCovers();
     SpaceManager *m_manager;
     QHash<quintptr, SwitchFlashOverlay *> m_overlays;
+    QHash<quintptr, int> m_taskbarCovers;
+    MonitorCapture m_capture;
+    QTimer m_taskbarTimer;
+    bool m_preparingTaskbar = false;
 };

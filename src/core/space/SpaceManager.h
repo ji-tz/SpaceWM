@@ -62,6 +62,7 @@ class SpaceManager : public QObject {
     // Foreground activation follows the existing owner; never moves the window.
     // Returns true for a live, non-minimized managed window.
     bool onWindowForeground(HWND hwnd);
+    bool foregroundSwitchInProgress() const { return m_foregroundSwitch; }
 
     // Pure proportional map of a physical window RECT from src monitor rect
     // to dst monitor rect: position and size keep their screen-relative
@@ -91,7 +92,8 @@ class SpaceManager : public QObject {
 
     // Composite wallpaper (full-bleed) + cached window shots in Z-order.
     // Call only when that space's membership changes (or once on overview open).
-    void rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize &maxSize = QSize(640, 360));
+    void rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize &maxSize = QSize(640, 360),
+                                bool cachedOnly = false);
 
     // Overview entry: rebuild EVERY space on EVERY monitor once, then cache.
     void buildAllSpacePreviews();
@@ -106,6 +108,9 @@ class SpaceManager : public QObject {
     // Behind the masks: uncloak every managed window, then fill missing shots.
     // Close re-cloaks via setOverviewOpen(false).
     void warmWindowShots();
+    // Prepare only this space behind its overview cover. Current spaces refresh;
+    // off-space work fills missing shots while retaining known-good caches.
+    void prepareOverviewSpace(HMONITOR hmon, int index, bool refresh);
 
     // Drop cached shot for hwnd and re-render its owner space (SHOW/resize).
     void refreshWindowAfterUpdate(HWND hwnd);
@@ -154,6 +159,7 @@ class SpaceManager : public QObject {
     QHash<HWND, Owner> m_owner;
 
     bool m_overviewOpen = false;
+    bool m_foregroundSwitch = false;
     bool m_animationEnabled = true;
     // Cold start: every monitor begins with exactly one space (issue #8).
     // Space lists are never persisted — added spaces are session-only.

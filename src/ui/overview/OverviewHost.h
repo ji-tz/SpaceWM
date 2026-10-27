@@ -25,12 +25,22 @@ class OverviewHost : public QObject {
   signals:
     void spaceChosen(quint64 hmon, int spaceIndex);
     void allClosed();
+    // Current-space content is ready; emitted in user-visible priority order.
+    void panelReady(quint64 hmon, int spaceIndex);
 
   private:
     void ensurePanels();
     void onPanelClosed(int chosen);
     void startExitAllAndFinish();
     void finishIfAllQuiet();
+    void processNextPreparation(int generation);
+    void prioritizeSpace(HMONITOR hmon, int index);
+    struct Preparation {
+        HMONITOR hmon = nullptr;
+        int space = -1;
+        bool reveal = false;
+    };
+    QVector<Preparation> m_preparations;
 
     SpaceManager *m_manager = nullptr;
     QVector<OverviewWindow *> m_panels;

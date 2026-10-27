@@ -70,7 +70,45 @@ int idToAction(int id)
 }
 
 HHOOK g_llHookHandle = nullptr;
+HHOOK g_mouseHookHandle = nullptr;
+std::atomic<HWND> g_taskbarBridge{nullptr};
+std::atomic<bool> g_taskbarGuardEnabled{false};
 HotkeyManager *g_manager = nullptr;
+
+LRESULT CALLBACK taskbarBridgeProc(HWND hwnd, UINT message, WPARAM deadline, LPARAM param)
+{
+    if (message == HotkeyManager::TaskbarPressMessage) {
+        if (g_manager)
+            g_manager->notifyTaskbarPress(ULONGLONG(deadline));
+        return 0;
+    }
+    return ::DefWindowProcW(hwnd, message, deadline, param);
+}
+
+LRESULT CALLBACK llTaskbarMouseProc(int code, WPARAM message, LPARAM data)
+{
+    if (code == HC_ACTION && g_taskbarGuardEnabled.load() &&
+        (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)) {
+        const auto *mouse = reinterpret_cast<const MSLLHOOKSTRUCT *>(data);
+        const HWND root = ::GetAncestor(::WindowFromPoint(mouse->pt), GA_ROOT);
+        wchar_t className[64]{};
+        ::GetClassNameW(root, className, 64);
+        if (wcscmp(className, L"Shell_TrayWnd") == 0 ||
+            wcscmp(className, L"Shell_SecondaryTrayWnd") == 0) {
+            if (HWND bridge = g_taskbarBridge.load()) {
+                // Complete the GUI cover BEFORE handing the original click to
+                // Explorer. A bounded wait keeps both LL hooks responsive.
+                DWORD_PTR result = 0;
+                constexpr UINT budgetMs = 150;
+                ::SendMessageTimeoutW(bridge, HotkeyManager::TaskbarPressMessage,
+                                      WPARAM(::GetTickCount64() + budgetMs), 0,
+                                      SMTO_ABORTIFHUNG | SMTO_BLOCK, budgetMs, &result);
+            }
+        }
+    }
+    // Always pass through the real click, including on timeout/failure.
+    return ::CallNextHookEx(g_mouseHookHandle, code, message, data);
+}
 
 // --- hook-thread shared state (ctor installs the hook on its own thread) ---
 std::atomic<bool> g_hookReady{false};
@@ -368,6 +406,14 @@ HotkeyManager::HotkeyManager(QObject *parent)
     if (qApp)
         qApp->installNativeEventFilter(this);
     g_manager = this;
+    WNDCLASSW bridgeClass{};
+    bridgeClass.lpfnWndProc = taskbarBridgeProc;
+    bridgeClass.hInstance = ::GetModuleHandleW(nullptr);
+    bridgeClass.lpszClassName = L"SpaceWMTaskbarInputBridge";
+    ::RegisterClassW(&bridgeClass);
+    m_taskbarBridge = ::CreateWindowExW(0, bridgeClass.lpszClassName, L"", 0, 0, 0, 0, 0,
+                                        HWND_MESSAGE, nullptr, bridgeClass.hInstance, nullptr);
+    g_taskbarBridge.store(m_taskbarBridge);
 
     // Install the LL hook ON ITS OWN THREAD: Windows silently removes hooks
     // whose installer thread stops answering within LowLevelHooksTimeout,
@@ -380,6 +426,10 @@ HotkeyManager::HotkeyManager(QObject *parent)
     QObject::connect(m_hookThread, &QThread::started, []() {
         g_llHookHandle =
             SetWindowsHookExW(WH_KEYBOARD_LL, llKeyboardProc, GetModuleHandleW(nullptr), 0);
+        g_mouseHookHandle =
+            SetWindowsHookExW(WH_MOUSE_LL, llTaskbarMouseProc, GetModuleHandleW(nullptr), 0);
+        spacelog::info(g_mouseHookHandle ? QStringLiteral("LL taskbar mouse hook installed")
+                                         : QStringLiteral("LL taskbar mouse hook FAILED"));
         spacelog::info(g_llHookHandle
                            ? QStringLiteral("LL keyboard hook installed (hook thread)")
                            : QStringLiteral("LL keyboard hook FAILED — RegisterHotKey fallback"));
@@ -392,6 +442,8 @@ HotkeyManager::HotkeyManager(QObject *parent)
 
 HotkeyManager::~HotkeyManager()
 {
+    g_taskbarGuardEnabled.store(false);
+    g_taskbarBridge.store(nullptr);
     unregisterAll();
     // Stop new callbacks, join the hook thread, THEN free shared state —
     // an in-flight callback runs on the hook thread and must not observe a
@@ -399,6 +451,10 @@ HotkeyManager::~HotkeyManager()
     if (g_llHookHandle) {
         UnhookWindowsHookEx(g_llHookHandle);
         g_llHookHandle = nullptr;
+    }
+    if (g_mouseHookHandle) {
+        UnhookWindowsHookEx(g_mouseHookHandle);
+        g_mouseHookHandle = nullptr;
     }
     if (m_hookThread) {
         m_hookThread->quit();
@@ -416,6 +472,19 @@ HotkeyManager::~HotkeyManager()
     }
     if (qApp)
         qApp->removeNativeEventFilter(this);
+    if (m_taskbarBridge)
+        ::DestroyWindow(m_taskbarBridge);
+}
+
+void HotkeyManager::setTaskbarGuardEnabled(bool enabled)
+{
+    g_taskbarGuardEnabled.store(enabled);
+}
+
+void HotkeyManager::notifyTaskbarPress(ULONGLONG deadline)
+{
+    if (g_taskbarGuardEnabled.load() && ::GetTickCount64() < deadline)
+        emit taskbarPressed();
 }
 
 QString HotkeyManager::defaultSequence(int action)

@@ -12,6 +12,7 @@
 #include "ui/preview/AddSpaceButton.h"
 #include "ui/preview/SpaceCardWidget.h"
 #include "ui/preview/WindowPreviewWidget.h"
+#include "hotkeys/HotkeyManager.h"
 
 #include <QDataStream>
 #include <QDir>
@@ -832,6 +833,93 @@ class TestIntegrationFlow : public QObject {
         disconnect(connection);
         QVERIFY(verified);
         QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+    }
+
+    void step23_currentWindowsBeforeExpandedSpaces()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int current = m_sm.currentSpaceIndex(mon);
+        m_host.openAll();
+        auto *panel = m_host.panelFor(mon);
+        QVERIFY(panel && panel->isOpen());
+        QTRY_VERIFY(!panel->isAnimating());
+        const QPoint bottom(panel->width() / 2, panel->height() - 40);
+        QMouseEvent leaveStrip(QEvent::MouseMove, bottom, panel->mapToGlobal(bottom), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(panel, &leaveStrip);
+        QTRY_VERIFY(!panel->isSpaceStripExpanded());
+        QCOMPARE(panel->selectedIndex(), current);
+        for (int i = 0; i < panel->windowPreviewCount(); ++i)
+            QCOMPARE(m_sm.spaceOfWindow(panel->windowPreviewHandle(i)), current);
+        auto *strip = panel->findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(strip);
+        const int compactHeight = strip->height();
+        const QPoint top(panel->width() / 2, 2);
+        QMouseEvent enterStrip(QEvent::MouseMove, top, panel->mapToGlobal(top), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(panel, &enterStrip);
+        QTRY_VERIFY(panel->isSpaceStripExpanded());
+        QTRY_VERIFY(strip->height() > compactHeight);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), current);
+        m_host.closeAll(false);
+        QTRY_VERIFY(!m_sm.overviewOpen());
+    }
+
+    void step24_currentMonitorPreparedBeforeOtherSpaces()
+    {
+        m_host.openAll();
+        auto *active = m_host.activePanel();
+        QVERIFY(active && active->isContentReady());
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        for (auto *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QVERIFY(panel && panel->isVisible());
+            if (panel != active)
+                QVERIFY(!panel->isContentReady());
+        }
+        QCOMPARE(active->selectedIndex(), m_sm.currentSpaceIndex(active->targetMonitor()));
+        for (auto *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QTRY_VERIFY_WITH_TIMEOUT(panel->isContentReady(), 10000);
+        }
+        m_host.closeAll(false);
+        QTRY_VERIFY(!m_sm.overviewOpen());
+        QVERIFY(thumbs::screenSamplingEnabled());
+    }
+
+    void step25_taskbarPreactivationCoverKeepsOriginalFrame()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        m_sm.switchSpace(mon, (owned + 1) % m_sm.spaceCount(mon), false);
+        int captures = 0;
+        SpaceSwitchAnimator animation(&m_sm, nullptr, [&](const RECT &rect) {
+            ++captures;
+            return thumbs::captureMonitor(rect, QSize());
+        });
+        HotkeyManager input;
+        input.setTaskbarGuardEnabled(true);
+        connect(&input, &HotkeyManager::taskbarPressed, &animation,
+                [&]() { animation.prepareTaskbarSwitch(); });
+        // The native bridge used by the mouse hook completes before returning
+        // control to Explorer. Physical taskbar hit-testing remains manual QA.
+        ::SendMessageW(input.taskbarBridgeWindow(), HotkeyManager::TaskbarPressMessage,
+                       WPARAM(::GetTickCount64() + 1000), 0);
+        QVERIFY(animation.hasTaskbarCover(mon));
+        QVERIFY(animation.isPlaying(mon));
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        const int preActivationCaptures = captures;
+        QVERIFY(preActivationCaptures > 0);
+        QVERIFY(cloak::set(m_hwndExpl, false));
+        QVERIFY(m_sm.onWindowForeground(m_hwndExpl));
+        QCOMPARE(captures, preActivationCaptures);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(thumbs::screenSamplingEnabled());
     }
 
     void cleanupTestCase()

@@ -11,6 +11,7 @@
 #include <QElapsedTimer>
 #include <QPainter>
 #include <QPoint>
+#include <QScopedValueRollback>
 
 #include <algorithm>
 #include <cmath>
@@ -260,6 +261,26 @@ void SpaceManager::warmWindowShots()
     }
 }
 
+void SpaceManager::prepareOverviewSpace(HMONITOR hmon, int index, bool refresh)
+{
+    auto *m = monitorOf(hmon);
+    if (!m_overviewOpen || !m || index < 0 || index >= m->spaces.size())
+        return;
+    // Snapshot membership: native capture can dispatch foreign-window messages.
+    const auto windows = m->spaces[index].windows;
+    for (HWND hwnd : windows) {
+        if (!::IsWindow(hwnd) || ::IsIconic(hwnd) || ownerMonitorOf(hwnd) != hmon ||
+            spaceOfWindow(hwnd) != index)
+            continue;
+        ::cloak::set(hwnd, false);
+        if (refresh)
+            thumbs::refreshWindow(hwnd);
+        else
+            thumbs::windowShot(hwnd);
+    }
+    rebuildSpaceScreenshot(hmon, index, QSize(640, 360), true);
+}
+
 bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint, int directionHint)
 {
     auto *m = monitorOf(hmon);
@@ -323,7 +344,8 @@ bool SpaceManager::previewSpace(HMONITOR hmon, int index)
     return true;
 }
 
-void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize &maxSize)
+void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize &maxSize,
+                                          bool cachedOnly)
 {
     auto *m = monitorOf(hmon);
     if (!m || index < 0 || index >= m->spaces.size())
@@ -386,7 +408,8 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize 
         const int dw = qMax(1, int(std::lround(ww * sx)));
         const int dh = qMax(1, int(std::lround(wh * sy)));
         // Shared per-window cache — same image as the bottom strip tiles.
-        QImage shot = thumbs::windowShot(hwnd, QSize(dw, dh));
+        QImage shot = cachedOnly ? thumbs::cachedWindowShot(hwnd, QSize(dw, dh))
+                                 : thumbs::windowShot(hwnd, QSize(dw, dh));
         if (shot.isNull())
             continue;
         if (shot.width() != dw || shot.height() != dh)
@@ -700,6 +723,7 @@ bool SpaceManager::onWindowForeground(HWND hwnd)
                            .arg(space));
     }
     // The animation is input-transparent and never takes foreground focus.
+    QScopedValueRollback<bool> foregroundSwitch(m_foregroundSwitch, true);
     switchSpace(mon, space, /*animateHint=*/true);
     return true;
 }

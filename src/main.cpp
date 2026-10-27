@@ -118,6 +118,22 @@ int main(int argc, char *argv[])
     //   - mouse click — the button is still down when the event arrives
     //     (GetAsyncKeyState), which system side-effects never are.
     bool switchPending = false;
+    QObject::connect(&hotkeys, &HotkeyManager::taskbarPressed, &switchAnimator,
+                     [&]() { switchAnimator.prepareTaskbarSwitch(); });
+    auto updateTaskbarGuard = [&]() {
+        bool hasOtherWindows = false;
+        if (!overview.isOpen())
+            for (auto *mon : manager.monitors())
+                for (int i = 0; i < mon->spaces.size(); ++i)
+                    if (i != mon->currentIndex && manager.spaceHasWindows(mon->hmon, i))
+                        hasOtherWindows = true;
+        hotkeys.setTaskbarGuardEnabled(hasOtherWindows);
+    };
+    QObject::connect(&manager, &SpaceManager::windowTracked, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&manager, &SpaceManager::windowUntracked, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&manager, &SpaceManager::spaceChanged, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&manager, &SpaceManager::monitorLayoutChanged, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&overview, &OverviewHost::allClosed, &hotkeys, updateTaskbarGuard);
     QObject::connect(&hotkeys, &HotkeyManager::windowSwitchChord, &app, [&]() {
         if (overview.isOpen())
             switchPending = true;
@@ -129,7 +145,8 @@ int main(int argc, char *argv[])
         if (!hwnd || !::IsWindow(hwnd) || ::GetForegroundWindow() != hwnd)
             return;
         if (!overview.isOpen()) {
-            manager.onWindowForeground(hwnd);
+            if (manager.onWindowForeground(hwnd))
+                switchAnimator.finishTaskbarPress();
             return;
         }
         const int ownedSpace = manager.spaceOfWindow(hwnd);
@@ -183,6 +200,7 @@ int main(int argc, char *argv[])
 
     // --- overview: every monitor at once (Mission Control style) ---
     auto openOverview = [&]() {
+        hotkeys.setTaskbarGuardEnabled(false);
         switchAnimator.stopAll();
         overview.openAll();
         if (overview.isOpen())

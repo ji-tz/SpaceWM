@@ -1,10 +1,13 @@
 #include "OverviewHost.h"
 
 #include "core/log/Log.h"
+#include "core/capture/ThumbnailCapture.h"
 #include "core/monitor/MonitorInfo.h"
 
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QPointer>
+#include <QHash>
 
 OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
     : QObject(parent),
@@ -75,6 +78,8 @@ void OverviewHost::ensurePanels()
         w->setHostManaged(true);
         w->assignMonitor(mon->hmon);
         connect(w, &OverviewWindow::closed, this, &OverviewHost::onPanelClosed);
+        connect(w, &OverviewWindow::spacePreparationRequested, this,
+                [this, w](int index) { prioritizeSpace(w->targetMonitor(), index); });
         m_panels.push_back(w);
     }
 }
@@ -83,96 +88,102 @@ void OverviewHost::openAll()
 {
     if (!m_manager || isOpen())
         return;
-
     ensurePanels();
     if (m_panels.isEmpty())
         return;
 
-    ++m_closeGeneration;
+    const int generation = ++m_closeGeneration;
     m_switching = false;
-    m_active = nullptr;
-
+    m_preparations.clear();
     const HMONITOR cursor = monitors::fromCursor();
-    QElapsedTimer t;
-    t.start();
+    m_active = panelFor(cursor);
+    if (!m_active)
+        m_active = m_panels.first();
 
-    // 1) Dark masks up FIRST — the hotkey must slam black onto the desktop
-    //    immediately; every slow step below runs behind the cover.
-    //    beginPanelOpen repaints synchronously so the mask is composited
-    //    before refresh blocks the main thread for hundreds of ms.
-    for (OverviewWindow *w : std::as_const(m_panels)) {
-        if (w->targetMonitor() == cursor)
+    // Take every monitor copy BEFORE showing any panel or disabling sampling.
+    // These are entry backgrounds only; space cards stay render-only.
+    QHash<quintptr, QImage> backdrops;
+    for (OverviewWindow *panel : std::as_const(m_panels)) {
+        auto *mon = m_manager->monitorOf(panel->targetMonitor());
+        if (!mon)
             continue;
-        QElapsedTimer mt;
-        mt.start();
-        w->beginPanelOpen(w->targetMonitor(), /*takeFocus=*/false);
-        spacelog::info(QStringLiteral("overview mask mon=0x%1 ms=%2 focus=0")
-                           .arg(quintptr(w->targetMonitor()), 0, 16)
-                           .arg(mt.elapsed()));
+        QImage backdrop;
+        if (thumbs::screenSamplingEnabled())
+            backdrop = thumbs::captureMonitor(mon->physRect, QSize());
+        if (backdrop.isNull())
+            backdrop = thumbs::wallpaperFilled(mon->physRect,
+                                               QSize(mon->physRect.right - mon->physRect.left,
+                                                     mon->physRect.bottom - mon->physRect.top));
+        backdrops.insert(quintptr(mon->hmon), backdrop);
     }
-    for (OverviewWindow *w : std::as_const(m_panels)) {
-        if (w->targetMonitor() == cursor) {
-            QElapsedTimer mt;
-            mt.start();
-            w->beginPanelOpen(cursor, /*takeFocus=*/true);
-            spacelog::info(QStringLiteral("overview mask mon=0x%1 ms=%2 focus=1")
-                               .arg(quintptr(cursor), 0, 16)
-                               .arg(mt.elapsed()));
-            m_active = w;
-            break;
+    for (OverviewWindow *panel : std::as_const(m_panels))
+        panel->beginPanelOpen(panel->targetMonitor(), panel == m_active,
+                              backdrops.value(quintptr(panel->targetMonitor())));
+    m_manager->setOverviewOpen(true);
+
+    // Cheap cached cards exist on every panel for keyboard/drop targeting, but
+    // their content stays invisible over the frozen desktop until prepared.
+    for (OverviewWindow *panel : std::as_const(m_panels))
+        panel->populateCards();
+
+    QVector<OverviewWindow *> order{m_active};
+    for (OverviewWindow *panel : std::as_const(m_panels))
+        if (panel != m_active)
+            order.push_back(panel);
+    for (OverviewWindow *panel : std::as_const(order))
+        m_preparations.push_back(
+            {panel->targetMonitor(), m_manager->currentSpaceIndex(panel->targetMonitor()), true});
+    // Inactive spaces must never delay the first usable current-space overview.
+    for (OverviewWindow *panel : std::as_const(order)) {
+        const HMONITOR mon = panel->targetMonitor();
+        for (int i = 0; i < m_manager->spaceCount(mon); ++i)
+            if (i != m_manager->currentSpaceIndex(mon))
+                m_preparations.push_back({mon, i, false});
+    }
+    processNextPreparation(generation);
+}
+
+void OverviewHost::processNextPreparation(int generation)
+{
+    if (generation != m_closeGeneration || m_switching || !m_manager->overviewOpen() ||
+        m_preparations.isEmpty())
+        return;
+    const Preparation task = m_preparations.takeFirst();
+    QPointer<OverviewWindow> panel = panelFor(task.hmon);
+    if (panel && panel->isOpen()) {
+        QElapsedTimer timer;
+        timer.start();
+        m_manager->prepareOverviewSpace(task.hmon, task.space, task.reveal);
+        if (generation != m_closeGeneration || m_switching || !panel || !panel->isOpen())
+            return;
+        if (task.reveal && !panel->isContentReady()) {
+            panel->populateTiles();
+            panel->startPanelEnterAnimation();
+            emit panelReady(quint64(task.hmon), task.space);
+        }
+        spacelog::info(QStringLiteral("overview prepare mon=0x%1 space=%2 current=%3 ms=%4")
+                           .arg(quintptr(task.hmon), 0, 16)
+                           .arg(task.space)
+                           .arg(task.reveal ? 1 : 0)
+                           .arg(timer.elapsed()));
+    }
+    // Give the just-revealed panel a complete enter fade and paint before the
+    // next monitor's capture can block the GUI thread. No worker touches widgets.
+    QTimer::singleShot(task.reveal ? 180 : 16, this,
+                       [this, generation]() { processNextPreparation(generation); });
+}
+
+void OverviewHost::prioritizeSpace(HMONITOR hmon, int index)
+{
+    if (m_switching || !m_manager || !m_manager->overviewOpen())
+        return;
+    for (int i = 0; i < m_preparations.size(); ++i) {
+        if (m_preparations[i].hmon == hmon && m_preparations[i].space == index) {
+            const Preparation task = m_preparations.takeAt(i);
+            m_preparations.prepend(task);
+            return;
         }
     }
-    if (!m_active && !m_panels.isEmpty()) {
-        auto *first = m_panels.first();
-        first->beginPanelOpen(first->targetMonitor(), true);
-        m_active = first;
-    }
-    const qint64 msMasks = t.restart();
-
-    // 2) Refresh screenshots behind the dark mask; screen sampling stays off.
-    m_manager->setOverviewOpen(true);
-    m_manager->refreshVisibleShots();
-    const qint64 msRefresh = t.restart();
-    m_manager->warmWindowShots();
-    const qint64 msWarm = t.restart();
-    m_manager->buildAllSpacePreviews();
-    const qint64 msBuild = t.restart();
-
-    // 3) Populate all panels on the same event-loop tick so their content
-    //    fades in together after screenshots are ready.
-    for (OverviewWindow *w : std::as_const(m_panels)) {
-        QElapsedTimer pt;
-        pt.start();
-        w->populateCards();
-        spacelog::info(QStringLiteral("overview cards mon=0x%1 ms=%2")
-                           .arg(quintptr(w->targetMonitor()), 0, 16)
-                           .arg(pt.elapsed()));
-    }
-    const qint64 msCards = t.restart();
-    for (OverviewWindow *w : std::as_const(m_panels))
-        w->startPanelEnterAnimation();
-    const qint64 msAnims = t.restart();
-    for (OverviewWindow *w : std::as_const(m_panels)) {
-        QElapsedTimer pt;
-        pt.start();
-        w->populateTiles();
-        spacelog::info(QStringLiteral("overview tiles mon=0x%1 ms=%2")
-                           .arg(quintptr(w->targetMonitor()), 0, 16)
-                           .arg(pt.elapsed()));
-    }
-    const qint64 msTiles = t.restart();
-
-    spacelog::info(
-        QStringLiteral("overview open timings: masks=%1ms refresh=%2ms warm=%3ms build=%4ms "
-                       "cards=%5ms anims=%6ms tiles=%7ms panels=%8")
-            .arg(msMasks)
-            .arg(msRefresh)
-            .arg(msWarm)
-            .arg(msBuild)
-            .arg(msCards)
-            .arg(msAnims)
-            .arg(msTiles)
-            .arg(m_panels.size()));
 }
 
 void OverviewHost::closeAll(bool commit)
@@ -199,6 +210,8 @@ void OverviewHost::onPanelClosed(int chosen)
     if (m_switching)
         return;
     m_switching = true;
+    ++m_closeGeneration;
+    m_preparations.clear();
 
     if (chosen >= 0 && m_manager) {
         auto *w = qobject_cast<OverviewWindow *>(sender());

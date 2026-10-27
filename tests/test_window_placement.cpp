@@ -27,13 +27,16 @@ class TestWindowPlacement : public QObject {
     void refreshWhileStartingWindowDragKeepsSourceAlive_data()
     {
         QTest::addColumn<bool>("drop");
-        QTest::newRow("screenshot-refresh") << false;
-        QTest::newRow("space-drop") << true;
+        QTest::addColumn<bool>("expandStrip");
+        QTest::newRow("screenshot-refresh") << false << false;
+        QTest::newRow("space-drop") << true << false;
+        QTest::newRow("expand-space-strip") << false << true;
     }
 
     void refreshWhileStartingWindowDragKeepsSourceAlive()
     {
         QFETCH(bool, drop);
+        QFETCH(bool, expandStrip);
         QWidget target;
         target.resize(300, 200);
         target.show();
@@ -60,7 +63,19 @@ class TestWindowPlacement : public QObject {
         connect(source, &WindowPreviewWidget::dragStarted, &overview, [&]() {
             // Exercise model/UI invalidation inside the active drag call stack.
             // Flush deletion just as a nested event loop is allowed to do.
-            if (drop)
+            if (expandStrip) {
+                auto *strip = overview.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+                QMimeData mime;
+                QByteArray payload;
+                QDataStream stream(&payload, QIODevice::WriteOnly);
+                stream << quint64(hwnd);
+                mime.setData(WindowPreviewWidget::kMimeType, payload);
+                QDragEnterEvent enter(QPoint(2, 2), Qt::MoveAction, &mime, Qt::LeftButton,
+                                      Qt::NoModifier);
+                QApplication::sendEvent(strip, &enter);
+                QVERIFY(overview.isSpaceStripExpanded());
+                QCoreApplication::processEvents();
+            } else if (drop)
                 placed = overview.placeWindowInSpace(hwnd, 1);
             else
                 sm.rebuildSpaceScreenshot(hmon, 0);
