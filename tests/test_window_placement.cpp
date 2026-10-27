@@ -1,3 +1,4 @@
+#include "NativeDragCancellation.h"
 #include <QtTest>
 
 #include "core/space/SpaceManager.h"
@@ -9,6 +10,8 @@
 #include "ui/preview/WindowPreviewWidget.h"
 
 #include <QDropEvent>
+#include <QPointer>
+#include <QTimer>
 #include <QLabel>
 #include <QLayout>
 #include <QMimeData>
@@ -21,6 +24,85 @@
 class TestWindowPlacement : public QObject {
     Q_OBJECT
   private slots:
+    void refreshWhileStartingWindowDragKeepsSourceAlive_data()
+    {
+        QTest::addColumn<bool>("drop");
+        QTest::addColumn<bool>("expandStrip");
+        QTest::newRow("screenshot-refresh") << false << false;
+        QTest::newRow("space-drop") << true << false;
+        QTest::newRow("expand-space-strip") << false << true;
+    }
+
+    void refreshWhileStartingWindowDragKeepsSourceAlive()
+    {
+        QFETCH(bool, drop);
+        QFETCH(bool, expandStrip);
+        QWidget target;
+        target.resize(300, 200);
+        target.show();
+        const HWND hwnd = reinterpret_cast<HWND>(target.winId());
+        SpaceManager sm;
+        OverviewWindow overview(&sm);
+        const HMONITOR hmon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, hmon, 0));
+        QVERIFY(sm.addSpace(hmon));
+        overview.openOnMonitor(hmon);
+        QTRY_VERIFY(!overview.isAnimating());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        // Desktop hover can select the empty card while the enter animation runs.
+        QVERIFY(overview.previewSpace(0));
+        QPointer<WindowPreviewWidget> source;
+        for (auto *tile : overview.findChildren<WindowPreviewWidget *>())
+            if (tile->windowHandle() == hwnd)
+                source = tile;
+        QVERIFY(source);
+        bool refreshed = false;
+        bool survivedRefresh = false;
+        bool placed = false;
+        QSignalSpy finished(source, &WindowPreviewWidget::dragFinished);
+        connect(source, &WindowPreviewWidget::dragStarted, &overview, [&]() {
+            // Exercise model/UI invalidation inside the active drag call stack.
+            // Flush deletion just as a nested event loop is allowed to do.
+            if (expandStrip) {
+                auto *strip = overview.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+                QMimeData mime;
+                QByteArray payload;
+                QDataStream stream(&payload, QIODevice::WriteOnly);
+                stream << quint64(hwnd);
+                mime.setData(WindowPreviewWidget::kMimeType, payload);
+                QDragEnterEvent enter(QPoint(2, 2), Qt::MoveAction, &mime, Qt::LeftButton,
+                                      Qt::NoModifier);
+                QApplication::sendEvent(strip, &enter);
+                QVERIFY(overview.isSpaceStripExpanded());
+                QCoreApplication::processEvents();
+            } else if (drop)
+                placed = overview.placeWindowInSpace(hwnd, 1);
+            else
+                sm.rebuildSpaceScreenshot(hmon, 0);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            refreshed = true;
+            survivedRefresh = !source.isNull();
+            QVERIFY(dragtest::queueNativeRelease(&overview));
+        });
+        QTest::mousePress(source, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        const QPointF pos(50, 50);
+        QMouseEvent move(QEvent::MouseMove, pos, source->mapToGlobal(pos.toPoint()), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(source, &move);
+        QTest::mouseRelease(&overview, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(refreshed);
+        QVERIFY2(survivedRefresh, "preview refresh destroyed the active drag source");
+        QTRY_VERIFY(source.isNull()); // rebuild resumes after the drag call returns
+        if (drop) {
+            QVERIFY(placed);
+            QCOMPARE(sm.spaceOfWindow(hwnd), 1);
+            QCOMPARE(overview.windowPreviewCount(), 0);
+        }
+        overview.forceHide();
+        sm.untrackWindow(hwnd);
+    }
+
     void mimeRoundTrip()
     {
         quint64 h = quint64(0x1234);

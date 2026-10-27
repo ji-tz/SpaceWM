@@ -35,6 +35,7 @@ class WindowPreviewWidget : public QFrame {
 
   signals:
     void dragStarted(quint64 hwnd);
+    void dragFinished();
     // Click without drag — enter this window's space and focus it.
     void activated(quint64 hwnd);
     // Header × button — close this window (graceful WM_CLOSE, done by owner).

@@ -8,6 +8,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -151,7 +152,10 @@ void WindowPreviewWidget::mouseMoveEvent(QMouseEvent *event)
         if (!m_dragging &&
             (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
             m_dragging = true;
+            const QPointer<WindowPreviewWidget> guard(this);
             startDrag();
+            if (!guard)
+                return;
             m_dragging = false;
             setCursor(Qt::OpenHandCursor);
             return;
@@ -209,7 +213,8 @@ void WindowPreviewWidget::startDrag()
         pm = QPixmap::fromImage(faded);
     }
 
-    auto *drag = new QDrag(this);
+    const QPointer<WindowPreviewWidget> guard(this);
+    QPointer<QDrag> drag = new QDrag(this);
     drag->setMimeData(mime);
     if (!pm.isNull()) {
         drag->setPixmap(pm);
@@ -218,7 +223,11 @@ void WindowPreviewWidget::startDrag()
         drag->setHotSpot(mapPressToHotSpot(m_pressPos, imageTopLeft, m_box, pm.size()));
     }
     emit dragStarted(reinterpret_cast<quint64>(m_hwnd));
+    if (!guard || !drag)
+        return;
     drag->exec(Qt::CopyAction);
+    if (guard)
+        emit dragFinished();
 }
 
 QPoint WindowPreviewWidget::mapPressToHotSpot(const QPoint &pressInWidget,

@@ -9,6 +9,9 @@
 #include "core/window/WindowTracker.h"
 
 #include <QElapsedTimer>
+#include <QApplication>
+#include <QDragEnterEvent>
+#include <QMimeData>
 #include <QEvent>
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
@@ -19,6 +22,7 @@
 #include <QLayout>
 #include <QMouseEvent>
 #include <QPropertyAnimation>
+#include <QPainter>
 #include <QScrollArea>
 #include <QScreen>
 #include <QTimer>
@@ -36,6 +40,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     setAttribute(Qt::WA_DeleteOnClose, false);
     setObjectName(QStringLiteral("OverviewRoot"));
     setAttribute(Qt::WA_TranslucentBackground, false);
+    setMouseTracking(true);
+    setAcceptDrops(true);
 
     // Model re-rendered a space (new window, move, untrack) → reload cards.
     if (m_manager) {
@@ -79,38 +85,22 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
 
     m_root = new QWidget(this);
     m_root->setObjectName(QStringLiteral("OverviewPanel"));
+    m_root->setMouseTracking(true);
+    m_root->installEventFilter(this);
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->addWidget(m_root);
 
     auto *v = new QVBoxLayout(m_root);
-    v->setContentsMargins(36, 28, 36, 36);
+    v->setContentsMargins(36, 12, 36, 28);
     v->setSpacing(14);
 
-    m_header = new QLabel(m_root);
-    m_header->setStyleSheet(
-        QStringLiteral("QLabel { color: #ffffff; font-size: 22px; font-weight: 700; "
-                       "background: transparent; border: none; }"));
-    v->addWidget(m_header);
-
-    m_hint =
-        new QLabel(tr("Hover a space to preview it here · click to switch · "
-                      "drag windows below onto a space · ←/→ select · Enter confirm · Esc cancel"),
-                   m_root);
-    m_hint->setStyleSheet(QStringLiteral("QLabel { color: rgba(255,255,255,140); font-size: 13px; "
-                                         "background: transparent; border: none; }"));
-    v->addWidget(m_hint);
-
-    // --- Top: space strip ---
-    auto *spaceLabel = new QLabel(tr("Spaces"), m_root);
-    spaceLabel->setStyleSheet(
-        QStringLiteral("QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
-                       "background: transparent; border: none; }"));
-    v->addWidget(spaceLabel);
-
+    // Compact space names expand into previews on pointer/drag entry.
     m_spaceStripHost = new QWidget(m_root);
     m_spaceStripHost->setObjectName(QStringLiteral("SpaceStripHost"));
+    m_spaceStripHost->setMouseTracking(true);
+    m_spaceStripHost->setAcceptDrops(true);
     auto *stripOuter = new QVBoxLayout(m_spaceStripHost);
     stripOuter->setContentsMargins(0, 0, 0, 0);
     m_cardRow = new QHBoxLayout;
@@ -121,6 +111,8 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     v->addWidget(m_spaceStripHost);
 
     m_addSpaceBtn = new AddSpaceButton(m_spaceStripHost);
+    m_addSpaceBtn->setFixedSize(36, 36);
+    m_addSpaceBtn->installEventFilter(this);
     connect(m_addSpaceBtn, &AddSpaceButton::addRequested, this, [this]() { addSpaceFromStrip(); });
     connect(m_addSpaceBtn, &AddSpaceButton::windowDropped, this,
             [this](quint64 hwnd) { addSpaceAndPlaceWindow(hwnd); });
@@ -133,10 +125,24 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     connect(m_holdTimer, &QTimer::timeout, this, [this]() { restoreStripToCurrentSpace(); });
     installEventFilter(this);
     m_spaceStripHost->installEventFilter(this);
+    m_stripCollapseTimer = new QTimer(this);
+    m_stripCollapseTimer->setSingleShot(true);
+    m_stripCollapseTimer->setInterval(350);
+    connect(m_stripCollapseTimer, &QTimer::timeout, this, [this]() {
+        // Never replace a pressed tile or the source of a native QDrag.
+        if (m_windowDragActive || QApplication::mouseButtons() != Qt::NoButton) {
+            m_stripCollapseTimer->start();
+            return;
+        }
+        if (m_open)
+            setSpaceStripExpanded(false);
+    });
     // window scroll installed after creation below
 
     // --- Bottom: draggable windows ---
-    auto *winLabel = new QLabel(tr("Windows in the previewed space — drag onto a space"), m_root);
+    auto *winLabel = new QLabel(tr("Select a window · Move to the top to show spaces · "
+                                   "Drag a window to a space · Esc to cancel"),
+                                m_root);
     winLabel->setStyleSheet(
         QStringLiteral("QLabel { color: rgba(255,255,255,180); font-size: 13px; font-weight: 600; "
                        "background: transparent; border: none; }"));
@@ -156,14 +162,18 @@ OverviewWindow::OverviewWindow(SpaceManager *manager, QWidget *parent)
     m_windowStack = new QVBoxLayout(m_windowHost);
     m_windowStack->setContentsMargins(0, 0, 0, 0);
     m_windowStack->setSpacing(12);
-    m_windowStack->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_windowStack->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
     m_windowScroll->setWidget(m_windowHost);
     m_windowScroll->setWidgetResizable(true);
     m_windowScroll->installEventFilter(this);
+    m_windowScroll->viewport()->setMouseTracking(true);
+    m_windowScroll->viewport()->installEventFilter(this);
+    m_windowHost->setMouseTracking(true);
+    m_windowHost->installEventFilter(this);
     v->addWidget(m_windowScroll, 1);
 
     setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
-    setStyleSheet(QStringLiteral("#OverviewRoot { background: rgba(8, 8, 12, 215); }"
+    setStyleSheet(QStringLiteral("#OverviewRoot { background: #202430; }"
                                  "#OverviewPanel { background: transparent; }"));
 }
 
@@ -268,6 +278,7 @@ bool OverviewWindow::previewSpace(int spaceIndex)
         return true;
 
     m_selected = spaceIndex;
+    emit spacePreparationRequested(spaceIndex);
     refreshCardBadges();
     rebuildWindowPreviews();
     refreshCardScreenshot(spaceIndex);
@@ -324,24 +335,26 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
     if (m_closePending)
         return;
 
-    // Desktop intact: refresh on-screen shots (screen fallback honest here).
-    if (m_manager && !m_hostManaged)
-        m_manager->refreshVisibleShots();
-
-    // 1) Dark mask first so uncloak/capture is never visible on the desktop.
+    // Hold the original desktop while preparing just this monitor.
     beginPanelOpen(hmon, takeFocus);
+    if (!m_open)
+        return;
 
     if (m_manager && !m_hostManaged) {
+        // 2) Refresh behind the mask without sampling the covered screen.
         m_manager->setOverviewOpen(true);
-        m_manager->warmWindowShots();
-        m_manager->buildAllSpacePreviews();
+        const int current = m_manager->currentSpaceIndex(hmon);
+        m_manager->prepareOverviewSpace(hmon, current, true);
+        for (int i = 0; i < m_manager->spaceCount(hmon); ++i)
+            if (i != current)
+                m_manager->prepareOverviewSpace(hmon, i, false);
     }
-    // Host path: mask already up; Host runs refresh/warm/build then populateOpenContent.
+    // Host callers use beginPanelOpen and staged preparation instead.
 
     populateOpenContent();
 }
 
-void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
+void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage &backdrop)
 {
     if (m_closePending)
         return;
@@ -352,8 +365,28 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
 
     cancelAnimations();
     cancelSoftPreviewHold();
+    m_stripCollapseTimer->stop();
+    m_spaceStripExpanded = false;
+    m_addSpaceBtn->setFixedSize(36, 36);
     m_hmon = hmon;
     m_exitStarted = false;
+    m_contentReady = false;
+    // Standalone callers capture before show; hosts supply copies taken before
+    // ANY panel was visible. Never sample the screen while overview is open.
+    m_entryBackdrop = backdrop;
+    if (m_entryBackdrop.isNull() && !m_manager->overviewOpen() && thumbs::screenSamplingEnabled())
+        m_entryBackdrop = thumbs::captureMonitor(m->physRect, QSize());
+    m_wallpaper = thumbs::wallpaperFilled(m->physRect, QSize(m->physRect.right - m->physRect.left,
+                                                             m->physRect.bottom - m->physRect.top));
+    if (m_entryBackdrop.isNull())
+        m_entryBackdrop = m_wallpaper;
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    RECT workRect = m->physRect;
+    if (::GetMonitorInfoW(hmon, &info))
+        workRect = info.rcWork;
+    m_backdropSource = QRect(workRect.left - m->physRect.left, workRect.top - m->physRect.top,
+                             workRect.right - workRect.left, workRect.bottom - workRect.top);
 
     // Cover the work area only — taskbar remains on top / visible.
     const QRect work = monitors::logicalWorkArea(hmon);
@@ -361,10 +394,16 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
     m_originSpace = m->currentIndex;
     m_selected = qBound(0, m->currentIndex, qMax(0, m_cards.size() - 1));
     m_open = true;
+    m_animating = true; // includes staged preparation, not only the enter fade
     m_closePending = false;
     m_pendingCommit = -1;
 
-    show();
+    // Hold content invisible over the frozen desktop. Only content fades in;
+    // the entry background stays opaque throughout preparation.
+    auto *eff = new QGraphicsOpacityEffect(m_root);
+    eff->setOpacity(0.0);
+    m_root->setGraphicsEffect(eff);
+
     // Stale content must not be visible while warm/build runs behind the
     // mask (old CURRENT pill / old tiles for seconds on heavy machines) —
     // populateOpenContent shows them again once cards are rebuilt.
@@ -373,8 +412,16 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
     if (m_windowScroll)
         m_windowScroll->hide();
     setWindowOpacity(1.0);
+    // Disable the OS show transition: Qt already animates content over the
+    // mask. Windows must not reveal/animate a stale backing store first.
+    const BOOL disableTransitions = TRUE;
+    ::DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), DWMWA_TRANSITIONS_FORCEDISABLED,
+                            &disableTransitions, sizeof(disableTransitions));
+    pinToMonitorPhysically();
+    show();
     pinToMonitorPhysically();
     raise();
+    repaint();
     if (takeFocus) {
         activateWindow();
         setFocus(Qt::ActiveWindowFocusReason);
@@ -383,6 +430,18 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus)
             ::SetFocus(h);
         }
     }
+}
+
+void OverviewWindow::paintEvent(QPaintEvent *event)
+{
+    QWidget::paintEvent(event);
+    QPainter painter(this);
+    painter.fillRect(rect(), QColor(32, 36, 48));
+    const QImage &background = m_contentReady ? m_wallpaper : m_entryBackdrop;
+    if (!background.isNull())
+        painter.drawImage(rect(), background, m_backdropSource);
+    if (m_contentReady)
+        painter.fillRect(rect(), QColor(8, 8, 12, 120));
 }
 
 void OverviewWindow::populateOpenContent()
@@ -446,6 +505,8 @@ void OverviewWindow::startPanelEnterAnimation()
 {
     if (!m_open || m_closePending)
         return;
+    m_contentReady = true;
+    update();
     playEnterAnimation();
 }
 
@@ -570,6 +631,8 @@ void OverviewWindow::cancelAnimations()
     }
     if (graphicsEffect())
         setGraphicsEffect(nullptr);
+    if (m_root && m_root->graphicsEffect())
+        m_root->setGraphicsEffect(nullptr);
 
     for (SpaceCardWidget *card : std::as_const(m_cards)) {
         if (card && card->graphicsEffect())
@@ -584,8 +647,6 @@ void OverviewWindow::rebuildCards()
     if (!m)
         return;
 
-    m_header->setText(tr("Spaces — %1").arg(m->deviceName));
-
     while (QLayoutItem *item = m_cardRow->takeAt(0)) {
         // Keep the shared + button alive across rebuilds.
         if (item->widget() && item->widget() != m_addSpaceBtn)
@@ -598,8 +659,10 @@ void OverviewWindow::rebuildCards()
     m_selected = current;
 
     for (int i = 0; i < m->spaces.size(); ++i) {
-        auto *card = new SpaceCardWidget(m_root);
+        auto *card = new SpaceCardWidget(m_spaceStripHost);
         card->setCompact(true); // top strip
+        card->setPreviewVisible(m_spaceStripExpanded);
+        card->installEventFilter(this);
         card->setSpace(i, m->spaces[i].name, i == current);
         card->setMonitorAspect(m->physRect.right - m->physRect.left,
                                m->physRect.bottom - m->physRect.top);
@@ -629,9 +692,12 @@ void OverviewWindow::rebuildCards()
             closeOverview(true);
         });
         connect(card, &SpaceCardWidget::hovered, this, [this](int idx) {
-            if (m_open) {
+            // Do not let the pointer's old desktop position choose a different
+            // space while the staged content is still appearing underneath it.
+            if (m_open && m_contentReady && !m_animating) {
                 cancelSoftPreviewHold();
-                previewSpace(idx);
+                if (m_spaceStripExpanded)
+                    previewSpace(idx);
             }
         });
         connect(card, &SpaceCardWidget::hoverLeft, this, [this]() {
@@ -700,11 +766,51 @@ void OverviewWindow::rebuildCards()
     });
 }
 
+bool OverviewWindow::isSpaceStripWidget(QObject *object) const
+{
+    while (object) {
+        if (object == m_spaceStripHost)
+            return true;
+        object = object->parent();
+    }
+    return false;
+}
+
+void OverviewWindow::setSpaceStripExpanded(bool expanded)
+{
+    if (expanded)
+        m_stripCollapseTimer->stop();
+    if (m_spaceStripExpanded == expanded)
+        return;
+    m_spaceStripExpanded = expanded;
+    for (auto *card : std::as_const(m_cards))
+        card->setPreviewVisible(expanded);
+    m_addSpaceBtn->setFixedSize(expanded ? 72 : 36, expanded ? 72 : 36);
+    if (m_root->layout())
+        m_root->layout()->activate();
+    if (m_spaceStripHost->layout())
+        m_spaceStripHost->layout()->activate();
+    m_cardRow->activate();
+    // Let viewport geometry settle. Reuse the native-drag lifetime guard in
+    // rebuildWindowPreviews so expanding a drop target never deletes its source.
+    QTimer::singleShot(0, this, [this]() {
+        if (m_open && !m_closePending)
+            rebuildWindowPreviews();
+    });
+}
+
 void OverviewWindow::rebuildWindowPreviews()
 {
     auto *m = m_manager ? m_manager->monitorOf(m_hmon) : nullptr;
     if (!m || !m_windowStack)
         return;
+
+    // QDrag::exec processes nested events. Deleting its source row here also
+    // deletes the QDrag while it is still executing (refresh/drop re-entry).
+    if (m_windowDragActive) {
+        m_windowRebuildPending = true;
+        return;
+    }
 
     // Clear previous rows and tiles.
     while (QLayoutItem *item = m_windowStack->takeAt(0)) {
@@ -857,7 +963,7 @@ void OverviewWindow::rebuildWindowPreviews()
             return;
         auto *holder = new QWidget(m_windowHost);
         holder->setLayout(r);
-        m_windowStack->addWidget(holder, 0, Qt::AlignLeft);
+        m_windowStack->addWidget(holder, 0, Qt::AlignHCenter);
     };
 
     for (const Item &it : items) {
@@ -876,10 +982,27 @@ void OverviewWindow::rebuildWindowPreviews()
         }
 
         auto *tile = new WindowPreviewWidget(m_windowHost);
+        tile->setMouseTracking(true);
+        tile->installEventFilter(this);
         tile->setImageBoxSize(QSize(bw, bh));
         // Full-resolution cached shot — tile scales once to physical pixels (DPR).
-        QImage shot = thumbs::windowShot(it.hwnd);
+        QImage shot = thumbs::cachedWindowShot(it.hwnd);
         tile->setWindow(it.hwnd, windowTitle(it.hwnd), shot);
+        connect(tile, &WindowPreviewWidget::dragStarted, this, [this](quint64) {
+            m_windowDragActive = true;
+            cancelSoftPreviewHold();
+        });
+        connect(tile, &WindowPreviewWidget::dragFinished, this, [this]() {
+            m_windowDragActive = false;
+            if (!m_windowRebuildPending)
+                return;
+            m_windowRebuildPending = false;
+            // Rebuild only after startDrag/mouseMoveEvent have returned.
+            QTimer::singleShot(0, this, [this]() {
+                if (m_open && !m_closePending)
+                    rebuildWindowPreviews();
+            });
+        });
         connect(tile, &WindowPreviewWidget::activated, this,
                 [this](quint64 h) { activateWindowPreview(reinterpret_cast<HWND>(h)); });
         connect(tile, &WindowPreviewWidget::closeRequested, this,
@@ -959,18 +1082,22 @@ void OverviewWindow::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     case Qt::Key_Left:
+        setSpaceStripExpanded(true);
         previewSpace((m_selected - 1 + n) % n);
         event->accept();
         return;
     case Qt::Key_Right:
+        setSpaceStripExpanded(true);
         previewSpace((m_selected + 1) % n);
         event->accept();
         return;
     case Qt::Key_Home:
+        setSpaceStripExpanded(true);
         previewSpace(0);
         event->accept();
         return;
     case Qt::Key_End:
+        setSpaceStripExpanded(true);
         previewSpace(n - 1);
         event->accept();
         return;
@@ -1100,19 +1227,49 @@ bool OverviewWindow::eventFilter(QObject *watched, QEvent *event)
 
     switch (event->type()) {
     case QEvent::Enter:
+        if (isSpaceStripWidget(watched))
+            setSpaceStripExpanded(true);
+        else if (m_spaceStripExpanded && isKeepZoneWidget(watched))
+            m_stripCollapseTimer->start();
         if (isKeepZoneWidget(watched))
             cancelSoftPreviewHold();
         break;
     case QEvent::Leave:
+        if (watched == m_spaceStripHost)
+            m_stripCollapseTimer->start();
         if (isKeepZoneWidget(watched))
             armSoftPreviewHold();
         break;
     case QEvent::MouseMove: {
-        if (watched != this)
-            break;
         const auto *me = static_cast<QMouseEvent *>(event);
-        if (isOuterMarginPos(me->position().toPoint()))
+        const QPoint pos = mapFromGlobal(me->globalPosition().toPoint());
+        const int stripBottom =
+            m_spaceStripHost->mapTo(this, QPoint(0, m_spaceStripHost->height())).y();
+        if (pos.y() <= stripBottom)
+            setSpaceStripExpanded(true);
+        else if (m_spaceStripExpanded && !m_stripCollapseTimer->isActive())
+            m_stripCollapseTimer->start();
+        if (watched == this && isOuterMarginPos(pos))
             armSoftPreviewHold();
+        break;
+    }
+    case QEvent::DragEnter:
+    case QEvent::DragMove: {
+        const auto *drag = static_cast<QDragMoveEvent *>(event);
+        if (!drag->mimeData()->hasFormat(WindowPreviewWidget::kMimeType))
+            break;
+        // Also accept drags over the strip's gaps and the top screen margin;
+        // cards and + remain the only actual drop targets.
+        if (isSpaceStripWidget(watched) ||
+            (watched == this &&
+             drag->position().y() <=
+                 m_spaceStripHost->mapTo(this, QPoint(0, m_spaceStripHost->height())).y())) {
+            setSpaceStripExpanded(true);
+            if (watched == this || watched == m_spaceStripHost) {
+                static_cast<QDragMoveEvent *>(event)->acceptProposedAction();
+                return true;
+            }
+        }
         break;
     }
     default:
@@ -1123,6 +1280,7 @@ bool OverviewWindow::eventFilter(QObject *watched, QEvent *event)
 
 void OverviewWindow::leaveEvent(QEvent *event)
 {
+    m_stripCollapseTimer->start();
     // Left the panel entirely — still allow hold (e.g. onto tray) before restore.
     armSoftPreviewHold();
     QWidget::leaveEvent(event);
@@ -1132,9 +1290,13 @@ void OverviewWindow::playEnterAnimation()
 {
     m_animating = true;
 
-    auto *eff = new QGraphicsOpacityEffect(this);
-    eff->setOpacity(1.0);
-    setGraphicsEffect(eff);
+    // Fade content over the opaque wallpaper background. The live desktop
+    // remains covered while off-space windows are prepared.
+    auto *eff = qobject_cast<QGraphicsOpacityEffect *>(m_root ? m_root->graphicsEffect() : nullptr);
+    if (!eff) {
+        eff = new QGraphicsOpacityEffect(m_root);
+        m_root->setGraphicsEffect(eff);
+    }
 
     auto *anim = new QPropertyAnimation(eff, "opacity", this);
     m_fadeAnim = anim;
@@ -1145,8 +1307,8 @@ void OverviewWindow::playEnterAnimation()
     connect(anim, &QPropertyAnimation::finished, this, [this]() {
         if (m_fadeAnim == sender()) {
             m_fadeAnim = nullptr;
-            if (graphicsEffect())
-                setGraphicsEffect(nullptr);
+            if (m_root && m_root->graphicsEffect())
+                m_root->setGraphicsEffect(nullptr);
         }
         if (!m_closePending)
             m_animating = false;

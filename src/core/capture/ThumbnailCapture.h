@@ -13,12 +13,11 @@
 // PrintWindow BOOL stays TRUE for black buffers on GPU/composition windows).
 // Screen BitBlt is the last-resort fallback, honest only when sampling is on
 // (overview mask down) and the rect is visible / not cloaked / on-screen.
-// Preview open: SpaceManager::refreshVisibleShots() runs BEFORE the masks go
-// up (recaptures on-screen windows with the screen fallback); behind the mask
-// warmWindowShots() uncloaks + fills only MISSING shots, keeping switch-time
-// shots for off-space windows. Bottom strip and space composites share that
-// cache for one open.
-// Space previews: composites on Space::screenshot after the window batch.
+// Preview entry: take frozen desktop copies BEFORE showing any panels, then
+// disable screen sampling. Prepare the active monitor's current space first;
+// other monitors and inactive spaces follow on later event-loop turns.
+// PrintWindow failures retain old cache entries. UI layout and staged space
+// composites only read that cache; membership-change captures stay explicit.
 namespace thumbs {
 
 // Uncached per-window capture at full size, then scale to maxSize.
@@ -27,9 +26,14 @@ QImage capture(HWND hwnd, const QSize &maxSize = QSize(480, 270));
 // Cached window shot for the current open: first call captures; later calls
 // scale the shared image. maxSize empty → full (post-capture) image.
 QImage windowShot(HWND hwnd, const QSize &maxSize = QSize());
+// Read the shared cache without triggering capture (latency-sensitive UI).
+QImage cachedWindowShot(HWND hwnd, const QSize &maxSize = QSize());
 
 // Drop one HWND from the window-shot cache (window closed / content must refresh).
 void invalidateWindow(HWND hwnd);
+// Force a fresh capture; the cache is replaced ONLY on success so a failed
+// PrintWindow behind the mask never wipes known-good pixels. True = refreshed.
+bool refreshWindow(HWND hwnd);
 void clearWindowCache();
 // Number of cached window shots (tests).
 int windowCacheCount();
@@ -42,7 +46,8 @@ bool canSampleScreen(HWND hwnd);
 void setScreenSamplingEnabled(bool on);
 bool screenSamplingEnabled();
 
-// Full monitor screenshot in physical pixels (BitBlt). Not used for space cards.
+// Full monitor screenshot in physical pixels (BitBlt). Used before a switch or
+// overview entry cover; never for space cards or while overview is open.
 QImage captureMonitor(const RECT &physRect, const QSize &maxSize = QSize(640, 360));
 
 // Desktop wallpaper scaled to fit physRect (cold-start / empty-space preview).

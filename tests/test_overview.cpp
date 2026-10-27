@@ -4,7 +4,30 @@
 #include "ui/overview/OverviewWindow.h"
 #include "ui/preview/SpaceCardWidget.h"
 
+#include <QGraphicsOpacityEffect>
+#include <QWidget>
+
 #include <Windows.h>
+
+class FirstFrameProbe : public QObject {
+  public:
+    bool sawShow = false;
+    bool coveredAtShow = false;
+    bool eventFilter(QObject *object, QEvent *event) override
+    {
+        if (event->type() == QEvent::Show) {
+            auto *w = qobject_cast<QWidget *>(object);
+            auto *panel = w->findChild<QWidget *>(QStringLiteral("OverviewPanel"));
+            auto *strip = w->findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+            auto *scroll = w->findChild<QWidget *>(QStringLiteral("WindowScroll"));
+            auto *effect = qobject_cast<QGraphicsOpacityEffect *>(panel->graphicsEffect());
+            sawShow = true;
+            coveredAtShow = w->windowOpacity() == 1.0 && effect && effect->opacity() == 0.0 &&
+                            strip->isHidden() && scroll->isHidden();
+        }
+        return false;
+    }
+};
 
 // Regression tests for the crash-on-click class of bugs:
 // - empty card row + arrow keys (% 0)
@@ -235,6 +258,44 @@ class TestOverview : public QObject {
         QVERIFY(w.cardCount() >= 2);
         QVERIFY(strip->isVisible());
         QVERIFY(scroll->isVisible());
+
+        w.closeOverview(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isOpen() && !w.isAnimating(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isDismissing(), 3000);
+    }
+
+    // Hotkey open must slam the opaque entry cover down first (window opacity stays
+    // 1 — the veil itself never dips transparent), with the panel content
+    // held at 0 and only the enter animation brightening it on top of the backdrop.
+    void frozenDesktopStaysOpaqueWhileContentFadesIn()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *m = sm.monitors().first();
+        if (m->spaces.size() < 2)
+            QVERIFY(sm.addSpace(m->hmon));
+
+        FirstFrameProbe probe;
+        w.installEventFilter(&probe);
+        w.beginPanelOpen(m->hmon);
+        QVERIFY(probe.sawShow);
+        QVERIFY2(probe.coveredAtShow, "opaque entry/content state must be ready BEFORE Show");
+        QVERIFY(w.isOpen());
+        QCOMPARE(w.windowOpacity(), 1.0);
+
+        auto *panel = w.findChild<QWidget *>(QStringLiteral("OverviewPanel"));
+        QVERIFY(panel);
+        auto *eff = qobject_cast<QGraphicsOpacityEffect *>(panel->graphicsEffect());
+        QVERIFY2(eff, "content must carry the fade effect from the very first mask frame");
+        QCOMPARE(eff->opacity(), 0.0);
+
+        w.populateOpenContent();
+        // During the content fade the mask must stay fully opaque — the
+        // desktop may never show through mid-open.
+        QCOMPARE(w.windowOpacity(), 1.0);
+        // Enter animation (160ms) finishes → content effect removed, opaque.
+        QTRY_VERIFY_WITH_TIMEOUT(!panel->graphicsEffect(), 2000);
+        QVERIFY(w.cardCount() >= 1);
 
         w.closeOverview(false);
         QTRY_VERIFY_WITH_TIMEOUT(!w.isOpen() && !w.isAnimating(), 3000);

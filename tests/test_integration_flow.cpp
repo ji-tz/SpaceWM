@@ -1,6 +1,9 @@
+#include "NativeDragCancellation.h"
+#include "ui/effects/SwitchFlashOverlay.h"
 #include <QtTest>
 
 #include "core/log/Log.h"
+#include "core/capture/ThumbnailCapture.h"
 #include "core/space/SpaceManager.h"
 #include "core/window/CloakController.h"
 #include "core/window/WindowTracker.h"
@@ -9,18 +12,23 @@
 #include "ui/preview/AddSpaceButton.h"
 #include "ui/preview/SpaceCardWidget.h"
 #include "ui/preview/WindowPreviewWidget.h"
+#include "hotkeys/HotkeyManager.h"
 
 #include <QDataStream>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QGraphicsOpacityEffect>
 #include <QMimeData>
 #include <QProcess>
 #include <QPushButton>
+#include <QPointer>
 #include <QSignalSpy>
+#include <QTimer>
 
 #include <Windows.h>
+#include <dwmapi.h>
 
 #include <memory>
 
@@ -608,6 +616,310 @@ class TestIntegrationFlow : public QObject {
         // Neither display's viewed space jumped on drop.
         QCOMPARE(m_monitor->currentIndex, srcCur);
         QCOMPARE(dstMonitor->currentIndex, dstCur);
+    }
+
+    void step17_reopenStartsDarkThenFadesContent()
+    {
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        for (MonitorSpaces *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QVERIFY(panel && panel->isVisible());
+            QCOMPARE(panel->windowOpacity(), 1.0);
+            auto *content = panel->findChild<QWidget *>(QStringLiteral("OverviewPanel"));
+            QVERIFY(content);
+            auto *effect = qobject_cast<QGraphicsOpacityEffect *>(content->graphicsEffect());
+            QVERIFY(effect);
+            QCOMPARE(effect->opacity(), 0.0);
+        }
+        auto *active = m_host.activePanel();
+        QVERIFY(active);
+        QTRY_VERIFY_WITH_TIMEOUT(!active->isAnimating(), 2000);
+        QVERIFY(m_host.isOpen());
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
+    }
+
+    void step18_windowDragSurvivesDropTriggeredRefresh()
+    {
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int origin = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && origin >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        const int destination = (origin + 1) % m_sm.spaceCount(mon);
+        m_host.openAll();
+        auto *panel = m_host.panelFor(mon);
+        QVERIFY(panel);
+        QVERIFY(panel->previewSpace(origin));
+        QTRY_VERIFY(!panel->isAnimating());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QPointer<WindowPreviewWidget> source;
+        for (auto *tile : panel->findChildren<WindowPreviewWidget *>())
+            if (tile->windowHandle() == m_hwndExpl)
+                source = tile;
+        QVERIFY(source);
+        bool placed = false;
+        bool survived = false;
+        QSignalSpy finished(source, &WindowPreviewWidget::dragFinished);
+        connect(source, &WindowPreviewWidget::dragStarted, panel, [&]() {
+            placed = panel->placeWindowInSpace(m_hwndExpl, destination);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            survived = !source.isNull();
+            QVERIFY(dragtest::queueNativeRelease(panel));
+        });
+        QTest::mousePress(source, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        const QPointF pos(50, 50);
+        QMouseEvent move(QEvent::MouseMove, pos, source->mapToGlobal(pos.toPoint()), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(source, &move);
+        QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(placed);
+        QVERIFY2(survived, "drop refresh deleted the source during the drag call");
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), destination);
+        QTRY_VERIFY(source.isNull());
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_host.isOpen(), 4000);
+    }
+
+    // Same foreground entry as main; simulate the activation notification so
+    // this remains deterministic even when Windows denies foreground stealing.
+    void step19_foregroundSwitchesToOwningSpace()
+    {
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        // Step 18 may already have left this monitor on `away`.
+        m_sm.switchSpace(mon, away, false);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), away);
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        QHash<quintptr, int> others;
+        for (auto *m : m_sm.monitors())
+            if (m->hmon != mon)
+                others.insert(quintptr(m->hmon), m->currentIndex);
+        const auto activation =
+            connect(&m_tracker, &WindowTracker::windowForeground, &m_sm,
+                    [this](quint64 h) { m_sm.onWindowForeground(reinterpret_cast<HWND>(h)); });
+        m_tracker.handle(EVENT_SYSTEM_FOREGROUND, m_hwndExpl, OBJID_WINDOW);
+        disconnect(activation);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QCOMPARE(m_sm.ownerMonitorOf(m_hwndExpl), mon);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        for (auto *m : m_sm.monitors())
+            if (m->hmon != mon)
+                QCOMPARE(m->currentIndex, others.value(quintptr(m->hmon)));
+    }
+
+    void step20_directAndForegroundSwitchAnimate()
+    {
+        // isOpen() becomes false at fade-out start; wait for allClosed state.
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        SpaceSwitchAnimator animation(&m_sm);
+        m_sm.setAnimationEnabled(true);
+        m_sm.switchSpace(mon, owned, false);
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        QVERIFY(m_sm.switchSpace(mon, away, true, 1));
+        QVERIFY(animation.isPlaying(mon));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        QVERIFY(m_sm.onWindowForeground(m_hwndExpl));
+        QVERIFY(animation.isPlaying(mon));
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+    }
+
+    void step21_foregroundCoveredBeforeCapture()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        m_sm.switchSpace(mon, away, false);
+        SpaceSwitchAnimator animation(&m_sm);
+        bool covered = false;
+        bool rebuilt = false;
+        // Model the shell exposing its activated app before our notification.
+        QVERIFY(cloak::set(m_hwndExpl, false));
+        const auto coverConnection =
+            connect(&m_sm, &SpaceManager::requestSwitchCover, this, [&](quint64 h, int from) {
+                QCOMPARE(h, quint64(quintptr(mon)));
+                QCOMPARE(from, away);
+                QCOMPARE(m_sm.currentSpaceIndex(mon), away);
+                QVERIFY(animation.isPlaying(mon));
+                QVERIFY(!thumbs::screenSamplingEnabled());
+                covered = true;
+            });
+        const auto rebuildConnection =
+            connect(&m_sm, &SpaceManager::spacePreviewInvalidated, this, [&](quint64, int) {
+                QVERIFY(covered);
+                QVERIFY(animation.isPlaying(mon));
+                QVERIFY(!thumbs::screenSamplingEnabled());
+                rebuilt = true;
+            });
+        const auto activation =
+            connect(&m_tracker, &WindowTracker::windowForeground, &m_sm,
+                    [this](quint64 h) { m_sm.onWindowForeground(reinterpret_cast<HWND>(h)); });
+        m_tracker.handle(EVENT_SYSTEM_FOREGROUND, m_hwndExpl, OBJID_WINDOW);
+        disconnect(activation);
+        disconnect(coverConnection);
+        disconnect(rebuildConnection);
+        QVERIFY(covered);
+        QVERIFY(rebuilt);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(thumbs::screenSamplingEnabled());
+    }
+
+    void step22_switchStartsWithOriginalMonitorCopy()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        auto *m = m_sm.monitorOf(mon);
+        QVERIFY(m);
+        SpaceSwitchAnimator animation(&m_sm);
+        QWidget marker(nullptr, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+        marker.setGeometry(m->geometry);
+        marker.setAutoFillBackground(true);
+        QPalette palette;
+        palette.setColor(QPalette::Window, Qt::magenta);
+        marker.setPalette(palette);
+        marker.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&marker));
+        QVERIFY(::SetWindowPos(reinterpret_cast<HWND>(marker.winId()), HWND_TOPMOST,
+                               m->physRect.left, m->physRect.top,
+                               m->physRect.right - m->physRect.left,
+                               m->physRect.bottom - m->physRect.top, SWP_NOACTIVATE));
+        marker.repaint();
+        ::DwmFlush();
+        auto markerIsOnScreen = [&]() {
+            const QImage frame = thumbs::captureMonitor(m->physRect);
+            return !frame.isNull() &&
+                   frame.pixelColor(frame.width() / 2, frame.height() / 2) == QColor(Qt::magenta);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(markerIsOnScreen(), 3000);
+        bool verified = false;
+        const auto connection =
+            connect(&m_sm, &SpaceManager::requestSwitchCover, this, [&](quint64, int) {
+                for (auto *widget : QApplication::topLevelWidgets()) {
+                    auto *overlay = qobject_cast<SwitchFlashOverlay *>(widget);
+                    if (!overlay || !overlay->isVisible())
+                        continue;
+                    const QImage frame = overlay->grab().toImage();
+                    QCOMPARE(frame.pixelColor(frame.width() / 2, frame.height() / 2),
+                             QColor(Qt::magenta));
+                    verified = true;
+                }
+            });
+        const int target = (m->currentIndex + 1) % int(m->spaces.size());
+        QVERIFY(m_sm.switchSpace(mon, target));
+        disconnect(connection);
+        QVERIFY(verified);
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+    }
+
+    void step23_currentWindowsBeforeExpandedSpaces()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int current = m_sm.currentSpaceIndex(mon);
+        m_host.openAll();
+        auto *panel = m_host.panelFor(mon);
+        QVERIFY(panel && panel->isOpen());
+        QTRY_VERIFY(!panel->isAnimating());
+        const QPoint bottom(panel->width() / 2, panel->height() - 40);
+        QMouseEvent leaveStrip(QEvent::MouseMove, bottom, panel->mapToGlobal(bottom), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(panel, &leaveStrip);
+        QTRY_VERIFY(!panel->isSpaceStripExpanded());
+        QCOMPARE(panel->selectedIndex(), current);
+        for (int i = 0; i < panel->windowPreviewCount(); ++i)
+            QCOMPARE(m_sm.spaceOfWindow(panel->windowPreviewHandle(i)), current);
+        auto *strip = panel->findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(strip);
+        const int compactHeight = strip->height();
+        const QPoint top(panel->width() / 2, 2);
+        QMouseEvent enterStrip(QEvent::MouseMove, top, panel->mapToGlobal(top), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(panel, &enterStrip);
+        QTRY_VERIFY(panel->isSpaceStripExpanded());
+        QTRY_VERIFY(strip->height() > compactHeight);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), current);
+        m_host.closeAll(false);
+        QTRY_VERIFY(!m_sm.overviewOpen());
+    }
+
+    void step24_currentMonitorPreparedBeforeOtherSpaces()
+    {
+        m_host.openAll();
+        auto *active = m_host.activePanel();
+        QVERIFY(active && active->isContentReady());
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        for (auto *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QVERIFY(panel && panel->isVisible());
+            if (panel != active)
+                QVERIFY(!panel->isContentReady());
+        }
+        QCOMPARE(active->selectedIndex(), m_sm.currentSpaceIndex(active->targetMonitor()));
+        for (auto *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QTRY_VERIFY_WITH_TIMEOUT(panel->isContentReady(), 10000);
+        }
+        m_host.closeAll(false);
+        QTRY_VERIFY(!m_sm.overviewOpen());
+        QVERIFY(thumbs::screenSamplingEnabled());
+    }
+
+    void step25_taskbarPreactivationCoverKeepsOriginalFrame()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        m_sm.switchSpace(mon, (owned + 1) % m_sm.spaceCount(mon), false);
+        int captures = 0;
+        SpaceSwitchAnimator animation(&m_sm, nullptr, [&](const RECT &rect) {
+            ++captures;
+            return thumbs::captureMonitor(rect, QSize());
+        });
+        HotkeyManager input;
+        input.setTaskbarGuardEnabled(true);
+        connect(&input, &HotkeyManager::taskbarPressed, &animation,
+                [&]() { animation.prepareTaskbarSwitch(); });
+        // The native bridge used by the mouse hook completes before returning
+        // control to Explorer. Physical taskbar hit-testing remains manual QA.
+        ::SendMessageW(input.taskbarBridgeWindow(), HotkeyManager::TaskbarPressMessage,
+                       WPARAM(::GetTickCount64() + 1000), 0);
+        QVERIFY(animation.hasTaskbarCover(mon));
+        QVERIFY(animation.isPlaying(mon));
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        const int preActivationCaptures = captures;
+        QVERIFY(preActivationCaptures > 0);
+        QVERIFY(cloak::set(m_hwndExpl, false));
+        QVERIFY(m_sm.onWindowForeground(m_hwndExpl));
+        QCOMPARE(captures, preActivationCaptures);
+        QCOMPARE(m_sm.spaceOfWindow(m_hwndExpl), owned);
+        QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(thumbs::screenSamplingEnabled());
     }
 
     void cleanupTestCase()

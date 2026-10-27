@@ -172,7 +172,14 @@ class TestHotkeys : public QObject {
         s.setHotkeyPreset(QStringLiteral("default"));
         HotkeyManager hm2;
         QVERIFY(hm2.registerDefaults());
-        QVERIFY(!hm2.usesWinBindings());
+        QVERIFY(hm2.usesWinBindings());
+        for (int action : {HotkeyManager::SwitchPrevSpace, HotkeyManager::SwitchNextSpace}) {
+            int count = 0;
+            for (const auto &b : hm2.bindings())
+                if (b.action == action && b.modifiers == (MOD_CONTROL | MOD_WIN))
+                    ++count;
+            QCOMPARE(count, 1);
+        }
         hm2.unregisterAll();
     }
 };

@@ -101,15 +101,15 @@ void SpaceCardWidget::applyAspectLayout()
     m_preview->setFixedSize(s);
     setMinimumWidth(s.width() + 28);
     setMaximumWidth(s.width() + 40);
-    setMinimumHeight(s.height() + (m_compact ? 56 : 72));
-    setMaximumHeight(s.height() + (m_compact ? 64 : 88));
+    setMinimumHeight(m_previewVisible ? s.height() + (m_compact ? 56 : 72) : 44);
+    setMaximumHeight(m_previewVisible ? s.height() + (m_compact ? 64 : 88) : 44);
     updateGeometry();
 }
 
 QSize SpaceCardWidget::sizeHint() const
 {
     const QSize s = previewSizeForAspect();
-    return {s.width() + 28, s.height() + (m_compact ? 60 : 80)};
+    return {s.width() + 28, m_previewVisible ? s.height() + (m_compact ? 60 : 80) : 44};
 }
 
 QSize SpaceCardWidget::minimumSizeHint() const
@@ -131,6 +131,15 @@ void SpaceCardWidget::setCompact(bool compact)
                       "QLabel { color: #f0f0f0; font-size: 16px; font-weight: 600; border: none; background: transparent; }"));
     applyAspectLayout();
     paintPixmap();
+}
+
+void SpaceCardWidget::setPreviewVisible(bool visible)
+{
+    if (m_previewVisible == visible)
+        return;
+    m_previewVisible = visible;
+    m_preview->setVisible(visible);
+    applyAspectLayout();
 }
 
 void SpaceCardWidget::setMonitorAspect(int physWidth, int physHeight)
@@ -363,7 +372,10 @@ void SpaceCardWidget::mouseMoveEvent(QMouseEvent *event)
             m_draggingReorder = true;
         }
         if (m_draggingReorder) {
-            QWidget *w = QApplication::widgetAt(event->globalPosition().toPoint());
+            // The pressed card owns this mouse sequence. Resolve its sibling
+            // inside the same overview, without a desktop-wide native hit test.
+            QWidget *root = window();
+            QWidget *w = root->childAt(root->mapFromGlobal(event->globalPosition().toPoint()));
             while (w && w != this) {
                 if (auto *card = qobject_cast<SpaceCardWidget *>(w)) {
                     const int target = card->spaceIndex();

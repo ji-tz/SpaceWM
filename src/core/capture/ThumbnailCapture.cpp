@@ -436,6 +436,23 @@ void invalidateWindow(HWND hwnd)
         g_windowShots.remove(hwnd);
 }
 
+QImage cachedWindowShot(HWND hwnd, const QSize &maxSize)
+{
+    const auto it = g_windowShots.constFind(hwnd);
+    return it == g_windowShots.constEnd() ? QImage() : scaleToFit(it.value(), maxSize);
+}
+
+bool refreshWindow(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd) || ::IsIconic(hwnd))
+        return false;
+    QImage fresh = capture(hwnd, QSize());
+    if (fresh.isNull())
+        return false; // keep the previous shot — never wipe to nothing
+    g_windowShots.insert(hwnd, fresh);
+    return true;
+}
+
 void clearWindowCache()
 {
     g_windowShots.clear();

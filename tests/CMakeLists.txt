@@ -11,9 +11,13 @@ set(SPACEWM_TEST_NAMES
   test_log
   test_space_card
   test_overview
+  test_overview_spaces
+  test_overview_staging
   test_overview_host
   test_window_placement
   test_flash_overlay
+  test_space_switch_animation
+  test_taskbar_switch
   test_tray
   test_package
   test_integration_flow

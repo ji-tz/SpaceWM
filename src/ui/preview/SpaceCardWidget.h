@@ -23,6 +23,8 @@ class SpaceCardWidget : public QFrame {
     void setHighlighted(bool on);
     // Top strip uses smaller budget so a row of spaces fits.
     void setCompact(bool compact);
+    void setPreviewVisible(bool visible);
+    bool isPreviewVisible() const { return m_previewVisible; }
     // Whether the × badge may appear at all (Overview disables when only 1 space).
     void setRemovable(bool on);
     bool isRemovable() const { return m_removable; }
@@ -80,6 +82,7 @@ class SpaceCardWidget : public QFrame {
     bool m_current = false;
     bool m_highlight = false;
     bool m_compact = false;
+    bool m_previewVisible = true;
     bool m_dropHover = false;
     bool m_removable = false;
     bool m_hovered = false;

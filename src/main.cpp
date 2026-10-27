@@ -94,7 +94,7 @@ int main(int argc, char *argv[])
     WindowTracker tracker;
     HotkeyManager hotkeys;
     TrayIcon tray;
-    SwitchFlashOverlay flash;
+    SpaceSwitchAnimator switchAnimator(&manager);
     OverviewHost overview(&manager);
     SettingsDialog settings;
 
@@ -109,8 +109,8 @@ int main(int argc, char *argv[])
     QObject::connect(&tracker, &WindowTracker::windowMoved, &manager,
                      [&](quint64 h) { manager.onWindowMoved(reinterpret_cast<HWND>(h)); });
 
-    // Taskbar / Alt+Tab while overview is open → land on the CURRENT space
-    // and close the overlay so the app is visible on the live desktop.
+    // Taskbar / Alt+Tab follows the activated window's owning space.
+    // While overview is open, filter automatic activation from warming shots.
     // EVENT_SYSTEM_FOREGROUND carries no cause info (MSDN: "the foreground
     // window has changed"), so act ONLY on the two documented user-initiated
     // switches and ignore everything else (uncloak steals, activation reverts):
@@ -118,14 +118,37 @@ int main(int argc, char *argv[])
     //   - mouse click — the button is still down when the event arrives
     //     (GetAsyncKeyState), which system side-effects never are.
     bool switchPending = false;
+    QObject::connect(&hotkeys, &HotkeyManager::taskbarPressed, &switchAnimator,
+                     [&]() { switchAnimator.prepareTaskbarSwitch(); });
+    auto updateTaskbarGuard = [&]() {
+        bool hasOtherWindows = false;
+        if (!overview.isOpen())
+            for (auto *mon : manager.monitors())
+                for (int i = 0; i < mon->spaces.size(); ++i)
+                    if (i != mon->currentIndex && manager.spaceHasWindows(mon->hmon, i))
+                        hasOtherWindows = true;
+        hotkeys.setTaskbarGuardEnabled(hasOtherWindows);
+    };
+    QObject::connect(&manager, &SpaceManager::windowTracked, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&manager, &SpaceManager::windowUntracked, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&manager, &SpaceManager::spaceChanged, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&manager, &SpaceManager::monitorLayoutChanged, &hotkeys, updateTaskbarGuard);
+    QObject::connect(&overview, &OverviewHost::allClosed, &hotkeys, updateTaskbarGuard);
     QObject::connect(&hotkeys, &HotkeyManager::windowSwitchChord, &app, [&]() {
         if (overview.isOpen())
             switchPending = true;
     });
     QObject::connect(&tracker, &WindowTracker::windowForeground, &app, [&](quint64 h) {
         HWND hwnd = reinterpret_cast<HWND>(h);
-        if (!overview.isOpen() || !hwnd || !::IsWindow(hwnd))
+        // OUTOFCONTEXT events can arrive after a newer activation. Do not
+        // switch back to a window that is no longer in the foreground.
+        if (!hwnd || !::IsWindow(hwnd) || ::GetForegroundWindow() != hwnd)
             return;
+        if (!overview.isOpen()) {
+            if (manager.onWindowForeground(hwnd))
+                switchAnimator.finishTaskbarPress();
+            return;
+        }
         const int ownedSpace = manager.spaceOfWindow(hwnd);
         // Own overview tool windows are unmanaged — ignore those foreground events.
         if (ownedSpace < 0 && !WindowTracker::isManageable(hwnd))
@@ -145,16 +168,12 @@ int main(int argc, char *argv[])
         const bool altTab = switchPending;
         switchPending = false;
 
-        HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        auto *m = manager.monitorOf(mon);
-        if (!m)
-            return;
         if (ownedSpace < 0)
             manager.trackWindow(hwnd);
-        if (manager.ownerMonitorOf(hwnd) != mon || manager.spaceOfWindow(hwnd) != m->currentIndex)
-            manager.assignWindow(hwnd, mon, m->currentIndex);
+        if (!manager.onWindowForeground(hwnd))
+            return;
 
-        // Leave preview; stay on the real current space with the app shown.
+        // Leave preview on the activated app's owning space.
         wchar_t cls[64]{};
         ::GetClassNameW(hwnd, cls, 64);
         spacelog::info(
@@ -172,16 +191,6 @@ int main(int argc, char *argv[])
     QObject::connect(&app, &QGuiApplication::screenRemoved, &manager,
                      [&]() { manager.refreshMonitors(); });
 
-    // --- switch animation flash ---
-    QObject::connect(&manager, &SpaceManager::requestSwitchAnimation, &flash,
-                     [&](quint64 hmon, int from, int to) {
-                         auto *m = manager.monitorOf(reinterpret_cast<HMONITOR>(hmon));
-                         if (!m)
-                             return;
-                         const int dir = (to > from) ? 1 : -1;
-                         flash.play(m->geometry, dir);
-                     });
-
     QObject::connect(&manager, &SpaceManager::spaceChanged, &tray, [&](quint64 hmon, int index) {
         auto *m = manager.monitorOf(reinterpret_cast<HMONITOR>(hmon));
         if (!m)
@@ -191,6 +200,8 @@ int main(int argc, char *argv[])
 
     // --- overview: every monitor at once (Mission Control style) ---
     auto openOverview = [&]() {
+        hotkeys.setTaskbarGuardEnabled(false);
+        switchAnimator.stopAll();
         overview.openAll();
         if (overview.isOpen())
             hotkeys.setConsumeEscape(true); // Esc closes globally (hook swallows)
@@ -204,8 +215,10 @@ int main(int argc, char *argv[])
         }
     };
     // Any full close (cancel, commit, foreground/Alt+Tab) ends with allClosed.
-    QObject::connect(&overview, &OverviewHost::allClosed, &hotkeys,
-                     [&]() { hotkeys.setConsumeEscape(false); });
+    QObject::connect(&overview, &OverviewHost::allClosed, &hotkeys, [&]() {
+        hotkeys.setConsumeEscape(false);
+        switchPending = false;
+    });
     // Esc pressed while the overview is open — works even when the panel
     // lost focus (the hook swallows it, so no leak to the foreground app).
     QObject::connect(&hotkeys, &HotkeyManager::escapeRequested, &app, [&]() {
@@ -229,7 +242,7 @@ int main(int argc, char *argv[])
                 return;
             const int n = int(m->spaces.size());
             const int next = (m->currentIndex - 1 + n) % n;
-            manager.switchSpace(h, next, true);
+            manager.switchSpace(h, next, true, -1);
             break;
         }
         case A::SwitchNextSpace: {
@@ -238,7 +251,7 @@ int main(int argc, char *argv[])
                 return;
             const int n = int(m->spaces.size());
             const int next = (m->currentIndex + 1) % n;
-            manager.switchSpace(h, next, true);
+            manager.switchSpace(h, next, true, 1);
             break;
         }
         case A::ToggleOverview:
@@ -276,7 +289,7 @@ int main(int argc, char *argv[])
         auto *m = manager.monitorOf(h);
         if (!m || m->spaces.isEmpty())
             return;
-        manager.switchSpace(h, (m->currentIndex + 1) % int(m->spaces.size()), true);
+        manager.switchSpace(h, (m->currentIndex + 1) % int(m->spaces.size()), true, 1);
     });
     QObject::connect(&tray, &TrayIcon::prevSpaceRequested, &app, [&]() {
         HMONITOR h = monitors::fromCursor();
@@ -284,7 +297,7 @@ int main(int argc, char *argv[])
         if (!m || m->spaces.isEmpty())
             return;
         const int n = int(m->spaces.size());
-        manager.switchSpace(h, (m->currentIndex - 1 + n) % n, true);
+        manager.switchSpace(h, (m->currentIndex - 1 + n) % n, true, -1);
     });
     QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager,
                      &SpaceManager::refreshMonitors);

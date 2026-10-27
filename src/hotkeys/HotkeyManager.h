@@ -59,6 +59,12 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     // covers the focused case / tests).
     void setConsumeEscape(bool on);
     bool consumeEscape() const;
+    // Mouse pre-activation bridge. Called on the GUI thread; stale timed-out
+    // messages are ignored so a busy desktop never gets a delayed cover.
+    void setTaskbarGuardEnabled(bool enabled);
+    void notifyTaskbarPress(ULONGLONG deadline);
+    HWND taskbarBridgeWindow() const { return m_taskbarBridge; }
+    static constexpr UINT TaskbarPressMessage = WM_APP + 0x351;
 
     // Portable sequence helpers (pure — unit-tested).
     static QString defaultSequence(int action);
@@ -109,6 +115,7 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     void windowSwitchChord();
     // Esc pressed while consumeEscape() is set (overview open) — queued.
     void escapeRequested();
+    void taskbarPressed();
 
   private:
     struct BindingInternal {
@@ -124,4 +131,5 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
     QVector<BindingInternal> m_registered; // RegisterHotKey fallback only
     QVector<int> m_registeredIds;
     QThread *m_hookThread = nullptr; // owns the LL hook + its message pump
+    HWND m_taskbarBridge = nullptr;
 };
