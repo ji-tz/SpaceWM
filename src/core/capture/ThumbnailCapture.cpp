@@ -5,6 +5,8 @@
 #include <QPainter>
 #include <QDir>
 #include <QFile>
+#include <QElapsedTimer>
+#include <atomic>
 
 #include <chrono>
 #include <QFileInfo>
@@ -231,14 +233,67 @@ QImage bitBltWindowFrame(const RECT &rc)
     return img;
 }
 
+// Detailed timings are enabled only for independent overview window jobs.
+// A capture ID ties fallback attempts together; target_tid exposes windows
+// serviced by the same GUI thread. Native call timings exclude TR formatting.
+class CaptureTrace {
+  public:
+    explicit CaptureTrace(HWND hwnd)
+        : m_hwnd(hwnd)
+    {
+        static std::atomic<quint64> next{0};
+        m_id = ++next;
+        m_targetThread = ::GetWindowThreadProcessId(hwnd, &m_targetProcess);
+        m_timer.start();
+        mark("begin");
+    }
+    ~CaptureTrace() { mark("finish"); }
+    void mark(const char *phase, double callMs = -1, int result = -1)
+    {
+        const qint64 now = m_timer.nsecsElapsed();
+        const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+        spacelog::info(
+            QStringLiteral(
+                "window capture detail id=%1 hwnd=0x%2 thread=%3 target_pid=%4 target_tid=%5 phase=%6 ms=%7 total_ms=%8 call_ms=%9 result=%10 tick_us=%11")
+                .arg(m_id)
+                .arg(quintptr(m_hwnd), 0, 16)
+                .arg(::GetCurrentThreadId())
+                .arg(m_targetProcess)
+                .arg(m_targetThread)
+                .arg(QLatin1String(phase))
+                .arg(double(now - m_previous) / 1000000.0, 0, 'f', 3)
+                .arg(double(now) / 1000000.0, 0, 'f', 3)
+                .arg(callMs, 0, 'f', 3)
+                .arg(result)
+                .arg(tick));
+        m_previous = m_timer.nsecsElapsed();
+    }
+
+  private:
+    HWND m_hwnd;
+    quint64 m_id = 0;
+    DWORD m_targetProcess = 0, m_targetThread = 0;
+    QElapsedTimer m_timer;
+    qint64 m_previous = 0;
+};
+
+void captureMark(CaptureTrace *trace, const char *phase, double callMs = -1, int result = -1)
+{
+    if (trace)
+        trace->mark(phase, callMs, result);
+}
+
 // Single PrintWindow attempt into a FULL-window bitmap (PrintWindow draws
 // 1:1 — a pre-shrunk DC only captures the top-left corner). The BOOL only
 // says the call succeeded; composition/GPU windows often "succeed" with a
 // black buffer, so the caller judges content via looksLikeFailedShot.
-QImage printWindowImage(HWND hwnd, int fullW, int fullH, UINT flags)
+QImage printWindowImage(HWND hwnd, int fullW, int fullH, UINT flags, CaptureTrace *trace)
 {
     if (fullW <= 0 || fullH <= 0)
         return {};
+    captureMark(trace, flags ? "pw.full.allocate.begin" : "pw.plain.allocate.begin");
     HDC screen = ::GetDC(nullptr);
     if (!screen)
         return {};
@@ -265,28 +320,42 @@ QImage printWindowImage(HWND hwnd, int fullW, int fullH, UINT flags)
     }
     HGDIOBJ old = ::SelectObject(mem, bmp);
 
+    captureMark(trace, flags ? "pw.full.call.begin" : "pw.plain.call.begin");
+    QElapsedTimer nativeTimer;
+    nativeTimer.start();
     const BOOL ok = ::PrintWindow(hwnd, mem, flags);
+    const double nativeMs = double(nativeTimer.nsecsElapsed()) / 1000000.0;
+    captureMark(trace, flags ? "pw.full.call.end" : "pw.plain.call.end", nativeMs, ok);
 
     QImage img;
     if (ok && bits) {
         img = QImage(fullW, fullH, QImage::Format_ARGB32);
+        captureMark(trace, "pw.imageAllocated");
         memcpy(img.bits(), bits, size_t(fullW) * size_t(fullH) * 4);
+        captureMark(trace, "pw.pixelsCopied");
         img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        captureMark(trace, "pw.formatConverted");
     }
 
     ::SelectObject(mem, old);
     ::DeleteObject(bmp);
     ::DeleteDC(mem);
     ::ReleaseDC(nullptr, screen);
+    captureMark(trace, "pw.resourcesReleased");
     return img;
 }
 
 // GetWindowDC of THIS hwnd (window surface, not the screen).
-QImage windowDcImage(HWND hwnd, int fullW, int fullH)
+QImage windowDcImage(HWND hwnd, int fullW, int fullH, CaptureTrace *trace)
 {
     if (fullW <= 0 || fullH <= 0)
         return {};
+    captureMark(trace, "windowDC.get.begin");
+    QElapsedTimer nativeTimer;
+    nativeTimer.start();
     HDC wdc = ::GetWindowDC(hwnd);
+    captureMark(trace, "windowDC.get.end", double(nativeTimer.nsecsElapsed()) / 1000000.0,
+                wdc != nullptr);
     if (!wdc)
         return {};
     HDC mem = ::CreateCompatibleDC(wdc);
@@ -305,10 +374,17 @@ QImage windowDcImage(HWND hwnd, int fullW, int fullH)
     QImage img;
     if (mem && bmp && bits) {
         HGDIOBJ old = ::SelectObject(mem, bmp);
-        if (::BitBlt(mem, 0, 0, fullW, fullH, wdc, 0, 0, SRCCOPY)) {
+        captureMark(trace, "windowDC.blit.begin");
+        nativeTimer.restart();
+        const BOOL ok = ::BitBlt(mem, 0, 0, fullW, fullH, wdc, 0, 0, SRCCOPY);
+        captureMark(trace, "windowDC.blit.end", double(nativeTimer.nsecsElapsed()) / 1000000.0, ok);
+        if (ok) {
             img = QImage(fullW, fullH, QImage::Format_ARGB32);
+            captureMark(trace, "windowDC.imageAllocated");
             memcpy(img.bits(), bits, size_t(fullW) * size_t(fullH) * 4);
+            captureMark(trace, "windowDC.pixelsCopied");
             img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            captureMark(trace, "windowDC.formatConverted");
         }
         ::SelectObject(mem, old);
     }
@@ -317,21 +393,26 @@ QImage windowDcImage(HWND hwnd, int fullW, int fullH)
     if (mem)
         ::DeleteDC(mem);
     ::ReleaseDC(hwnd, wdc);
+    captureMark(trace, "windowDC.resourcesReleased");
     return img;
 }
 
 // Per-window cascade: PrintWindow (full content → plain) → GetWindowDC.
 // Every step is rejected on a near-black frame — PrintWindow's BOOL stays
 // TRUE for black buffers, so content decides, not the return value.
-QImage perWindowImage(HWND hwnd, int fullW, int fullH)
+QImage perWindowImage(HWND hwnd, int fullW, int fullH, CaptureTrace *trace)
 {
-    QImage img = printWindowImage(hwnd, fullW, fullH, PW_RENDERFULLCONTENT);
-    if (!looksLikeFailedShot(img))
+    QImage img = printWindowImage(hwnd, fullW, fullH, PW_RENDERFULLCONTENT, trace);
+    const bool fullFailed = looksLikeFailedShot(img);
+    captureMark(trace, "pw.full.validated", -1, !fullFailed);
+    if (!fullFailed)
         return img;
-    img = printWindowImage(hwnd, fullW, fullH, 0);
-    if (!looksLikeFailedShot(img))
+    img = printWindowImage(hwnd, fullW, fullH, 0, trace);
+    const bool plainFailed = looksLikeFailedShot(img);
+    captureMark(trace, "pw.plain.validated", -1, !plainFailed);
+    if (!plainFailed)
         return img;
-    return windowDcImage(hwnd, fullW, fullH);
+    return windowDcImage(hwnd, fullW, fullH, trace);
 }
 
 QString windowClassName(HWND hwnd)
@@ -342,7 +423,8 @@ QString windowClassName(HWND hwnd)
 }
 } // namespace
 
-QImage capture(HWND hwnd, const QSize &maxSize)
+static QImage captureImpl(HWND hwnd, const QSize &maxSize, bool allowScreen,
+                          CaptureTrace *trace = nullptr)
 {
     if (!hwnd || !::IsWindow(hwnd))
         return {};
@@ -357,9 +439,11 @@ QImage capture(HWND hwnd, const QSize &maxSize)
     if (fullW <= 0 || fullH <= 0)
         return {};
 
-    QImage img = perWindowImage(hwnd, fullW, fullH);
+    captureMark(trace, "geometryReady");
+    QImage img = perWindowImage(hwnd, fullW, fullH, trace);
     const bool perWindowBlack = looksLikeFailedShot(img);
-    const bool sampleScreen = g_screenSampling && canSampleScreen(hwnd);
+    captureMark(trace, "capture.validated", -1, !perWindowBlack);
+    const bool sampleScreen = allowScreen && canSampleScreen(hwnd);
     if (perWindowBlack) {
         spacelog::warn(
             QStringLiteral(
@@ -403,11 +487,34 @@ QImage capture(HWND hwnd, const QSize &maxSize)
         }
     }
 
+    captureMark(trace, "frameCropped");
     if (img.isNull())
         return {};
     if (maxSize.isValid() && (img.width() > maxSize.width() || img.height() > maxSize.height()))
         img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     return img;
+}
+
+QImage capture(HWND hwnd, const QSize &maxSize)
+{
+    return captureImpl(hwnd, maxSize, g_screenSampling);
+}
+
+QImage captureWindowOnly(HWND hwnd, const QSize &maxSize)
+{
+    CaptureTrace trace(hwnd);
+    return captureImpl(hwnd, maxSize, false, &trace);
+}
+
+QImage wallpaperSource()
+{
+    return loadWallpaperImage();
+}
+
+void storeWindowShot(HWND hwnd, const QImage &image)
+{
+    if (hwnd && ::IsWindow(hwnd) && !::IsIconic(hwnd) && !image.isNull())
+        g_windowShots.insert(hwnd, image);
 }
 
 QImage windowShot(HWND hwnd, const QSize &maxSize)

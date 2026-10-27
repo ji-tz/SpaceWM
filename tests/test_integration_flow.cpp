@@ -874,8 +874,7 @@ class TestIntegrationFlow : public QObject {
         for (auto *mon : m_sm.monitors()) {
             auto *panel = m_host.panelFor(mon->hmon);
             QVERIFY(panel && panel->isVisible());
-            if (panel != active)
-                QVERIFY(!panel->isContentReady());
+            QVERIFY(panel->isContentReady());
         }
         QCOMPARE(active->selectedIndex(), m_sm.currentSpaceIndex(active->targetMonitor()));
         for (auto *mon : m_sm.monitors()) {
@@ -920,6 +919,101 @@ class TestIntegrationFlow : public QObject {
         QCOMPARE(m_sm.currentSpaceIndex(mon), owned);
         QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
         QVERIFY(thumbs::screenSamplingEnabled());
+    }
+
+    void step26_windowsMoveIntoPreviewAndStripSlidesDown()
+    {
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        auto *panel = m_host.panelFor(m_sm.ownerMonitorOf(m_hwndExpl));
+        QVERIFY(panel);
+        QTRY_VERIFY_WITH_TIMEOUT(panel->isContentReady(), 10000);
+        QVERIFY(panel->entryWindowCount() > 0);
+        QVERIFY(panel->enterProgress() < 1.0);
+        QVERIFY(panel->entryStripRect().top() <
+                panel->findChild<QWidget *>("SpaceStripHost")->mapTo(panel, QPoint()).y());
+        const QRectF start = panel->entryWindowRect(0);
+        QTRY_VERIFY_WITH_TIMEOUT(panel->entryWindowRect(0) != start, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(!panel->isAnimating(), 3000);
+        QCOMPARE(panel->enterProgress(), 1.0);
+        QVERIFY(!panel->findChild<QWidget *>("OverviewPanel")->graphicsEffect());
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
+    void step27_parallelMonitorCaptureBeforeOverview()
+    {
+        spacelog::flush();
+        QFile trace(spacelog::tracePath());
+        QVERIFY(trace.open(QIODevice::ReadOnly | QIODevice::Text));
+        trace.seek(trace.size());
+        m_host.openAll();
+        spacelog::flush();
+        const QString log = QString::fromUtf8(trace.readAll());
+        const int firstPanel = log.indexOf(QStringLiteral("overview panel open "));
+        QVERIFY(firstPanel >= 0);
+        int completed = 0;
+        for (const QString &line : log.split('\n')) {
+            if (line.contains(QStringLiteral("overview monitor worker ")) &&
+                line.contains(QStringLiteral("phase=done"))) {
+                QVERIFY(log.indexOf(line) < firstPanel);
+                ++completed;
+            }
+        }
+        QCOMPARE(completed, m_sm.monitors().size());
+        QCOMPARE(m_host.openPanelCount(), completed);
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+        QVERIFY(thumbs::screenSamplingEnabled());
+    }
+
+    void step28_allMonitorsPreparedBeforeAnimations()
+    {
+        bool sawReady = false;
+        const auto connection =
+            connect(&m_host, &OverviewHost::panelReady, this, [&](quint64, int) {
+                sawReady = true;
+                for (auto *mon : m_sm.monitors())
+                    QVERIFY(m_host.panelFor(mon->hmon)->isContentReady());
+            });
+        m_host.openAll();
+        disconnect(connection);
+        QVERIFY(sawReady);
+        for (auto *mon : m_sm.monitors()) {
+            auto *panel = m_host.panelFor(mon->hmon);
+            QVERIFY(panel->isContentReady());
+            QTRY_VERIFY_WITH_TIMEOUT(!panel->isAnimating(), 3000);
+        }
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
+    void step29_windowCaptureTasksFinishBeforeAnimation()
+    {
+        spacelog::flush();
+        QFile trace(spacelog::tracePath());
+        QVERIFY(trace.open(QIODevice::ReadOnly | QIODevice::Text));
+        trace.seek(trace.size());
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        spacelog::flush();
+        const QString log = QString::fromUtf8(trace.readAll());
+        const int ready = log.indexOf(QStringLiteral("phase=allMonitorsPrepared "));
+        const int animated = log.indexOf(QStringLiteral("phase=allAnimationsStarted "));
+        QVERIFY(ready >= 0 && animated > ready);
+        int captures = 0;
+        for (const QString &line : log.split('\n')) {
+            if (!line.contains(QStringLiteral("overview window worker ")))
+                continue;
+            QVERIFY(log.indexOf(line) < ready);
+            QVERIFY(!line.contains(QStringLiteral("thread=%1 ").arg(::GetCurrentThreadId())));
+            if (line.contains(QStringLiteral("phase=done ")))
+                ++captures;
+        }
+        QVERIFY(captures > 0);
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
     }
 
     void cleanupTestCase()

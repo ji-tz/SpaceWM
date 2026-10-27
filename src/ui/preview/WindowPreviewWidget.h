@@ -23,6 +23,8 @@ class WindowPreviewWidget : public QFrame {
     // imageBox = pixel size of the picture area (real aspect preserved by caller).
     void setImageBoxSize(const QSize &imageBox);
     QSize imageBoxSize() const;
+    const QImage &previewImage() const { return m_image; }
+    QRect imageRect() const;
 
     HWND windowHandle() const { return m_hwnd; }
     QString windowTitle() const { return m_title; }

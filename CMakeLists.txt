@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Test Concurrent)
 
 if(NOT WIN32)
   message(FATAL_ERROR "SpaceWM targets Windows only")
@@ -68,6 +68,7 @@ target_include_directories(spacewm_core PUBLIC src)
 target_link_libraries(spacewm_core PUBLIC
   Qt6::Widgets
   Qt6::Gui
+  Qt6::Concurrent
   spdlog::spdlog
   dwmapi
   user32

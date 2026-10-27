@@ -3,11 +3,151 @@
 #include "core/log/Log.h"
 #include "core/capture/ThumbnailCapture.h"
 #include "core/monitor/MonitorInfo.h"
+#include "core/window/CloakController.h"
 
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QPointer>
 #include <QHash>
+#include <vector>
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QPainter>
+#include <QScopedValueRollback>
+#include <QFutureWatcher>
+#include <algorithm>
+#include <QtConcurrent>
+#include <QThreadPool>
+
+namespace {
+struct MonitorPreparation {
+    MonitorSpaces monitor;
+    QImage desktop;
+    QImage wallpaper;
+    QHash<HWND, QImage> shots;
+    QHash<HWND, RECT> rectangles;
+};
+
+QImage filledWallpaper(const QImage &source, const QSize &size)
+{
+    if (!source.isNull()) {
+        const QImage scaled =
+            source.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+        return scaled.copy((scaled.width() - size.width()) / 2,
+                           (scaled.height() - size.height()) / 2, size.width(), size.height());
+    }
+    QImage result(size, QImage::Format_ARGB32_Premultiplied);
+    result.fill(QColor(32, 36, 48));
+    return result;
+}
+
+MonitorPreparation prepareMonitor(MonitorPreparation data, const QImage &wallpaperSource,
+                                  bool sampleScreen, int generation)
+{
+    QElapsedTimer timer;
+    timer.start();
+    const auto log = [&](const QString &phase) {
+        spacelog::info(
+            QStringLiteral(
+                "overview monitor worker generation=%1 mon=0x%2 thread=%3 phase=%4 total_ms=%5")
+                .arg(generation)
+                .arg(quintptr(data.monitor.hmon), 0, 16)
+                .arg(::GetCurrentThreadId())
+                .arg(phase)
+                .arg(double(timer.nsecsElapsed()) / 1000000.0, 0, 'f', 3));
+    };
+    log(QStringLiteral("start"));
+    const RECT rect = data.monitor.physRect;
+    const QSize fullSize(rect.right - rect.left, rect.bottom - rect.top);
+    if (sampleScreen)
+        data.desktop = thumbs::captureMonitor(rect, QSize());
+    log(QStringLiteral("desktopCaptured"));
+    data.wallpaper = filledWallpaper(wallpaperSource, fullSize);
+    if (data.desktop.isNull())
+        data.desktop = data.wallpaper;
+    log(QStringLiteral("wallpaperPrepared"));
+    log(QStringLiteral("done"));
+    return data;
+}
+
+struct WindowCapture {
+    HMONITOR monitor;
+    HWND window;
+    QImage image;
+    QElapsedTimer submitted;
+};
+
+void captureWindow(WindowCapture &job, int generation)
+{
+    const double queueMs = double(job.submitted.nsecsElapsed()) / 1000000.0;
+    QElapsedTimer timer;
+    timer.start();
+    const auto log = [&](const QString &phase) {
+        spacelog::info(
+            QStringLiteral(
+                "overview window worker generation=%1 mon=0x%2 hwnd=0x%3 thread=%4 phase=%5 ms=%6 ok=%7 queue_ms=%8")
+                .arg(generation)
+                .arg(quintptr(job.monitor), 0, 16)
+                .arg(quintptr(job.window), 0, 16)
+                .arg(::GetCurrentThreadId())
+                .arg(phase)
+                .arg(double(timer.nsecsElapsed()) / 1000000.0, 0, 'f', 3)
+                .arg(!job.image.isNull())
+                .arg(queueMs, 0, 'f', 3));
+    };
+    log(QStringLiteral("start"));
+    job.image = thumbs::captureWindowOnly(job.window);
+    log(QStringLiteral("done"));
+}
+
+void composeMonitor(MonitorPreparation &data, const QImage &wallpaperSource, int generation)
+{
+    QElapsedTimer timer;
+    timer.start();
+    const RECT rect = data.monitor.physRect;
+    const QSize fullSize(rect.right - rect.left, rect.bottom - rect.top);
+    for (auto &space : data.monitor.spaces) {
+        const QSize canvasSize = fullSize.scaled(QSize(640, 360), Qt::KeepAspectRatio);
+        QImage canvas = filledWallpaper(wallpaperSource, canvasSize);
+        QPainter painter(&canvas);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        const double sx = double(canvasSize.width()) / fullSize.width();
+        const double sy = double(canvasSize.height()) / fullSize.height();
+        for (auto it = space.zOrder.crbegin(); it != space.zOrder.crend(); ++it) {
+            const QImage image = data.shots.value(*it);
+            if (image.isNull() || !data.rectangles.contains(*it))
+                continue;
+            const RECT window = data.rectangles.value(*it);
+            painter.drawImage(QRectF((window.left - rect.left) * sx, (window.top - rect.top) * sy,
+                                     (window.right - window.left) * sx,
+                                     (window.bottom - window.top) * sy),
+                              image);
+        }
+        painter.end();
+        space.screenshot = canvas;
+    }
+    spacelog::info(
+        QStringLiteral("overview composite worker generation=%1 mon=0x%2 thread=%3 ms=%4")
+            .arg(generation)
+            .arg(quintptr(data.monitor.hmon), 0, 16)
+            .arg(::GetCurrentThreadId())
+            .arg(double(timer.nsecsElapsed()) / 1000000.0, 0, 'f', 3));
+}
+
+void waitForBatch(QFuture<void> batch)
+{
+    // PrintWindow may require this thread to service WM_PRINT. Waiting must
+    // dispatch native messages, even for a Qt window owned by this process.
+    QFutureWatcher<void> watcher;
+    QEventLoop waitGroup;
+    QObject::connect(&watcher, &QFutureWatcher<void>::finished, &waitGroup, &QEventLoop::quit);
+    watcher.setFuture(batch);
+    if (!batch.isFinished())
+        waitGroup.exec(QEventLoop::ExcludeUserInputEvents);
+    batch.waitForFinished();
+}
+
+} // namespace
 
 OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
     : QObject(parent),
@@ -30,6 +170,8 @@ OverviewHost::~OverviewHost()
 
 bool OverviewHost::isOpen() const
 {
+    if (m_opening)
+        return true;
     for (OverviewWindow *w : m_panels)
         if (w && (w->isOpen() || w->isVisible()))
             return true;
@@ -66,7 +208,9 @@ OverviewWindow *OverviewHost::panelFor(HMONITOR hmon)
 void OverviewHost::ensurePanels()
 {
     const auto mons = m_manager ? m_manager->monitors() : QVector<MonitorSpaces *>();
-    if (m_panels.size() == mons.size())
+    if (m_panels.size() == mons.size() &&
+        std::all_of(mons.cbegin(), mons.cend(),
+                    [this](const MonitorSpaces *mon) { return panelFor(mon->hmon) != nullptr; }))
         return;
 
     for (OverviewWindow *w : std::as_const(m_panels))
@@ -78,8 +222,6 @@ void OverviewHost::ensurePanels()
         w->setHostManaged(true);
         w->assignMonitor(mon->hmon);
         connect(w, &OverviewWindow::closed, this, &OverviewHost::onPanelClosed);
-        connect(w, &OverviewWindow::spacePreparationRequested, this,
-                [this, w](int index) { prioritizeSpace(w->targetMonitor(), index); });
         m_panels.push_back(w);
     }
 }
@@ -88,106 +230,190 @@ void OverviewHost::openAll()
 {
     if (!m_manager || isOpen())
         return;
+    QScopedValueRollback<bool> opening(m_opening, true);
+    QElapsedTimer timer;
+    timer.start();
     ensurePanels();
     if (m_panels.isEmpty())
         return;
-
     const int generation = ++m_closeGeneration;
     m_switching = false;
-    m_preparations.clear();
-    const HMONITOR cursor = monitors::fromCursor();
-    m_active = panelFor(cursor);
+    const auto checkpoint = [&](const QString &phase) {
+        spacelog::info(QStringLiteral("overview open generation=%1 phase=%2 total_ms=%3")
+                           .arg(generation)
+                           .arg(phase)
+                           .arg(double(timer.nsecsElapsed()) / 1000000.0, 0, 'f', 3));
+    };
+    m_active = panelFor(monitors::fromCursor());
     if (!m_active)
         m_active = m_panels.first();
 
-    // Take every monitor copy BEFORE showing any panel or disabling sampling.
-    // These are entry backgrounds only; space cards stay render-only.
-    QHash<quintptr, QImage> backdrops;
-    for (OverviewWindow *panel : std::as_const(m_panels)) {
-        auto *mon = m_manager->monitorOf(panel->targetMonitor());
-        if (!mon)
-            continue;
-        QImage backdrop;
-        if (thumbs::screenSamplingEnabled())
-            backdrop = thumbs::captureMonitor(mon->physRect, QSize());
-        if (backdrop.isNull())
-            backdrop = thumbs::wallpaperFilled(mon->physRect,
-                                               QSize(mon->physRect.right - mon->physRect.left,
-                                                     mon->physRect.bottom - mon->physRect.top));
-        backdrops.insert(quintptr(mon->hmon), backdrop);
+    // Freeze model/cache/geometry on their owning thread. Workers own their
+    // QImages and GDI resources; they never touch the live SpaceManager.
+    const QImage source = thumbs::wallpaperSource();
+    const bool sampleScreen = thumbs::screenSamplingEnabled();
+    QVector<HWND> zOrder;
+    ::EnumWindows(
+        [](HWND hwnd, LPARAM value) -> BOOL {
+            reinterpret_cast<QVector<HWND> *>(value)->push_back(hwnd);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&zOrder));
+    std::vector<MonitorPreparation> prepared;
+    std::vector<WindowCapture> windows;
+    QSet<HWND> scheduled;
+    for (auto *monitor : m_manager->monitors()) {
+        MonitorPreparation data;
+        data.monitor = *monitor;
+        for (int index = 0; index < data.monitor.spaces.size(); ++index) {
+            auto &space = data.monitor.spaces[index];
+            space.zOrder.clear();
+            for (HWND hwnd : zOrder)
+                if (space.windows.contains(hwnd))
+                    space.zOrder.push_back(hwnd);
+            for (HWND hwnd : space.windows) {
+                if (!space.zOrder.contains(hwnd))
+                    space.zOrder.push_back(hwnd);
+                const QImage cached = thumbs::cachedWindowShot(hwnd);
+                data.shots.insert(hwnd, cached);
+                if (!scheduled.contains(hwnd) && ::IsWindow(hwnd) && !::IsIconic(hwnd) &&
+                    (index == data.monitor.currentIndex || cached.isNull())) {
+                    windows.push_back({data.monitor.hmon, hwnd, {}});
+                    scheduled.insert(hwnd);
+                }
+                RECT rect{};
+                if (::GetWindowRect(hwnd, &rect))
+                    data.rectangles.insert(hwnd, rect);
+            }
+        }
+        prepared.push_back(std::move(data));
     }
-    for (OverviewWindow *panel : std::as_const(m_panels))
-        panel->beginPanelOpen(panel->targetMonitor(), panel == m_active,
-                              backdrops.value(quintptr(panel->targetMonitor())));
+    QThreadPool pool;
+    // One independent task per monitor/window, with a ceiling on simultaneous
+    // full-resolution GDI buffers when a desktop has many tracked windows.
+    pool.setMaxThreadCount(qBound(1, int(prepared.size() + windows.size()), 32));
+    struct EntryTask {
+        MonitorPreparation *background = nullptr;
+        WindowCapture *window = nullptr;
+    };
+    std::vector<EntryTask> tasks;
+    for (auto &data : prepared)
+        tasks.push_back({&data, nullptr});
+    for (auto &job : windows)
+        tasks.push_back({nullptr, &job});
+    for (auto &job : windows)
+        job.submitted.start();
+    // A single parallel for-each lets both kinds of work share the pool fairly.
+    // Separate concurrent map engines can reserve runners and delay each other.
+    auto batch =
+        QtConcurrent::map(&pool, tasks, [source, sampleScreen, generation](EntryTask &task) {
+            if (task.background)
+                *task.background =
+                    prepareMonitor(std::move(*task.background), source, sampleScreen, generation);
+            else
+                captureWindow(*task.window, generation);
+        });
+    checkpoint(QStringLiteral("launchMonitorAndWindowPreparation"));
+    waitForBatch(batch);
+    checkpoint(QStringLiteral("backgroundsAndWindowsReady"));
+    if (generation != m_closeGeneration)
+        return;
+    for (const auto &job : windows) {
+        if (job.image.isNull())
+            continue; // Preserve the previous image after a failed capture.
+        for (auto &data : prepared)
+            if (data.monitor.hmon == job.monitor)
+                data.shots.insert(job.window, job.image);
+    }
+    // Composites only consume completed images, never trigger hidden capture.
+    auto composites =
+        QtConcurrent::map(&pool, prepared, [source, generation](MonitorPreparation &data) {
+            composeMonitor(data, source, generation);
+        });
+    waitForBatch(composites);
+    checkpoint(QStringLiteral("allMonitorsPrepared"));
+    if (generation != m_closeGeneration)
+        return;
+    // Message dispatch may have changed ownership or monitor layout. Never
+    // publish stale membership/composites from a previous desktop snapshot.
+    bool valid = prepared.size() == size_t(m_manager->monitors().size());
+    for (const auto &data : prepared) {
+        const auto *monitor = m_manager->monitorOf(data.monitor.hmon);
+        if (!monitor || monitor->currentIndex != data.monitor.currentIndex ||
+            monitor->spaces.size() != data.monitor.spaces.size() ||
+            memcmp(&monitor->physRect, &data.monitor.physRect, sizeof(RECT)) != 0) {
+            valid = false;
+            break;
+        }
+        for (int i = 0; i < monitor->spaces.size(); ++i)
+            if (monitor->spaces[i].windows != data.monitor.spaces[i].windows)
+                valid = false;
+    }
+    if (!valid) {
+        spacelog::info(
+            QStringLiteral("overview preparation discarded: desktop membership changed"));
+        return;
+    }
+    for (const auto &data : prepared) {
+        auto *monitor = m_manager->monitorOf(data.monitor.hmon);
+        for (auto it = data.shots.cbegin(); it != data.shots.cend(); ++it)
+            thumbs::storeWindowShot(it.key(), it.value());
+        for (int i = 0; i < monitor->spaces.size(); ++i) {
+            monitor->spaces[i].screenshot = data.monitor.spaces[i].screenshot;
+            monitor->spaces[i].zOrder = data.monitor.spaces[i].zOrder;
+        }
+    }
+    for (const auto &data : prepared)
+        for (int i = 0; i < data.monitor.spaces.size(); ++i)
+            emit m_manager->spacePreviewInvalidated(quint64(data.monitor.hmon), i);
+    if (generation != m_closeGeneration)
+        return;
+    checkpoint(QStringLiteral("publishPreparedImages"));
+    // Desktop copies from every worker predate EVERY cover. Only now is it
+    // safe to show panels and uncloak non-current windows behind those covers.
+    for (const auto &data : prepared) {
+        auto *panel = panelFor(data.monitor.hmon);
+        panel->beginPanelOpen(data.monitor.hmon, panel == m_active, data.desktop, data.wallpaper);
+        if (generation != m_closeGeneration) {
+            m_manager->recloakNow();
+            forceHideAll();
+            return;
+        }
+    }
     m_manager->setOverviewOpen(true);
-
-    // Cheap cached cards exist on every panel for keyboard/drop targeting, but
-    // their content stays invisible over the frozen desktop until prepared.
-    for (OverviewWindow *panel : std::as_const(m_panels))
+    for (const auto &data : prepared)
+        for (const auto &space : data.monitor.spaces)
+            for (HWND hwnd : space.windows)
+                if (::IsWindow(hwnd) && !::IsIconic(hwnd))
+                    ::cloak::set(hwnd, false);
+    checkpoint(QStringLiteral("coversAndVisibility"));
+    // Finish ALL Qt layout/pixmap work before starting any animation.
+    for (auto *panel : std::as_const(m_panels)) {
         panel->populateCards();
-
-    QVector<OverviewWindow *> order{m_active};
-    for (OverviewWindow *panel : std::as_const(m_panels))
-        if (panel != m_active)
-            order.push_back(panel);
-    for (OverviewWindow *panel : std::as_const(order))
-        m_preparations.push_back(
-            {panel->targetMonitor(), m_manager->currentSpaceIndex(panel->targetMonitor()), true});
-    // Inactive spaces must never delay the first usable current-space overview.
-    for (OverviewWindow *panel : std::as_const(order)) {
-        const HMONITOR mon = panel->targetMonitor();
-        for (int i = 0; i < m_manager->spaceCount(mon); ++i)
-            if (i != m_manager->currentSpaceIndex(mon))
-                m_preparations.push_back({mon, i, false});
+        panel->populateTiles();
+        panel->preparePanelEnterAnimation();
     }
-    processNextPreparation(generation);
-}
-
-void OverviewHost::processNextPreparation(int generation)
-{
-    if (generation != m_closeGeneration || m_switching || !m_manager->overviewOpen() ||
-        m_preparations.isEmpty())
-        return;
-    const Preparation task = m_preparations.takeFirst();
-    QPointer<OverviewWindow> panel = panelFor(task.hmon);
-    if (panel && panel->isOpen()) {
-        QElapsedTimer timer;
-        timer.start();
-        m_manager->prepareOverviewSpace(task.hmon, task.space, task.reveal);
-        if (generation != m_closeGeneration || m_switching || !panel || !panel->isOpen())
-            return;
-        if (task.reveal && !panel->isContentReady()) {
-            panel->populateTiles();
-            panel->startPanelEnterAnimation();
-            emit panelReady(quint64(task.hmon), task.space);
-        }
-        spacelog::info(QStringLiteral("overview prepare mon=0x%1 space=%2 current=%3 ms=%4")
-                           .arg(quintptr(task.hmon), 0, 16)
-                           .arg(task.space)
-                           .arg(task.reveal ? 1 : 0)
-                           .arg(timer.elapsed()));
-    }
-    // Give the just-revealed panel a complete enter fade and paint before the
-    // next monitor's capture can block the GUI thread. No worker touches widgets.
-    QTimer::singleShot(task.reveal ? 180 : 16, this,
-                       [this, generation]() { processNextPreparation(generation); });
-}
-
-void OverviewHost::prioritizeSpace(HMONITOR hmon, int index)
-{
-    if (m_switching || !m_manager || !m_manager->overviewOpen())
-        return;
-    for (int i = 0; i < m_preparations.size(); ++i) {
-        if (m_preparations[i].hmon == hmon && m_preparations[i].space == index) {
-            const Preparation task = m_preparations.takeAt(i);
-            m_preparations.prepend(task);
-            return;
-        }
-    }
+    checkpoint(QStringLiteral("allPanelLayoutsReady"));
+    for (auto *panel : std::as_const(m_panels))
+        panel->startPanelEnterAnimation();
+    checkpoint(QStringLiteral("allAnimationsStarted"));
+    m_opening = false;
+    // Observers see every panel ready, never a mixture of prepared/deferred UI.
+    for (auto *panel : std::as_const(m_panels))
+        emit panelReady(quint64(panel->targetMonitor()),
+                        m_manager->currentSpaceIndex(panel->targetMonitor()));
 }
 
 void OverviewHost::closeAll(bool commit)
 {
+    if (m_opening) {
+        ++m_closeGeneration;
+        if (openPanelCount() > 0) {
+            m_manager->recloakNow();
+            forceHideAll();
+        }
+        return;
+    }
     if (!isOpen())
         return;
 
@@ -211,7 +437,6 @@ void OverviewHost::onPanelClosed(int chosen)
         return;
     m_switching = true;
     ++m_closeGeneration;
-    m_preparations.clear();
 
     if (chosen >= 0 && m_manager) {
         auto *w = qobject_cast<OverviewWindow *>(sender());

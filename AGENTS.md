@@ -158,6 +158,10 @@ $env:SPACEWM_IT = $null
 | 23 | 总览默认平铺当前 space 窗口，顶部空间栏收起；鼠标移到顶部展开空间缩略图，不切换真实 space | `step23_currentWindowsBeforeExpandedSpaces` |
 | 24 | 以进入前桌面画面承接等待，先完成当前屏当前 space，再分批处理其它屏和其余 space；关闭取消待处理任务 | `step24_currentMonitorPreparedBeforeOtherSpaces` |
 | 25 | 任务栏点击先经原生输入桥覆盖，前台通知后复用点击前首帧；不重新截取已露出的目标窗口 | `step25_taskbarPreactivationCoverKeepsOriginalFrame` |
+| 26 | 呼出总览时当前窗口从桌面原位置缩放移动至平铺位置，顶部空间文字栏向下滑入；结束及取消恢复正常交互 | `step26_windowsMoveIntoPreviewAndStripSlidesDown` |
+| 27 | 每屏独立线程并行截取进入前桌面，全部完成后才显示总览；关闭恢复屏幕采样 | `step27_parallelMonitorCaptureBeforeOverview` |
+| 28 | 每屏任务在线程池并行准备桌面、窗口图和空间合成图；全部完成并布局后统一启动所有屏幕动画 | `step28_allMonitorsPreparedBeforeAnimations` |
+| 29 | 同屏窗口各自作为线程池任务截图，整批截图完成后合成并统一启动动画；工作线程不写共享缓存 | `step29_windowCaptureTasksFinishBeforeAnimation` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与

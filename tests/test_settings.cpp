@@ -1,4 +1,5 @@
 #include <QtTest>
+#include "SettingsIsolation.h"
 
 #include "core/settings/AppSettings.h"
 #include "hotkeys/HotkeyManager.h"
@@ -7,6 +8,21 @@
 class TestSettings : public QObject {
     Q_OBJECT
   private slots:
+    void initTestCase() { QVERIFY(m_settings.isValid()); }
+
+    void settingsUseTemporaryStore()
+    {
+        AppSettings settings;
+        settings.setHotkey(HotkeyManager::ToggleOverview, QStringLiteral("Ctrl+Alt+O"));
+        wchar_t value[64]{};
+        DWORD bytes = sizeof(value);
+        const std::wstring name = QString::number(HotkeyManager::ToggleOverview).toStdWString();
+        QCOMPARE(::RegGetValueW(m_settings.root(), L"Software\\SpaceWM\\SpaceWM\\hotkeys",
+                                name.c_str(), RRF_RT_REG_SZ, nullptr, value, &bytes),
+                 LSTATUS(ERROR_SUCCESS));
+        QCOMPARE(QString::fromWCharArray(value), QStringLiteral("Ctrl+Alt+O"));
+    }
+
     void sequenceRoundTrip()
     {
         HotkeyManager::Binding b;
@@ -79,14 +95,12 @@ class TestSettings : public QObject {
 
     void autostartRegistryToggle()
     {
-        // Save/restore whatever is on the machine.
-        const bool was = AppSettings::autoStartRegistryEnabled();
+        // SettingsIsolation redirects direct registry calls as well as QSettings.
+        QVERIFY(!AppSettings::autoStartRegistryEnabled());
         QVERIFY(AppSettings::applyAutoStartRegistry(true));
         QVERIFY(AppSettings::autoStartRegistryEnabled());
         QVERIFY(AppSettings::applyAutoStartRegistry(false));
         QVERIFY(!AppSettings::autoStartRegistryEnabled());
-        if (was)
-            QVERIFY(AppSettings::applyAutoStartRegistry(true));
     }
 
     void settingsDialogConstructsAndReloads()
@@ -100,6 +114,9 @@ class TestSettings : public QObject {
         QApplication::sendEvent(&dlg, &ev);
         QVERIFY(true);
     }
+
+  private:
+    SettingsIsolation m_settings;
 };
 
 QTEST_MAIN(TestSettings)

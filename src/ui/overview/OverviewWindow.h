@@ -22,6 +22,7 @@ class QTimer;
 //   bottom — window previews on this monitor (drag onto a space)
 class OverviewWindow : public QWidget {
     Q_OBJECT
+    Q_PROPERTY(qreal enterProgress READ enterProgress WRITE setEnterProgress)
   public:
     explicit OverviewWindow(SpaceManager *manager, QWidget *parent = nullptr);
 
@@ -30,10 +31,12 @@ class OverviewWindow : public QWidget {
 
     // Capture all entry backdrops before showing any host panels. Each panel
     // holds its frozen desktop until its current-space content is ready.
-    void beginPanelOpen(HMONITOR hmon, bool takeFocus = true, const QImage &backdrop = QImage());
+    void beginPanelOpen(HMONITOR hmon, bool takeFocus = true, const QImage &backdrop = QImage(),
+                        const QImage &wallpaper = QImage());
     void populateCards();
     void populateTiles();
     void startPanelEnterAnimation();
+    void preparePanelEnterAnimation();
     void populateOpenContent();
 
     void closeOverview(bool commit);
@@ -53,6 +56,15 @@ class OverviewWindow : public QWidget {
     int cardCount() const { return m_cards.size(); }
     int windowPreviewCount() const { return m_windowPreviews.size(); }
     bool isSpaceStripExpanded() const { return m_spaceStripExpanded; }
+    qreal enterProgress() const { return m_enterProgress; }
+    void setEnterProgress(qreal progress)
+    {
+        m_enterProgress = progress;
+        update();
+    }
+    QRectF entryWindowRect(int index) const;
+    QRectF entryStripRect() const;
+    int entryWindowCount() const { return m_entryWindows.size(); }
     bool isContentReady() const { return m_contentReady; }
     // Image box / hwnd of the i-th bottom tile (tests: never exceed real size).
     QSize windowPreviewBoxSize(int i) const;
@@ -151,5 +163,16 @@ class OverviewWindow : public QWidget {
     QVector<SpaceCardWidget *> m_cards;
     QVector<WindowPreviewWidget *> m_windowPreviews;
 
+    struct EntryWindow {
+        QImage image;
+        int z = 0;
+        QRectF from;
+        QRectF to;
+    };
+    QVector<EntryWindow> m_entryWindows;
+    QPixmap m_entryStrip;
+    QRectF m_entryStripTarget;
+    qreal m_enterProgress = 1.0;
+    bool m_enterMotion = false;
     QPropertyAnimation *m_fadeAnim = nullptr;
 };

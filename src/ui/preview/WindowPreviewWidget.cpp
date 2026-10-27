@@ -256,3 +256,8 @@ void WindowPreviewWidget::paintEvent(QPaintEvent *event)
 {
     QFrame::paintEvent(event);
 }
+
+QRect WindowPreviewWidget::imageRect() const
+{
+    return QRect(m_imageLabel->mapTo(this, QPoint()), m_imageLabel->size());
+}

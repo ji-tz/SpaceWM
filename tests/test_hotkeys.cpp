@@ -1,4 +1,5 @@
 #include <QtTest>
+#include "SettingsIsolation.h"
 
 #include "core/settings/AppSettings.h"
 #include "hotkeys/HotkeyManager.h"
@@ -6,6 +7,8 @@
 class TestHotkeys : public QObject {
     Q_OBJECT
   private slots:
+    void initTestCase() { QVERIFY(m_settings.isValid()); }
+
     void constructsAndDestructsCleanly()
     {
         // Must not crash without / with app instance (QTEST_MAIN provides one).
@@ -182,6 +185,9 @@ class TestHotkeys : public QObject {
         }
         hm2.unregisterAll();
     }
+
+  private:
+    SettingsIsolation m_settings;
 };
 
 QTEST_MAIN(TestHotkeys)

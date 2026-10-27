@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMessageBox>
 #include <QSharedMemory>
 #include <QTimer>
@@ -200,8 +201,17 @@ int main(int argc, char *argv[])
 
     // --- overview: every monitor at once (Mission Control style) ---
     auto openOverview = [&]() {
+        QElapsedTimer timer;
+        timer.start();
         hotkeys.setTaskbarGuardEnabled(false);
+        const qint64 guardNs = timer.nsecsElapsed();
         switchAnimator.stopAll();
+        const qint64 stopNs = timer.nsecsElapsed();
+        spacelog::info(
+            QStringLiteral("overview open dispatch guard_ms=%1 stopAnimations_ms=%2 total_ms=%3")
+                .arg(double(guardNs) / 1000000.0, 0, 'f', 3)
+                .arg(double(stopNs - guardNs) / 1000000.0, 0, 'f', 3)
+                .arg(double(stopNs) / 1000000.0, 0, 'f', 3));
         overview.openAll();
         if (overview.isOpen())
             hotkeys.setConsumeEscape(true); // Esc closes globally (hook swallows)

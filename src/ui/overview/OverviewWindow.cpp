@@ -354,7 +354,8 @@ void OverviewWindow::openOnMonitor(HMONITOR hmon, bool takeFocus)
     populateOpenContent();
 }
 
-void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage &backdrop)
+void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage &backdrop,
+                                    const QImage &wallpaper)
 {
     if (m_closePending)
         return;
@@ -363,6 +364,18 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage 
     if (!m)
         return;
 
+    QElapsedTimer openingTimer;
+    openingTimer.start();
+    qint64 previousNs = 0;
+    const auto checkpoint = [&](const QString &phase) {
+        const qint64 now = openingTimer.nsecsElapsed();
+        spacelog::info(QStringLiteral("overview panel open mon=0x%1 phase=%2 ms=%3 total_ms=%4")
+                           .arg(quintptr(hmon), 0, 16)
+                           .arg(phase)
+                           .arg(double(now - previousNs) / 1000000.0, 0, 'f', 3)
+                           .arg(double(now) / 1000000.0, 0, 'f', 3));
+        previousNs = openingTimer.nsecsElapsed();
+    };
     cancelAnimations();
     cancelSoftPreviewHold();
     m_stripCollapseTimer->stop();
@@ -376,8 +389,13 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage 
     m_entryBackdrop = backdrop;
     if (m_entryBackdrop.isNull() && !m_manager->overviewOpen() && thumbs::screenSamplingEnabled())
         m_entryBackdrop = thumbs::captureMonitor(m->physRect, QSize());
-    m_wallpaper = thumbs::wallpaperFilled(m->physRect, QSize(m->physRect.right - m->physRect.left,
-                                                             m->physRect.bottom - m->physRect.top));
+    checkpoint(QStringLiteral("resetAndBackdrop"));
+    m_wallpaper = wallpaper;
+    if (m_wallpaper.isNull())
+        m_wallpaper =
+            thumbs::wallpaperFilled(m->physRect, QSize(m->physRect.right - m->physRect.left,
+                                                       m->physRect.bottom - m->physRect.top));
+    checkpoint(QStringLiteral("wallpaperFilled"));
     if (m_entryBackdrop.isNull())
         m_entryBackdrop = m_wallpaper;
     MONITORINFO info{};
@@ -397,8 +415,9 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage 
     m_animating = true; // includes staged preparation, not only the enter fade
     m_closePending = false;
     m_pendingCommit = -1;
+    checkpoint(QStringLiteral("workAreaAndGeometry"));
 
-    // Hold content invisible over the frozen desktop. Only content fades in;
+    // Hold content invisible over the frozen desktop until motion is ready;
     // the entry background stays opaque throughout preparation.
     auto *eff = new QGraphicsOpacityEffect(m_root);
     eff->setOpacity(0.0);
@@ -417,11 +436,16 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage 
     const BOOL disableTransitions = TRUE;
     ::DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), DWMWA_TRANSITIONS_FORCEDISABLED,
                             &disableTransitions, sizeof(disableTransitions));
+    checkpoint(QStringLiteral("hideContentAndNativeSetup"));
     pinToMonitorPhysically();
+    checkpoint(QStringLiteral("pinBeforeShow"));
     show();
+    checkpoint(QStringLiteral("show"));
     pinToMonitorPhysically();
     raise();
+    checkpoint(QStringLiteral("pinAndRaise"));
     repaint();
+    checkpoint(QStringLiteral("repaint"));
     if (takeFocus) {
         activateWindow();
         setFocus(Qt::ActiveWindowFocusReason);
@@ -430,6 +454,7 @@ void OverviewWindow::beginPanelOpen(HMONITOR hmon, bool takeFocus, const QImage 
             ::SetFocus(h);
         }
     }
+    checkpoint(QStringLiteral("focus"));
 }
 
 void OverviewWindow::paintEvent(QPaintEvent *event)
@@ -442,6 +467,12 @@ void OverviewWindow::paintEvent(QPaintEvent *event)
         painter.drawImage(rect(), background, m_backdropSource);
     if (m_contentReady)
         painter.fillRect(rect(), QColor(8, 8, 12, 120));
+    if (m_enterMotion) {
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        for (int i = 0; i < m_entryWindows.size(); ++i)
+            painter.drawImage(entryWindowRect(i), m_entryWindows[i].image);
+        painter.drawPixmap(entryStripRect(), m_entryStrip, QRectF(m_entryStrip.rect()));
+    }
 }
 
 void OverviewWindow::populateOpenContent()
@@ -507,6 +538,8 @@ void OverviewWindow::startPanelEnterAnimation()
         return;
     m_contentReady = true;
     update();
+    if (!m_enterMotion)
+        preparePanelEnterAnimation();
     playEnterAnimation();
 }
 
@@ -622,6 +655,10 @@ void OverviewWindow::finishClose()
 
 void OverviewWindow::cancelAnimations()
 {
+    m_enterMotion = false;
+    m_enterProgress = 1.0;
+    m_entryWindows.clear();
+    m_entryStrip = QPixmap();
     if (m_fadeAnim) {
         auto *a = m_fadeAnim;
         m_fadeAnim = nullptr;
@@ -1286,38 +1323,98 @@ void OverviewWindow::leaveEvent(QEvent *event)
     QWidget::leaveEvent(event);
 }
 
+QRectF OverviewWindow::entryWindowRect(int index) const
+{
+    if (index < 0 || index >= m_entryWindows.size())
+        return {};
+    const auto &window = m_entryWindows[index];
+    return QRectF(window.from.topLeft() +
+                      (window.to.topLeft() - window.from.topLeft()) * m_enterProgress,
+                  window.from.size() + (window.to.size() - window.from.size()) * m_enterProgress);
+}
+
+QRectF OverviewWindow::entryStripRect() const
+{
+    return m_entryStripTarget.translated(0, -(1.0 - m_enterProgress) *
+                                                (m_entryStripTarget.bottom() + 1));
+}
+
+void OverviewWindow::preparePanelEnterAnimation()
+{
+    // Layout owns the final widgets. Animate immutable images instead so a
+    // deferred preview refresh cannot delete a running animation's target.
+    // Flush nested shelf and scroll layouts before freezing destinations.
+    // Activating only the shelf leaves its centered parent at its old origin.
+    for (int i = 0; i < m_windowStack->count(); ++i) {
+        if (auto *row = m_windowStack->itemAt(i)->widget())
+            row->show();
+    }
+    m_root->ensurePolished();
+    if (layout())
+        layout()->activate();
+    for (QWidget *child : m_root->findChildren<QWidget *>()) {
+        if (child->layout())
+            child->layout()->activate();
+    }
+    if (m_root->layout())
+        m_root->layout()->activate();
+    // grab() includes DrawWindowBackground: a transparent child gets an opaque
+    // palette rectangle when captured as a root. Keep gaps/corners transparent
+    // as the strip slides over the desktop, including on mixed-DPI monitors.
+    const qreal stripDpr = m_spaceStripHost->devicePixelRatioF();
+    m_entryStrip = QPixmap(m_spaceStripHost->size() * stripDpr);
+    m_entryStrip.setDevicePixelRatio(stripDpr);
+    m_entryStrip.fill(Qt::transparent);
+    m_spaceStripHost->render(&m_entryStrip, QPoint(), QRegion(), QWidget::DrawChildren);
+    m_entryStripTarget = QRectF(m_spaceStripHost->mapTo(this, QPoint()), m_spaceStripHost->size());
+    m_entryWindows.clear();
+    const auto *monitor = m_manager->monitorOf(m_hmon);
+    const qreal sx = qreal(width()) / m_backdropSource.width();
+    const qreal sy = qreal(height()) / m_backdropSource.height();
+    const QPointF physicalOrigin(monitor->physRect.left + m_backdropSource.x(),
+                                 monitor->physRect.top + m_backdropSource.y());
+    for (auto *tile : std::as_const(m_windowPreviews)) {
+        RECT frame{};
+        if (::IsIconic(tile->windowHandle()) || tile->previewImage().isNull())
+            continue;
+        if (FAILED(::DwmGetWindowAttribute(tile->windowHandle(), DWMWA_EXTENDED_FRAME_BOUNDS,
+                                           &frame, sizeof(frame))) &&
+            !::GetWindowRect(tile->windowHandle(), &frame))
+            continue;
+        const QRect image = tile->imageRect();
+        const QRectF target(tile->mapTo(this, image.topLeft()), image.size());
+        const QRectF source((frame.left - physicalOrigin.x()) * sx,
+                            (frame.top - physicalOrigin.y()) * sy, (frame.right - frame.left) * sx,
+                            (frame.bottom - frame.top) * sy);
+        const auto &order = monitor->spaces[m_originSpace].zOrder;
+        const int rank = order.indexOf(tile->windowHandle());
+        m_entryWindows.push_back(
+            {tile->previewImage(), rank < 0 ? int(order.size()) : rank, source, target});
+    }
+    std::stable_sort(m_entryWindows.begin(), m_entryWindows.end(),
+                     [](const EntryWindow &a, const EntryWindow &b) { return a.z > b.z; });
+    m_enterMotion = true;
+    m_animating = true;
+}
+
 void OverviewWindow::playEnterAnimation()
 {
-    m_animating = true;
-
-    // Fade content over the opaque wallpaper background. The live desktop
-    // remains covered while off-space windows are prepared.
-    auto *eff = qobject_cast<QGraphicsOpacityEffect *>(m_root ? m_root->graphicsEffect() : nullptr);
-    if (!eff) {
-        eff = new QGraphicsOpacityEffect(m_root);
-        m_root->setGraphicsEffect(eff);
-    }
-
-    auto *anim = new QPropertyAnimation(eff, "opacity", this);
+    auto *anim = new QPropertyAnimation(this, "enterProgress", this);
     m_fadeAnim = anim;
-    anim->setDuration(160);
+    anim->setDuration(300);
     anim->setStartValue(0.0);
     anim->setEndValue(1.0);
     anim->setEasingCurve(QEasingCurve::OutCubic);
     connect(anim, &QPropertyAnimation::finished, this, [this]() {
-        if (m_fadeAnim == sender()) {
-            m_fadeAnim = nullptr;
-            if (m_root && m_root->graphicsEffect())
-                m_root->setGraphicsEffect(nullptr);
-        }
-        if (!m_closePending)
-            m_animating = false;
+        m_fadeAnim = nullptr;
+        m_enterMotion = false;
+        m_entryWindows.clear();
+        m_entryStrip = QPixmap();
+        m_root->setGraphicsEffect(nullptr);
+        m_animating = false;
+        update();
     });
     anim->start(QAbstractAnimation::DeleteWhenStopped);
-
-    // Card stagger slide removed: it snapshotted card->pos() before the strip
-    // layout settled, so every card animated to the same stale point and the
-    // row collapsed into a stack. Cards now just appear where layout put them.
 }
 
 void OverviewWindow::playExitAnimation()

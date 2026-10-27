@@ -14,14 +14,19 @@
 // Screen BitBlt is the last-resort fallback, honest only when sampling is on
 // (overview mask down) and the rect is visible / not cloaked / on-screen.
 // Preview entry: take frozen desktop copies BEFORE showing any panels, then
-// disable screen sampling. Prepare the active monitor's current space first;
-// other monitors and inactive spaces follow on later event-loop turns.
-// PrintWindow failures retain old cache entries. UI layout and staged space
+// prepare each monitor in parallel, then publish ALL results before animating.
+// Worker window capture never samples the screen. PrintWindow failures retain
+// old cache entries. UI layout and space
 // composites only read that cache; membership-change captures stay explicit.
 namespace thumbs {
 
 // Uncached per-window capture at full size, then scale to maxSize.
 QImage capture(HWND hwnd, const QSize &maxSize = QSize(480, 270));
+// Worker-safe: no screen fallback and no access to shared screenshot caches.
+QImage captureWindowOnly(HWND hwnd, const QSize &maxSize = QSize());
+// GUI-thread snapshot / publication of worker results.
+QImage wallpaperSource();
+void storeWindowShot(HWND hwnd, const QImage &image);
 
 // Cached window shot for the current open: first call captures; later calls
 // scale the shared image. maxSize empty → full (post-capture) image.

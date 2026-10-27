@@ -8,6 +8,8 @@
 #include <QWidget>
 
 #include <Windows.h>
+#include <dwmapi.h>
+#include "ui/preview/WindowPreviewWidget.h"
 
 class FirstFrameProbe : public QObject {
   public:
@@ -264,10 +266,97 @@ class TestOverview : public QObject {
         QTRY_VERIFY_WITH_TIMEOUT(!w.isDismissing(), 3000);
     }
 
+    void entryMovesWindowsAndSlidesStripAndCancelsCleanly()
+    {
+        QWidget source;
+        source.setWindowTitle("entry motion test");
+        source.setGeometry(100, 120, 480, 320);
+        source.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&source));
+        SpaceManager sm;
+        const HWND hwnd = reinterpret_cast<HWND>(source.winId());
+        const HMONITOR monitor = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, monitor, 0));
+        OverviewWindow w(&sm);
+        w.openOnMonitor(monitor);
+        QCOMPARE(w.entryWindowCount(), 1);
+        QCOMPARE(w.enterProgress(), 0.0);
+        QVERIFY(w.entryStripRect().bottom() <= 0);
+        const QRectF start = w.entryWindowRect(0);
+        RECT frame{};
+        QVERIFY(SUCCEEDED(
+            ::DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))));
+        MONITORINFO info{sizeof(info)};
+        QVERIFY(::GetMonitorInfoW(monitor, &info));
+        const qreal sx = qreal(w.width()) / (info.rcWork.right - info.rcWork.left);
+        QVERIFY(qAbs(start.x() - (frame.left - info.rcWork.left) * sx) < 1.0);
+        auto *tile = w.findChildren<WindowPreviewWidget *>().last();
+        QVERIFY(tile);
+        const QRect image = tile->imageRect();
+        const QRectF target(tile->mapTo(&w, image.topLeft()), image.size());
+        w.setEnterProgress(1.0);
+        QCOMPARE(w.entryWindowRect(0), target);
+        w.setEnterProgress(0.5);
+        QCOMPARE(w.entryWindowRect(0).center(), (start.center() + target.center()) / 2.0);
+        QVERIFY(w.entryStripRect().top() <
+                w.findChild<QWidget *>("SpaceStripHost")->mapTo(&w, QPoint()).y());
+        w.closeQuietly();
+        QCOMPARE(w.entryWindowCount(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isDismissing(), 3000);
+        w.openOnMonitor(monitor);
+        w.setEnterProgress(1.0);
+        const QRectF landing = w.entryWindowRect(0);
+        w.setEnterProgress(0.0);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isAnimating(), 3000);
+        tile = w.findChildren<WindowPreviewWidget *>().last();
+        QCOMPARE(landing,
+                 QRectF(tile->mapTo(&w, tile->imageRect().topLeft()), tile->imageRect().size()));
+        QCOMPARE(w.enterProgress(), 1.0);
+        auto *panel = w.findChild<QWidget *>("OverviewPanel");
+        QVERIFY(!panel->graphicsEffect());
+        QVERIFY(panel->isEnabled());
+        w.closeQuietly();
+        sm.untrackWindow(hwnd);
+    }
+
     // Hotkey open must slam the opaque entry cover down first (window opacity stays
     // 1 — the veil itself never dips transparent), with the panel content
-    // held at 0 and only the enter animation brightening it on top of the backdrop.
-    void frozenDesktopStaysOpaqueWhileContentFadesIn()
+    // held at 0 while window snapshots move over the opaque backdrop.
+    void slidingStripKeepsItsEmptyMarginsTransparent()
+    {
+        SpaceManager sm;
+        OverviewWindow w(&sm);
+        auto *mon = sm.monitors().first();
+        QImage desktop(mon->physRect.right - mon->physRect.left,
+                       mon->physRect.bottom - mon->physRect.top, QImage::Format_RGB32);
+        desktop.fill(QColor(30, 70, 110));
+        auto *strip = w.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(strip);
+        // Standalone QWidget::grab paints the palette Window brush into gaps,
+        // even though this child normally inherits its parent's background.
+        QPalette palette = strip->palette();
+        palette.setColor(QPalette::Window, Qt::white);
+        strip->setPalette(palette);
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            w.beginPanelOpen(mon->hmon, false, desktop);
+            w.populateOpenContent();
+            w.setEnterProgress(0.0);
+            const QImage background = w.grab().toImage();
+            for (qreal progress : {0.35, 0.6, 0.9}) {
+                w.setEnterProgress(progress);
+                const QRectF moving = w.entryStripRect();
+                const int y = qMax(0, qRound(moving.center().y()));
+                const int x = qRound(moving.center().x());
+                const QImage frame = w.grab().toImage();
+                const qreal dpr = frame.devicePixelRatio();
+                const QColor backdrop = background.pixelColor(qRound(x * dpr), qRound(y * dpr));
+                QCOMPARE(frame.pixelColor(qRound(x * dpr), qRound(y * dpr)), backdrop);
+            }
+            w.forceHide();
+        }
+    }
+
+    void frozenDesktopStaysOpaqueWhileWindowsMove()
     {
         SpaceManager sm;
         OverviewWindow w(&sm);
@@ -286,14 +375,14 @@ class TestOverview : public QObject {
         auto *panel = w.findChild<QWidget *>(QStringLiteral("OverviewPanel"));
         QVERIFY(panel);
         auto *eff = qobject_cast<QGraphicsOpacityEffect *>(panel->graphicsEffect());
-        QVERIFY2(eff, "content must carry the fade effect from the very first mask frame");
+        QVERIFY2(eff, "content must stay hidden from the very first mask frame");
         QCOMPARE(eff->opacity(), 0.0);
 
         w.populateOpenContent();
-        // During the content fade the mask must stay fully opaque — the
+        // During window motion the mask must stay fully opaque — the
         // desktop may never show through mid-open.
         QCOMPARE(w.windowOpacity(), 1.0);
-        // Enter animation (160ms) finishes → content effect removed, opaque.
+        // Enter motion (300ms) finishes → content effect removed, opaque.
         QTRY_VERIFY_WITH_TIMEOUT(!panel->graphicsEffect(), 2000);
         QVERIFY(w.cardCount() >= 1);
 
