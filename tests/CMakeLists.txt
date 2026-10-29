@@ -36,8 +36,42 @@ foreach(name IN LISTS SPACEWM_TEST_NAMES)
   # survive capture on Windows runners — the .txt is the reliable channel for
   # failure details (CI copies build/tests/*.out.txt into diagnostics/).
   add_test(NAME ${name} COMMAND ${name} -o ${name}.out.txt,txt)
-  set_tests_properties(${name} PROPERTIES TIMEOUT 60)
+  if(name STREQUAL "test_log")
+    set(test_group simulation)
+  else()
+    set(test_group real)
+  endif()
+  set_tests_properties(${name} PROPERTIES TIMEOUT 60 LABELS ${test_group})
   list(APPEND SPACEWM_TEST_EXES $<TARGET_FILE:${name}>)
+endforeach()
+
+# Selected functions from mixed binaries are independently safe for desktop work.
+# Keep the full binaries in real: these functions intentionally run there too.
+set(SPACEWM_SIMULATION_HOTKEYS
+  winKeyDownDefersOnlyWhenWinBindingsArmed
+  winKeyUpSwallowsCtrlWinWithoutTrigger
+  winKeyUpSwallowsAfterChord
+  winKeyUpInjectsPlainTap
+  winKeyUpPassesWhenNotDeferred
+  winHeldGateForWinTabChord
+  keyRepeatGuardEmitsOncePerPress
+  windowSwitchChordDetection
+  bindingsUseWinDetectsSystemPreset
+)
+set(SPACEWM_SIMULATION_SETTINGS
+  settingsUseTemporaryStore
+  sequenceRoundTrip
+  systemPresetUsesWinCombos
+  modifiersMatchIsExact
+  presetPersistsAndSyncsSequences
+  autostartRegistryToggle
+)
+foreach(area IN ITEMS HOTKEYS SETTINGS)
+  string(TOLOWER "${area}" area_lower)
+  add_test(NAME simulation_${area_lower}
+    COMMAND test_${area_lower} ${SPACEWM_SIMULATION_${area}}
+            -o simulation_${area_lower}.out.txt,txt)
+  set_tests_properties(simulation_${area_lower} PROPERTIES LABELS simulation TIMEOUT 60)
 endforeach()
 
 # Real-mode flow launches real apps and drives the live desktop — opt-in via
