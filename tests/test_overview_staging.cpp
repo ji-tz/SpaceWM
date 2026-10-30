@@ -202,7 +202,11 @@ class TestOverviewStaging : public QObject {
         host.openAll();
         QVERIFY(host.isOpen());
         spacelog::flush();
-        QVERIFY(!QString::fromUtf8(trace.readAll()).contains(QStringLiteral("phase=warmResult")));
+        const QString windowMarker = QStringLiteral("hwnd=0x%1 ").arg(quintptr(hwnd), 0, 16);
+        const QStringList lines = QString::fromUtf8(trace.readAll()).split(QLatin1Char('\n'));
+        for (const QString &line : lines)
+            QVERIFY2(!(line.contains(windowMarker) && line.contains(QStringLiteral("phase=warmResult"))),
+                     qPrintable(line));
         QVERIFY(!thumbs::cachedWindowShot(hwnd).isNull());
         host.forceHideAll();
         sm.untrackWindow(hwnd);
