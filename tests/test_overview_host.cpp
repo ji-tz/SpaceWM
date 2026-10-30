@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "core/space/SpaceManager.h"
+#include "core/capture/ThumbnailCapture.h"
 #include "core/window/CloakController.h"
 #include "ui/overview/OverviewHost.h"
 #include "ui/overview/OverviewWindow.h"
@@ -111,6 +112,24 @@ class TestOverviewHost : public QObject {
         QTRY_VERIFY_WITH_TIMEOUT(!host.isOpen(), 3000);
     }
 
+    void reopenFinishesPendingCloseBeforeDesktopCapture()
+    {
+        SpaceManager sm;
+        OverviewHost host(&sm);
+        // Last panel is hidden while delayed host cleanup is still pending.
+        sm.setOverviewOpen(true);
+        QVERIFY(!thumbs::screenSamplingEnabled());
+        bool samplingRestoredBeforeOpen = false;
+        connect(&host, &OverviewHost::allClosed, &host, [&]() {
+            samplingRestoredBeforeOpen = thumbs::screenSamplingEnabled();
+        });
+        host.openAll();
+        QVERIFY(samplingRestoredBeforeOpen);
+        QVERIFY(host.isOpen());
+        QVERIFY(sm.overviewOpen());
+        host.forceHideAll();
+    }
+
     void spaceChosenSwitchesThatMonitorOnly()
     {
         SpaceManager sm;
@@ -181,10 +200,7 @@ class TestOverviewHost : public QObject {
         QCOMPARE(host.openPanelCount(), 0);
     }
 
-    // Closing must recloak BEFORE the mask starts fading: warm uncloaks every
-    // managed window behind the overview, and recloak used to wait for
-    // setOverviewOpen(false) (after the panels were gone) — off-space windows
-    // flashed on the desktop.
+    // Reconcile an externally uncloaked window before the mask fades.
     void exitRecloaksWhileMaskStillVisible()
     {
         SpaceManager sm;

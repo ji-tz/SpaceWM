@@ -128,13 +128,20 @@ class TestSpaceManager : public QObject {
         ::ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
     }
 
-    void wraparoundHelpersInAppUseModulo()
+    void adjacentSwitchStopsAtBothEdges()
     {
-        // Document expected wrap used by hotkeys: (i + n) % n
-        const int n = 4;
-        QCOMPARE((0 + n) % n, 0);
-        QCOMPARE((3 + 1) % n, 0);
-        QCOMPARE((0 - 1 + n) % n, 3);
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        const HMONITOR mon = m->hmon;
+        ensureSpaces(sm, m, 2);
+        sm.setAnimationEnabled(false);
+        QVERIFY(!sm.switchAdjacentSpace(mon, -1));
+        QCOMPARE(sm.currentSpaceIndex(mon), 0);
+        QVERIFY(sm.switchAdjacentSpace(mon, 1));
+        QVERIFY(!sm.switchAdjacentSpace(mon, 1));
+        QCOMPARE(sm.currentSpaceIndex(mon), 1);
+        QVERIFY(sm.switchAdjacentSpace(mon, -1));
+        QCOMPARE(sm.currentSpaceIndex(mon), 0);
     }
 
     void previewSpaceSyncsWhileOverviewOpen()
@@ -756,6 +763,62 @@ class TestSpaceManager : public QObject {
 
         // Restore the initTestCase placement for whatever runs next.
         ::SetWindowPos(m_hwnd, nullptr, 10, 10, 300, 200, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // Apps close transient windows by HIDE (SW_HIDE), not destroy — a hidden
+    // tracked window must auto-leave management so it drops out of the
+    // preview; visible / unknown / still-tracked states are no-ops.
+    void onWindowHiddenUntracksAppHiddenWindow()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
+        m->currentIndex = 0;
+
+        sm.onWindowHidden(reinterpret_cast<HWND>(quintptr(1)));
+        QVERIFY(sm.assignWindow(m_hwnd, m->hmon, 0));
+        sm.onWindowHidden(m_hwnd); // still visible → stays tracked
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), 0);
+
+        ::ShowWindow(m_hwnd, SW_HIDE);
+        QTRY_VERIFY_WITH_TIMEOUT(!::IsWindowVisible(m_hwnd), 1500);
+        sm.onWindowHidden(m_hwnd); // app-hid → auto-untrack
+        QCOMPARE(sm.spaceOfWindow(m_hwnd), -1);
+        QVERIFY(!m->spaces[0].windows.contains(m_hwnd));
+
+        ::ShowWindow(m_hwnd, SW_SHOWNORMAL);
+        QTRY_VERIFY_WITH_TIMEOUT(::IsWindowVisible(m_hwnd), 1500);
+    }
+
+    // The space composite must not draw a window the owning app hid (no
+    // on-screen pixels) — and must draw it again after a re-show.
+    void appHiddenWindowLeavesSpaceComposite()
+    {
+        SpaceManager sm;
+        auto *m = sm.monitors().first();
+        ensureSpaces(sm, m, 2);
+        m->currentIndex = 0;
+
+        HWND hwnd = ::CreateWindowExW(0, L"STATIC", L"composite-hidden",
+                                       WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30, 60, 260, 160,
+                                       nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+        QVERIFY(sm.assignWindow(hwnd, m->hmon, 0));
+        sm.rebuildSpaceScreenshot(m->hmon, 0);
+        QVERIFY(m->spaces[0].zOrder.contains(hwnd));
+
+        ::ShowWindow(hwnd, SW_HIDE);
+        QTRY_VERIFY_WITH_TIMEOUT(!::IsWindowVisible(hwnd), 1500);
+        sm.rebuildSpaceScreenshot(m->hmon, 0);
+        QVERIFY(!m->spaces[0].zOrder.contains(hwnd));
+
+        ::ShowWindow(hwnd, SW_SHOWNORMAL);
+        QTRY_VERIFY_WITH_TIMEOUT(::IsWindowVisible(hwnd), 1500);
+        sm.rebuildSpaceScreenshot(m->hmon, 0);
+        QVERIFY(m->spaces[0].zOrder.contains(hwnd));
+
+        sm.untrackWindow(hwnd);
+        ::DestroyWindow(hwnd);
     }
 
   private:

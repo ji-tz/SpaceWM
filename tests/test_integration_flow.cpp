@@ -71,6 +71,11 @@ class TestIntegrationFlow : public QObject {
             // the flow used to only refresh, which main never does).
             m_sm.onWindowMoved(reinterpret_cast<HWND>(h));
         });
+        connect(&m_tracker, &WindowTracker::windowHidden, &m_sm, [this](quint64 h) {
+            // Same entry as main.cpp — apps close transient windows by HIDE;
+            // SpaceWM must auto-untrack them so they leave the preview.
+            m_sm.onWindowHidden(reinterpret_cast<HWND>(h));
+        });
         connect(&m_host, &OverviewHost::spaceChosen, &m_sm, [this](quint64 h, int space) {
             m_sm.switchSpace(reinterpret_cast<HMONITOR>(h), space,
                              /*animateHint=*/false);
@@ -254,7 +259,7 @@ class TestIntegrationFlow : public QObject {
     }
 
     // Step 8: open preview again (second-open path) — must stay open, and the
-    // warm pass uncloaks every managed window behind the mask.
+    // inactive-space windows remain cloaked behind the mask.
     void step08_reopenPreview()
     {
         m_host.openAll();
@@ -264,8 +269,8 @@ class TestIntegrationFlow : public QObject {
 
         QTest::qWait(700);
         QVERIFY2(m_host.isOpen(), "second open flashed closed");
-        // warmWindowShots uncloaks everything while the mask is up …
-        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+        if (explOnPanel())
+            QVERIFY(cloak::isCloaked(m_hwndExpl));
         QVERIFY(!cloak::isCloaked(m_hwndNote));
     }
 
@@ -842,12 +847,12 @@ class TestIntegrationFlow : public QObject {
         m_host.openAll();
         auto *panel = m_host.panelFor(mon);
         QVERIFY(panel && panel->isOpen());
+        QVERIFY(!panel->isSpaceStripExpanded());
         QTRY_VERIFY(!panel->isAnimating());
         const QPoint bottom(panel->width() / 2, panel->height() - 40);
         QMouseEvent leaveStrip(QEvent::MouseMove, bottom, panel->mapToGlobal(bottom), Qt::NoButton,
                                Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(panel, &leaveStrip);
-        QTRY_VERIFY(!panel->isSpaceStripExpanded());
         QCOMPARE(panel->selectedIndex(), current);
         for (int i = 0; i < panel->windowPreviewCount(); ++i)
             QCOMPARE(m_sm.spaceOfWindow(panel->windowPreviewHandle(i)), current);
@@ -859,7 +864,10 @@ class TestIntegrationFlow : public QObject {
                                Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(panel, &enterStrip);
         QTRY_VERIFY(panel->isSpaceStripExpanded());
-        QTRY_VERIFY(strip->height() > compactHeight);
+        QCOMPARE(strip->height(), compactHeight);
+        QApplication::sendEvent(panel, &leaveStrip);
+        QTest::qWait(500);
+        QVERIFY(panel->isSpaceStripExpanded());
         QCOMPARE(m_sm.currentSpaceIndex(mon), current);
         m_host.closeAll(false);
         QTRY_VERIFY(!m_sm.overviewOpen());
@@ -1016,6 +1024,184 @@ class TestIntegrationFlow : public QObject {
         QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
     }
 
+    // Step 30: a REAL app's transient window — Notepad's Open dialog
+    // (owned #32770) — is tracked, then Notepad closes (hides) it; SpaceWM
+    // must auto-untrack it so it leaves the preview (live windowHidden path;
+    // the 5s timer in main.cpp is the safety net).
+    void step30_appHiddenTransientWindowAutoUntracks()
+    {
+        if (!::SetForegroundWindow(m_hwndNote))
+            QSKIP("cannot foreground Notepad");
+        auto before = WindowTracker::snapshotManageableWindows();
+        sendCtrlO();
+        HWND dlg = waitForNewWindow(before, {QStringLiteral("#32770")}, 10000);
+        if (!dlg)
+            QSKIP("Notepad open dialog did not appear");
+        QTRY_VERIFY_WITH_TIMEOUT(m_sm.spaceOfWindow(dlg) >= 0, 5000);
+
+        m_host.openAll();
+        auto *panel = m_host.panelFor(m_sm.ownerMonitorOf(dlg));
+        QVERIFY(panel);
+        QTRY_VERIFY_WITH_TIMEOUT(panel->isContentReady(), 10000);
+        const auto hasTile = [&]() {
+            for (auto *tile : panel->findChildren<WindowPreviewWidget *>())
+                if (tile->windowHandle() == dlg)
+                    return true;
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(hasTile(), 5000);
+
+        // Close the dialog — Notepad hides it (does not destroy it).
+        ::SendMessageW(dlg, WM_CLOSE, 0, 0);
+        QTRY_COMPARE_WITH_TIMEOUT(m_sm.spaceOfWindow(dlg), -1, 8000);
+        QTRY_VERIFY_WITH_TIMEOUT(!hasTile(), 5000);
+
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
+    void step31_adjacentSwitchStopsAtBoundary()
+    {
+        auto *m = m_sm.primaryMonitor();
+        QVERIFY(m);
+        const HMONITOR mon = m->hmon;
+        QVERIFY(m_sm.switchSpace(mon, 0, false) || m_sm.currentSpaceIndex(mon) == 0);
+        QSignalSpy changed(&m_sm, &SpaceManager::spaceChanged);
+        QSignalSpy boundary(&m_sm, &SpaceManager::requestBoundaryAnimation);
+        QVERIFY(!m_sm.switchAdjacentSpace(mon, -1));
+        QCOMPARE(m_sm.currentSpaceIndex(mon), 0);
+        QCOMPARE(changed.count(), 0);
+        QCOMPARE(boundary.count(), 1);
+    }
+
+    void step32_spaceStripExpandsAndCollapsesWithAnimation()
+    {
+        m_host.openAll();
+        auto *panel = m_host.activePanel();
+        QVERIFY(panel);
+        QTRY_VERIFY(!panel->isAnimating());
+        auto *card = panel->findChild<SpaceCardWidget *>();
+        QVERIFY(card);
+        const int compact = card->height();
+        QTest::keyClick(panel, Qt::Key_Right);
+        QTRY_VERIFY(card->height() > compact);
+        QTest::qWait(250);
+        const int expanded = card->height();
+        QVERIFY(expanded > compact);
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
+    void step33_commitAnimatesWindowsBackToDesktop()
+    {
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int space = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon);
+        QVERIFY(space >= 0);
+        QVERIFY(m_sm.switchSpace(mon, space, false) || m_sm.currentSpaceIndex(mon) == space);
+        m_host.openAll();
+        auto *panel = m_host.panelFor(mon);
+        QVERIFY(panel);
+        QTRY_VERIFY_WITH_TIMEOUT(!panel->isAnimating(), 5000);
+        QVERIFY(panel->windowPreviewCount() > 0);
+        panel->closeOverview(true);
+        QTRY_VERIFY_WITH_TIMEOUT(panel->isExitStarted(), 3000);
+        QVERIFY(panel->entryWindowCount() > 0);
+        const QRectF start = panel->entryWindowRect(0);
+        QTRY_VERIFY_WITH_TIMEOUT(panel->entryWindowRect(0) != start, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
+    void step34_winPreparationBeforePreview()
+    {
+        m_host.beginWinPreparation();
+        QVERIFY(m_host.preparedWindowCount() > 0);
+        QTRY_VERIFY_WITH_TIMEOUT(m_host.winPreparationReady(), 30000);
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        QCOMPARE(m_host.preparedWindowCount(), 0);
+        m_host.cancelWinPreparation();
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+        m_host.beginWinPreparation();
+        QVERIFY(m_host.preparedWindowCount() > 0);
+        m_host.cancelWinPreparation();
+        QCOMPARE(m_host.preparedWindowCount(), 0);
+    }
+
+    void step35_pointerOverStripExpandsAfterEntry()
+    {
+        const QPoint oldCursor = QCursor::pos();
+        m_host.openAll();
+        auto *panel = m_host.panelFor(m_hmon);
+        QVERIFY(panel);
+        auto *strip = panel->findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(strip);
+        QCursor::setPos(strip->mapToGlobal(strip->rect().center()));
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(strip, &enter);
+        QVERIFY(!panel->isSpaceStripExpanded());
+        QTRY_VERIFY_WITH_TIMEOUT(!panel->isAnimating(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(panel->isSpaceStripExpanded(), 3000);
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+        QCursor::setPos(oldCursor);
+    }
+
+    void step36_previewKeepsInactiveWindowsCloaked()
+    {
+        QVERIFY(m_hwndExpl && ::IsWindow(m_hwndExpl));
+        const HMONITOR mon = m_sm.ownerMonitorOf(m_hwndExpl);
+        const int owned = m_sm.spaceOfWindow(m_hwndExpl);
+        QVERIFY(mon && owned >= 0);
+        if (m_sm.spaceCount(mon) < 2)
+            QVERIFY(m_sm.addSpace(mon));
+        const int away = (owned + 1) % m_sm.spaceCount(mon);
+        m_sm.switchSpace(mon, away, false);
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+        QVERIFY(cloak::isCloaked(m_hwndExpl));
+        m_sm.switchSpace(mon, owned, false);
+        QVERIFY(!cloak::isCloaked(m_hwndExpl));
+    }
+
+    void step37_winPreparationIncludesWallpaper()
+    {
+        m_host.beginWinPreparation();
+        QTRY_VERIFY_WITH_TIMEOUT(m_host.winPreparationReady(), 30000);
+        spacelog::flush();
+        QFile trace(spacelog::tracePath());
+        QVERIFY(trace.open(QIODevice::ReadOnly | QIODevice::Text));
+        trace.seek(trace.size());
+        m_host.openAll();
+        QVERIFY(m_host.isOpen());
+        spacelog::flush();
+        QVERIFY(QString::fromUtf8(trace.readAll()).contains(
+            QStringLiteral("overview wallpaper phase=warmResult")));
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
+    void step38_winTabEventsOpenAfterPreparation()
+    {
+        QSignalSpy requested(&m_host, &OverviewHost::previewRequested);
+        const auto connection = connect(&m_host, &OverviewHost::previewRequested,
+                                        &m_host, &OverviewHost::openAll);
+        m_host.postWinPreviewEvent(WinPreviewEvents::Event::WinDown);
+        m_host.postWinPreviewEvent(WinPreviewEvents::Event::TabDown);
+        m_host.postWinPreviewEvent(WinPreviewEvents::Event::WinUp);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.count(), 1, 30000);
+        QVERIFY(m_host.isOpen());
+        QCOMPARE(m_host.preparedWindowCount(), 0);
+        disconnect(connection);
+        m_host.closeAll(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!m_sm.overviewOpen(), 4000);
+    }
+
     void cleanupTestCase()
     {
         // Best-effort teardown — must leave the user's desktop untouched.
@@ -1135,6 +1321,25 @@ class TestIntegrationFlow : public QObject {
             return false;
         }
         return true;
+    }
+
+    // Ctrl+O to the foreground app (Notepad's Open dialog accelerator). The
+    // LL hook ignores injected keys only for its OWN bound chords; a plain
+    // accelerator reaches the foreground app normally.
+    static void sendCtrlO()
+    {
+        INPUT in[4] = {};
+        in[0].type = INPUT_KEYBOARD;
+        in[0].ki.wVk = VK_CONTROL;
+        in[1].type = INPUT_KEYBOARD;
+        in[1].ki.wVk = 'O';
+        in[2].type = INPUT_KEYBOARD;
+        in[2].ki.wVk = 'O';
+        in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+        in[3].type = INPUT_KEYBOARD;
+        in[3].ki.wVk = VK_CONTROL;
+        in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+        ::SendInput(4, in, sizeof(in[0]));
     }
 
     static QString classNameOf(HWND hwnd)

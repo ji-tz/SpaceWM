@@ -319,6 +319,29 @@ class TestOverview : public QObject {
         sm.untrackWindow(hwnd);
     }
 
+    void commitMovesWindowBackToDesktop()
+    {
+        QWidget source;
+        source.setGeometry(100, 120, 480, 320);
+        source.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&source));
+        SpaceManager sm;
+        const HWND hwnd = reinterpret_cast<HWND>(source.winId());
+        const HMONITOR monitor = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, monitor, 0));
+        OverviewWindow w(&sm);
+        w.openOnMonitor(monitor);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isAnimating(), 3000);
+        w.closeOverview(true);
+        QTRY_VERIFY_WITH_TIMEOUT(w.isExitStarted(), 2000);
+        QCOMPARE(w.entryWindowCount(), 1);
+        QCOMPARE(w.windowOpacity(), 1.0);
+        const QRectF start = w.entryWindowRect(0);
+        QTRY_VERIFY_WITH_TIMEOUT(w.entryWindowRect(0) != start, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.isVisible(), 3000);
+        sm.untrackWindow(hwnd);
+    }
+
     // Hotkey open must slam the opaque entry cover down first (window opacity stays
     // 1 — the veil itself never dips transparent), with the panel content
     // held at 0 while window snapshots move over the opaque backdrop.
@@ -338,10 +361,12 @@ class TestOverview : public QObject {
         palette.setColor(QPalette::Window, Qt::white);
         strip->setPalette(palette);
         for (int cycle = 0; cycle < 2; ++cycle) {
-            w.beginPanelOpen(mon->hmon, false, desktop);
+            w.beginPanelOpen(mon->hmon, false, desktop, desktop);
             w.populateOpenContent();
             w.setEnterProgress(0.0);
             const QImage background = w.grab().toImage();
+            QCOMPARE(background.pixelColor(background.width() / 2, background.height() / 2),
+                     QColor(30, 70, 110));
             for (qreal progress : {0.35, 0.6, 0.9}) {
                 w.setEnterProgress(progress);
                 const QRectF moving = w.entryStripRect();
@@ -349,7 +374,7 @@ class TestOverview : public QObject {
                 const int x = qRound(moving.center().x());
                 const QImage frame = w.grab().toImage();
                 const qreal dpr = frame.devicePixelRatio();
-                const QColor backdrop = background.pixelColor(qRound(x * dpr), qRound(y * dpr));
+                const QColor backdrop = frame.pixelColor(0, qRound(y * dpr));
                 QCOMPARE(frame.pixelColor(qRound(x * dpr), qRound(y * dpr)), backdrop);
             }
             w.forceHide();

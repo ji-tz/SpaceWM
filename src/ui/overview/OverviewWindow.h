@@ -10,6 +10,7 @@ class QHBoxLayout;
 class QVBoxLayout;
 class QLabel;
 class QPropertyAnimation;
+class QVariantAnimation;
 class SpaceCardWidget;
 class WindowPreviewWidget;
 class AddSpaceButton;
@@ -40,7 +41,7 @@ class OverviewWindow : public QWidget {
     void populateOpenContent();
 
     void closeOverview(bool commit);
-    void prepareClose();
+    void prepareClose(bool animateWindows = false);
     void startExit();
     void forceHide();
     void closeQuietly();
@@ -107,6 +108,7 @@ class OverviewWindow : public QWidget {
   private:
     void rebuildCards();
     void setSpaceStripExpanded(bool expanded);
+    void updateSpaceStripHeight();
     bool isSpaceStripWidget(QObject *object) const;
     void rebuildWindowPreviews();
     void refreshCardBadges();
@@ -138,6 +140,7 @@ class OverviewWindow : public QWidget {
     bool m_closePending = false;
     bool m_hostManaged = false;
     bool m_exitStarted = false;
+    bool m_exitWindowMotion = false;
     bool m_windowDragActive = false;
     bool m_windowRebuildPending = false;
     bool m_spaceStripExpanded = false;
@@ -151,7 +154,6 @@ class OverviewWindow : public QWidget {
     int m_holdMs = 1000;
     HWND m_frontHwnd = nullptr; // focus after commit close
     QTimer *m_holdTimer = nullptr;
-    QTimer *m_stripCollapseTimer = nullptr;
 
     QWidget *m_root = nullptr;
     QHBoxLayout *m_cardRow = nullptr;
@@ -175,4 +177,6 @@ class OverviewWindow : public QWidget {
     qreal m_enterProgress = 1.0;
     bool m_enterMotion = false;
     QPropertyAnimation *m_fadeAnim = nullptr;
+    QVariantAnimation *m_stripAnim = nullptr;
+    qreal m_stripProgress = 0.0;
 };

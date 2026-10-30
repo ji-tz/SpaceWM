@@ -46,6 +46,8 @@ WindowTracker::WindowTracker(QObject *parent)
                           0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     m_showHook = ::SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, proc, 0, 0,
                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_hideHook = ::SetWinEventHook(EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE, nullptr, proc, 0, 0,
+                                   WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     m_foregroundHook =
         ::SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, proc, 0, 0,
                           WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
@@ -61,6 +63,8 @@ WindowTracker::~WindowTracker()
         ::UnhookWinEvent(m_locationHook);
     if (m_showHook)
         ::UnhookWinEvent(m_showHook);
+    if (m_hideHook)
+        ::UnhookWinEvent(m_hideHook);
     if (m_foregroundHook)
         ::UnhookWinEvent(m_foregroundHook);
     if (s_instance == this)
@@ -88,6 +92,11 @@ void WindowTracker::handle(DWORD event, HWND hwnd, LONG idObject)
         if (m_onDestroyed)
             m_onDestroyed(hwnd);
         emit windowDestroyed(reinterpret_cast<quint64>(hwnd));
+        break;
+    case EVENT_OBJECT_HIDE:
+        // Apps close transient windows by hiding them, not destroying them;
+        // the tracker no longer "sees" them, so untrack happens downstream.
+        emit windowHidden(reinterpret_cast<quint64>(hwnd));
         break;
     case EVENT_OBJECT_LOCATIONCHANGE:
         if (isManageable(hwnd)) {

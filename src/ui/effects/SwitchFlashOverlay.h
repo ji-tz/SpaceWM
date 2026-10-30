@@ -18,6 +18,8 @@ class SwitchFlashOverlay : public QWidget {
     void cover(const QRect &geometry, const RECT &physical, const QImage &source);
     void play(const QRect &geometry, const RECT &physical, const QVector<QImage> &shots, int from,
               int to, int direction);
+    void playBoundary(const QRect &geometry, const RECT &physical, const QImage &source, int direction);
+    static QRectF boundaryRect(const QSize &viewport, int direction, qreal progress);
     void stop();
     bool isPlaying() const { return m_playing; }
     // Shared layout calculation also allows deterministic frame regression tests.
@@ -34,6 +36,7 @@ class SwitchFlashOverlay : public QWidget {
     QVector<QImage> m_shots;
     QImage m_source;
     bool m_preparing = false;
+    bool m_boundary = false;
     int m_from = 0, m_to = 0, m_direction = 1;
     bool m_playing = false;
     QElapsedTimer m_clock;

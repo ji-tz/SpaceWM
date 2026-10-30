@@ -21,6 +21,15 @@ QString defaultSpaceName(int index)
 {
     return QCoreApplication::translate("SpaceManager", "Space %1").arg(index + 1);
 }
+
+// Composites represent what is on the desktop. Windows the owning app hid
+// are NOT on the desktop — exclude them (the ShowWindow-fallback cloak keeps
+// IsWindowVisible false for OUR hides, so those stay drawn via isHiddenByUs).
+bool windowIsOnDesktop(HWND hwnd)
+{
+    return ::IsWindow(hwnd) && !::IsIconic(hwnd) &&
+           (::IsWindowVisible(hwnd) || cloak::isHiddenByUs(hwnd));
+}
 } // namespace
 
 SpaceManager::SpaceManager(QObject *parent)
@@ -272,7 +281,6 @@ void SpaceManager::prepareOverviewSpace(HMONITOR hmon, int index, bool refresh)
         if (!::IsWindow(hwnd) || ::IsIconic(hwnd) || ownerMonitorOf(hwnd) != hmon ||
             spaceOfWindow(hwnd) != index)
             continue;
-        ::cloak::set(hwnd, false);
         if (refresh)
             thumbs::refreshWindow(hwnd);
         else
@@ -287,9 +295,7 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint, int d
     if (!m || index < 0 || index >= m->spaces.size())
         return false;
     if (index == m->currentIndex) {
-        // Same space (e.g. clicking the current card right after open):
-        // still re-apply cloak — overview warm uncloaked every managed window
-        // and no other step may recloak (flash-on-close otherwise).
+        // Reconcile visibility when confirming the current space.
         applyVisibility(hmon);
         return false;
     }
@@ -323,6 +329,20 @@ bool SpaceManager::switchSpace(HMONITOR hmon, int index, bool animateHint, int d
         captureSpaceScreenshot(hmon, index);
     emit spaceChanged(reinterpret_cast<quint64>(hmon), index);
     return true;
+}
+
+bool SpaceManager::switchAdjacentSpace(HMONITOR hmon, int direction)
+{
+    auto *m = monitorOf(hmon);
+    if (!m || m->spaces.isEmpty() || (direction != -1 && direction != 1))
+        return false;
+    const int next = m->currentIndex + direction;
+    if (next < 0 || next >= m->spaces.size()) {
+        if (m_animationEnabled && !m_overviewOpen)
+            emit requestBoundaryAnimation(reinterpret_cast<quint64>(hmon), direction);
+        return false;
+    }
+    return switchSpace(hmon, next, true, direction);
 }
 
 bool SpaceManager::previewSpace(HMONITOR hmon, int index)
@@ -372,6 +392,8 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize 
     const double sy = double(ch) / monH;
 
     // Z-order: EnumWindows is top → bottom; paint bottom first so top stays on top.
+    // EnumWindows DOES enumerate hidden top-level windows — gate on the
+    // desktop check in BOTH passes (app-hidden windows leave the composite).
     QVector<HWND> ordered;
     ordered.reserve(int(sp.windows.size()));
     struct Ctx {
@@ -381,13 +403,13 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize 
     ::EnumWindows(
         [](HWND hwnd, LPARAM lp) -> BOOL {
             auto *c = reinterpret_cast<Ctx *>(lp);
-            if (c->set->contains(hwnd))
+            if (c->set->contains(hwnd) && windowIsOnDesktop(hwnd))
                 c->out->push_back(hwnd);
             return TRUE;
         },
         reinterpret_cast<LPARAM>(&ctx));
     for (HWND hwnd : sp.windows) {
-        if (!ordered.contains(hwnd))
+        if (!ordered.contains(hwnd) && windowIsOnDesktop(hwnd))
             ordered.push_back(hwnd);
     }
     sp.zOrder = ordered; // cache top → bottom
@@ -396,7 +418,7 @@ void SpaceManager::rebuildSpaceScreenshot(HMONITOR hmon, int index, const QSize 
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     for (int i = ordered.size() - 1; i >= 0; --i) {
         const HWND hwnd = ordered[i];
-        if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
+        if (!windowIsOnDesktop(hwnd))
             continue;
         RECT wr{};
         if (!::GetWindowRect(hwnd, &wr))
@@ -688,7 +710,16 @@ bool SpaceManager::trackWindow(HWND hwnd)
     // Already ours: SHOW after CREATE / re-entry — content may be ready now.
     // Re-capture the shot and re-render the owner space (esp. secondary monitors).
     if (m_owner.contains(hwnd)) {
+        // App re-showed a window it had hidden: a stale ShowWindow restore
+        // record would snap it back to our old placement — drop it first.
+        if (::IsWindowVisible(hwnd) && cloak::isHiddenByUs(hwnd))
+            cloak::dropHiddenRecord(hwnd);
         refreshWindowAfterUpdate(hwnd);
+        // Re-sync cloak after the re-show (an off-space window must not stay
+        // visible on the desktop — the ShowWindow fallback cannot self-heal).
+        const Owner o = m_owner.value(hwnd);
+        if (auto *m = monitorOf(reinterpret_cast<HMONITOR>(o.hmon)))
+            cloakWindow(hwnd, o.space != m->currentIndex);
         return true;
     }
     if (::IsIconic(hwnd))
@@ -763,6 +794,22 @@ void SpaceManager::onWindowMoved(HWND hwnd)
         // Same monitor: size/position changed — re-render that space preview.
         refreshWindowAfterUpdate(hwnd);
     }
+}
+
+void SpaceManager::onWindowHidden(HWND hwnd)
+{
+    if (!hwnd || !::IsWindow(hwnd) || !m_owner.contains(hwnd))
+        return;
+    if (::IsIconic(hwnd) || ::IsWindowVisible(hwnd))
+        return;
+    // WE hid it (ShowWindow fallback): still ours — the next visibility pass
+    // (space switch / overview warm) re-shows it. Safe to call periodically.
+    if (cloak::isHiddenByUs(hwnd))
+        return;
+    // App-hid transient window: leave management entirely. The preview must
+    // never keep a window that is no longer on the desktop; the SHOW path
+    // re-tracks it when the app shows it again.
+    untrackWindow(hwnd);
 }
 
 RECT SpaceManager::mapRectToMonitor(const RECT &win, const RECT &src, const RECT &dst)

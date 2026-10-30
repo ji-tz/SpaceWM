@@ -267,6 +267,7 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
             if (isModVk(vk)) {
                 if (vk == VK_LWIN || vk == VK_RWIN) {
+                    const bool wasHeld = g_winLPhys || g_winRPhys;
                     // Idempotent per-key state: down sets, up clears (an
                     // unmatched up still clears — self-heals a stuck flag).
                     if (isDown)
@@ -275,6 +276,13 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
                         (vk == VK_LWIN ? g_winLPhys : g_winRPhys) = false;
                     if (isDown)
                         g_pendingWinVk = vk;
+                    const bool held = g_winLPhys || g_winRPhys;
+                    if (held != wasHeld) {
+                        QMetaObject::invokeMethod(g_manager, [held]() {
+                            if (g_manager)
+                                emit g_manager->winHoldChanged(held);
+                        }, Qt::QueuedConnection);
+                    }
                 } else if (isDown || isUp) {
                     trackModifier(vk, isDown);
                 }
@@ -352,8 +360,17 @@ LRESULT CALLBACK llKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
                     continue;
                 // One physical press → one action: ignore auto-repeat downs
                 // (still swallowed so apps never see the repeat either).
-                if (isDown && HotkeyManager::keyDownEmits(vk))
-                    emitAction(b.action);
+                if (isDown && HotkeyManager::keyDownEmits(vk)) {
+                    if (b.action == HotkeyManager::ToggleOverview && b.vk == VK_TAB &&
+                        b.modifiers == MOD_WIN) {
+                        QMetaObject::invokeMethod(g_manager, [] {
+                            if (g_manager)
+                                emit g_manager->tabPressed();
+                        }, Qt::QueuedConnection);
+                    } else {
+                        emitAction(b.action);
+                    }
+                }
                 // Swallow down AND up so Windows virtual-desktop / Task View
                 // never sees Win+Tab or Ctrl+Win+←/→.
                 if ((b.modifiers & MOD_WIN) != 0)

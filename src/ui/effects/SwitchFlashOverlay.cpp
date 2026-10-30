@@ -50,6 +50,7 @@ void SwitchFlashOverlay::cover(const QRect &geometry, const RECT &physical, cons
     m_clock.invalidate();
     m_source = source;
     m_preparing = true;
+    m_boundary = false;
     m_shots = {source}; // null source uses the opaque background, never screen capture
     m_from = m_to = 0;
     m_direction = 1;
@@ -72,6 +73,7 @@ void SwitchFlashOverlay::play(const QRect &geometry, const RECT &physical,
     else
         m_source = shots[from];
     m_preparing = false;
+    m_boundary = false;
     m_from = from;
     m_to = to;
     m_direction = direction;
@@ -81,6 +83,31 @@ void SwitchFlashOverlay::play(const QRect &geometry, const RECT &physical,
     present(geometry, physical);
     m_clock.start();
     m_timer.start();
+}
+
+void SwitchFlashOverlay::playBoundary(const QRect &geometry, const RECT &physical,
+                                      const QImage &source, int direction)
+{
+    if (geometry.isEmpty() || source.isNull() || (direction != -1 && direction != 1))
+        return;
+    cover(geometry, physical, source);
+    m_preparing = false;
+    m_boundary = true;
+    m_direction = direction;
+    m_clock.start();
+    m_timer.start();
+}
+
+QRectF SwitchFlashOverlay::boundaryRect(const QSize &viewport, int direction, qreal progress)
+{
+    const qreal t = qBound(0.0, progress, 1.0);
+    const qreal scale = t < .25 ? 1.0 - .12 * ease(t / .25)
+                               : (t <= .75 ? .88 : .88 + .12 * ease((t - .75) / .25));
+    const qreal travel = t < .25 || t > .75 ? 0.0
+                         : (t <= .5 ? ease((t - .25) / .25) : ease((.75 - t) / .25));
+    const qreal w = viewport.width() * scale, h = viewport.height() * scale;
+    return QRectF((viewport.width() - w) / 2 - direction * viewport.width() * .2 * travel,
+                  (viewport.height() - h) / 2, w, h);
 }
 
 void SwitchFlashOverlay::stop()
@@ -127,6 +154,10 @@ void SwitchFlashOverlay::paintEvent(QPaintEvent *)
     p.fillRect(rect(), QColor(18, 20, 28));
     p.setRenderHint(QPainter::SmoothPixmapTransform);
     const qreal progress = m_clock.isValid() ? qreal(m_clock.elapsed()) / durationMs : 0;
+    if (m_boundary) {
+        p.drawImage(boundaryRect(size(), m_direction, progress), m_source);
+        return;
+    }
     for (int i = 0; i < m_shots.size(); ++i) {
         const QRectF tile =
             tileRect(size(), i, m_from, m_to, int(m_shots.size()), m_direction, progress);
@@ -182,6 +213,19 @@ SpaceSwitchAnimator::SpaceSwitchAnimator(SpaceManager *manager, QObject *parent,
                     shots.push_back(space.screenshot);
                 thumbs::setScreenSamplingEnabled(false);
                 overlay->play(m->geometry, m->physRect, shots, from, to, direction);
+            });
+    connect(manager, &SpaceManager::requestBoundaryAnimation, this,
+            [this](quint64 handle, int direction) {
+                auto *m = m_manager->monitorOf(reinterpret_cast<HMONITOR>(handle));
+                if (!m || isPlaying(m->hmon))
+                    return;
+                QImage source = m_capture(m->physRect);
+                if (source.isNull())
+                    source = m->spaces[m->currentIndex].screenshot;
+                if (source.isNull())
+                    return;
+                thumbs::setScreenSamplingEnabled(false);
+                overlayFor(handle)->playBoundary(m->geometry, m->physRect, source, direction);
             });
     connect(manager, &SpaceManager::monitorLayoutChanged, this, &SpaceSwitchAnimator::stopAll);
 }

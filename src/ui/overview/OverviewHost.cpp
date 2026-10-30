@@ -18,6 +18,20 @@
 #include <algorithm>
 #include <QtConcurrent>
 #include <QThreadPool>
+#include <atomic>
+
+struct OverviewWarmCapture {
+    struct Shot {
+        RECT rect{};
+        DWORD process = 0;
+        QFuture<QImage> future;
+    };
+    std::shared_ptr<std::atomic_bool> cancelled = std::make_shared<std::atomic_bool>(false);
+    QHash<HWND, Shot> shots;
+    QFuture<QImage> wallpaperSource;
+    struct Background { RECT rect{}; QFuture<QImage> future; };
+    QHash<HMONITOR, Background> backgrounds;
+};
 
 namespace {
 struct MonitorPreparation {
@@ -62,7 +76,8 @@ MonitorPreparation prepareMonitor(MonitorPreparation data, const QImage &wallpap
     if (sampleScreen)
         data.desktop = thumbs::captureMonitor(rect, QSize());
     log(QStringLiteral("desktopCaptured"));
-    data.wallpaper = filledWallpaper(wallpaperSource, fullSize);
+    if (data.wallpaper.isNull())
+        data.wallpaper = filledWallpaper(wallpaperSource, fullSize);
     if (data.desktop.isNull())
         data.desktop = data.wallpaper;
     log(QStringLiteral("wallpaperPrepared"));
@@ -75,6 +90,10 @@ struct WindowCapture {
     HWND window;
     QImage image;
     QElapsedTimer submitted;
+    QFuture<QImage> warm;
+    bool hasWarm = false;
+    RECT warmRect{};
+    DWORD warmProcess = 0;
 };
 
 void captureWindow(WindowCapture &job, int generation)
@@ -96,7 +115,19 @@ void captureWindow(WindowCapture &job, int generation)
                 .arg(queueMs, 0, 'f', 3));
     };
     log(QStringLiteral("start"));
-    job.image = thumbs::captureWindowOnly(job.window);
+    if (job.hasWarm) {
+        job.warm.waitForFinished();
+        RECT now{};
+        DWORD process = 0;
+        ::GetWindowThreadProcessId(job.window, &process);
+        if (::IsWindow(job.window) && ::GetWindowRect(job.window, &now) &&
+            process == job.warmProcess && ::EqualRect(&now, &job.warmRect)) {
+            job.image = job.warm.result();
+            log(QStringLiteral("warmResult"));
+        }
+    }
+    if (job.image.isNull())
+        job.image = thumbs::captureWindowOnly(job.window);
     log(QStringLiteral("done"));
 }
 
@@ -152,10 +183,14 @@ void waitForBatch(QFuture<void> batch)
 OverviewHost::OverviewHost(SpaceManager *manager, QObject *parent)
     : QObject(parent),
       m_manager(manager)
-{}
+{
+    m_winEventTimer.setInterval(5);
+    connect(&m_winEventTimer, &QTimer::timeout, this, &OverviewHost::processWinPreviewEvents);
+}
 
 OverviewHost::~OverviewHost()
 {
+    cancelWinPreparation();
     // Panels are raw QWidget* (not QObject-parented). Destroy them here so
     // pending timers/singleShots cannot outlive SpaceManager after the host dies.
     for (OverviewWindow *w : std::as_const(m_panels)) {
@@ -166,6 +201,106 @@ OverviewHost::~OverviewHost()
     }
     m_panels.clear();
     m_active = nullptr;
+}
+
+void OverviewHost::postWinPreviewEvent(WinPreviewEvents::Event event)
+{
+    if (m_winEvents.push(event) == WinPreviewEvents::Result::Prepare) {
+        beginWinPreparation();
+        m_winEventTimer.start();
+    }
+    processWinPreviewEvents();
+}
+
+void OverviewHost::processWinPreviewEvents()
+{
+    if (!m_winEvents.active() || (m_winPreparation && !winPreparationReady()))
+        return;
+    const auto result = m_winEvents.complete();
+    if (result == WinPreviewEvents::Result::None)
+        return;
+    m_winEventTimer.stop();
+    if (result == WinPreviewEvents::Result::Open) {
+        emit previewRequested();
+        // openAll consumes the images synchronously; closing an already-open
+        // preview has no consumer, so release any unused preparation as well.
+        cancelWinPreparation();
+    } else {
+        cancelWinPreparation();
+    }
+}
+
+void OverviewHost::beginWinPreparation()
+{
+    if (!m_manager || isOpen() || m_winPreparation)
+        return;
+    auto warm = std::make_shared<OverviewWarmCapture>();
+    warm->wallpaperSource = QtConcurrent::run([] { return thumbs::wallpaperSource(); });
+    for (const auto *monitor : m_manager->monitors()) {
+        OverviewWarmCapture::Background background;
+        background.rect = monitor->physRect;
+        const QSize size(background.rect.right - background.rect.left,
+                         background.rect.bottom - background.rect.top);
+        auto source = warm->wallpaperSource;
+        const auto backgroundCancelled = warm->cancelled;
+        background.future = QtConcurrent::run([source, size, backgroundCancelled]() mutable {
+            source.waitForFinished();
+            if (backgroundCancelled->load())
+                return QImage();
+            return filledWallpaper(source.result(), size);
+        });
+        warm->backgrounds.insert(monitor->hmon, std::move(background));
+        for (const auto &space : monitor->spaces) {
+            for (HWND hwnd : space.windows) {
+                if (warm->shots.contains(hwnd) || !::IsWindow(hwnd) || ::IsIconic(hwnd) ||
+                    (!::IsWindowVisible(hwnd) && !cloak::isHiddenByUs(hwnd)))
+                    continue;
+                OverviewWarmCapture::Shot shot;
+                if (!::GetWindowRect(hwnd, &shot.rect))
+                    continue;
+                ::GetWindowThreadProcessId(hwnd, &shot.process);
+                auto cancelled = warm->cancelled;
+                shot.future = QtConcurrent::run([hwnd, cancelled]() {
+                    if (cancelled->load())
+                        return QImage();
+                    return thumbs::captureWindowOnly(hwnd);
+                });
+                warm->shots.insert(hwnd, std::move(shot));
+            }
+        }
+    }
+    m_winPreparation = std::move(warm);
+    spacelog::info(QStringLiteral("overview win preparation started windows=%1")
+                       .arg(m_winPreparation->shots.size()));
+}
+
+void OverviewHost::cancelWinPreparation()
+{
+    if (!m_winPreparation)
+        return;
+    m_winPreparation->cancelled->store(true);
+    m_winPreparation.reset();
+    spacelog::info(QStringLiteral("overview win preparation discarded"));
+}
+
+int OverviewHost::preparedWindowCount() const
+{
+    return m_winPreparation ? m_winPreparation->shots.size() : 0;
+}
+
+bool OverviewHost::winPreparationReady() const
+{
+    if (!m_winPreparation)
+        return false;
+    if (!m_winPreparation->wallpaperSource.isFinished())
+        return false;
+    for (const auto &background : m_winPreparation->backgrounds)
+        if (!background.future.isFinished())
+            return false;
+    for (const auto &shot : m_winPreparation->shots)
+        if (!shot.future.isFinished())
+            return false;
+    return true;
 }
 
 bool OverviewHost::isOpen() const
@@ -230,7 +365,16 @@ void OverviewHost::openAll()
 {
     if (!m_manager || isOpen())
         return;
+    // The exit animation can hide its last panel before the delayed host
+    // cleanup runs. Finish that close before taking the next desktop copy;
+    // otherwise screen sampling is still disabled and wallpaper becomes the
+    // entry frame for a rapid reopen.
+    if (m_manager->overviewOpen())
+        forceHideAll();
     QScopedValueRollback<bool> opening(m_opening, true);
+    // Once a chord opens the overview, its jobs belong to this open even if
+    // the physical key is released while the nested wait is dispatching.
+    auto warm = std::move(m_winPreparation);
     QElapsedTimer timer;
     timer.start();
     ensurePanels();
@@ -250,7 +394,7 @@ void OverviewHost::openAll()
 
     // Freeze model/cache/geometry on their owning thread. Workers own their
     // QImages and GDI resources; they never touch the live SpaceManager.
-    const QImage source = thumbs::wallpaperSource();
+    const QImage source = warm ? warm->wallpaperSource.result() : thumbs::wallpaperSource();
     const bool sampleScreen = thumbs::screenSamplingEnabled();
     QVector<HWND> zOrder;
     ::EnumWindows(
@@ -259,26 +403,60 @@ void OverviewHost::openAll()
             return TRUE;
         },
         reinterpret_cast<LPARAM>(&zOrder));
+    // App-hidden transient windows have no on-screen pixels — keep them out of
+    // the composite and out of capture work (isHiddenByUs: OUR ShowWindow
+    // fallback cloak keeps IsWindowVisible false, so those stay drawn from
+    // the cached shot).
+    const auto onDesktop = [](HWND hwnd) {
+        return ::IsWindow(hwnd) && !::IsIconic(hwnd) &&
+               (::IsWindowVisible(hwnd) || cloak::isHiddenByUs(hwnd));
+    };
     std::vector<MonitorPreparation> prepared;
     std::vector<WindowCapture> windows;
     QSet<HWND> scheduled;
     for (auto *monitor : m_manager->monitors()) {
         MonitorPreparation data;
+        if (warm && warm->backgrounds.contains(monitor->hmon)) {
+            const auto &background = warm->backgrounds[monitor->hmon];
+            if (::EqualRect(&background.rect, &monitor->physRect)) {
+                data.wallpaper = background.future.result();
+                spacelog::info(QStringLiteral("overview wallpaper phase=warmResult"));
+            }
+        }
         data.monitor = *monitor;
         for (int index = 0; index < data.monitor.spaces.size(); ++index) {
             auto &space = data.monitor.spaces[index];
             space.zOrder.clear();
+            // EnumWindows DOES enumerate hidden top-level windows — gate on
+            // the desktop check in both passes.
             for (HWND hwnd : zOrder)
-                if (space.windows.contains(hwnd))
+                if (space.windows.contains(hwnd) && onDesktop(hwnd))
                     space.zOrder.push_back(hwnd);
             for (HWND hwnd : space.windows) {
-                if (!space.zOrder.contains(hwnd))
+                if (!space.zOrder.contains(hwnd) && onDesktop(hwnd))
                     space.zOrder.push_back(hwnd);
+                if (!onDesktop(hwnd))
+                    continue;
                 const QImage cached = thumbs::cachedWindowShot(hwnd);
                 data.shots.insert(hwnd, cached);
-                if (!scheduled.contains(hwnd) && ::IsWindow(hwnd) && !::IsIconic(hwnd) &&
-                    (index == data.monitor.currentIndex || cached.isNull())) {
-                    windows.push_back({data.monitor.hmon, hwnd, {}});
+                if (!scheduled.contains(hwnd) &&
+                    (index == data.monitor.currentIndex || cached.isNull() ||
+                     (warm && warm->shots.contains(hwnd)))) {
+                    WindowCapture job{data.monitor.hmon, hwnd, {}};
+                    if (warm && warm->shots.contains(hwnd)) {
+                        const auto &shot = warm->shots[hwnd];
+                        RECT now{};
+                        DWORD process = 0;
+                        ::GetWindowThreadProcessId(hwnd, &process);
+                        if (::GetWindowRect(hwnd, &now) && process == shot.process &&
+                            ::EqualRect(&now, &shot.rect)) {
+                            job.warm = shot.future;
+                            job.hasWarm = true;
+                            job.warmRect = shot.rect;
+                            job.warmProcess = shot.process;
+                        }
+                    }
+                    windows.push_back(std::move(job));
                     scheduled.insert(hwnd);
                 }
                 RECT rect{};
@@ -369,8 +547,8 @@ void OverviewHost::openAll()
     if (generation != m_closeGeneration)
         return;
     checkpoint(QStringLiteral("publishPreparedImages"));
-    // Desktop copies from every worker predate EVERY cover. Only now is it
-    // safe to show panels and uncloak non-current windows behind those covers.
+    // Desktop copies from every worker predate every cover. Keep inactive
+    // spaces cloaked until the user commits a space selection.
     for (const auto &data : prepared) {
         auto *panel = panelFor(data.monitor.hmon);
         panel->beginPanelOpen(data.monitor.hmon, panel == m_active, data.desktop, data.wallpaper);
@@ -381,11 +559,6 @@ void OverviewHost::openAll()
         }
     }
     m_manager->setOverviewOpen(true);
-    for (const auto &data : prepared)
-        for (const auto &space : data.monitor.spaces)
-            for (HWND hwnd : space.windows)
-                if (::IsWindow(hwnd) && !::IsIconic(hwnd))
-                    ::cloak::set(hwnd, false);
     checkpoint(QStringLiteral("coversAndVisibility"));
     // Finish ALL Qt layout/pixmap work before starting any animation.
     for (auto *panel : std::as_const(m_panels)) {
@@ -449,7 +622,7 @@ void OverviewHost::onPanelClosed(int chosen)
                 return;
             for (OverviewWindow *w : std::as_const(m_panels)) {
                 if (w)
-                    w->prepareClose();
+                    w->prepareClose(true);
             }
             startExitAllAndFinish();
         });
@@ -473,7 +646,7 @@ void OverviewHost::startExitAllAndFinish()
     }
 
     // Safety: if any panel is still on screen, force-hide the whole set.
-    QTimer::singleShot(350, this, [this, gen]() {
+    QTimer::singleShot(600, this, [this, gen]() {
         if (gen != m_closeGeneration)
             return;
         for (OverviewWindow *w : std::as_const(m_panels)) {
@@ -488,7 +661,11 @@ void OverviewHost::finishIfAllQuiet()
 {
     for (OverviewWindow *w : std::as_const(m_panels)) {
         if (w && (w->isOpen() || w->isVisible() || w->isAnimating() || w->isDismissing())) {
-            QTimer::singleShot(50, this, &OverviewHost::finishIfAllQuiet);
+            const int generation = m_closeGeneration;
+            QTimer::singleShot(50, this, [this, generation]() {
+                if (generation == m_closeGeneration)
+                    finishIfAllQuiet();
+            });
             return;
         }
     }

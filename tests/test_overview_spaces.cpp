@@ -8,6 +8,7 @@
 #include <QDragEnterEvent>
 #include <QMimeData>
 #include <QScrollArea>
+#include <QVariantAnimation>
 
 namespace {
 void movePointer(QWidget *widget, const QPoint &position)
@@ -46,11 +47,13 @@ class TestOverviewSpaces : public QObject {
         QVERIFY(strip && scroll);
         const int compactHeight = strip->height();
         const int windowHeight = scroll->height();
+        QVERIFY(compactHeight <= 60);
         auto *tile = panel.findChild<WindowPreviewWidget *>();
         QVERIFY(tile);
-        const QPoint center = tile->mapTo(scroll->viewport(), tile->rect().center());
-        QVERIFY(qAbs(center.x() - scroll->viewport()->rect().center().x()) < 4);
-        QVERIFY(qAbs(center.y() - scroll->viewport()->rect().center().y()) < 4);
+        QTRY_VERIFY(qAbs(tile->mapTo(scroll->viewport(), tile->rect().center()).x() -
+                         scroll->viewport()->rect().center().x()) < 4);
+        QTRY_VERIFY(qAbs(tile->mapTo(scroll->viewport(), tile->rect().center()).y() -
+                         scroll->viewport()->rect().center().y()) < 4);
         for (auto *card : panel.findChildren<SpaceCardWidget *>())
             QVERIFY(!card->isPreviewVisible());
 
@@ -65,14 +68,14 @@ class TestOverviewSpaces : public QObject {
                    cards[0]->geometry().bottom() < strip->height();
         }());
         for (auto *card : panel.findChildren<SpaceCardWidget *>())
-            QVERIFY(card->isPreviewVisible());
+            QTRY_VERIFY(card->isPreviewVisible());
         QCOMPARE(sm.currentSpaceIndex(mon), 0);
 
-        // Leaving the strip returns its height to the window overview.
+        // Once expanded, the strip stays expanded after the pointer leaves.
         movePointer(scroll->viewport(), QPoint(10, scroll->viewport()->height() - 20));
-        QTRY_VERIFY(!panel.isSpaceStripExpanded());
-        QTRY_COMPARE(strip->height(), compactHeight);
-        QTRY_COMPARE(scroll->height(), windowHeight);
+        QTest::qWait(500);
+        QVERIFY(panel.isSpaceStripExpanded());
+        QVERIFY(strip->height() > compactHeight);
         panel.forceHide();
         sm.untrackWindow(hwnd);
     }
@@ -97,12 +100,40 @@ class TestOverviewSpaces : public QObject {
         panel.forceHide();
     }
 
+    void stripAnimatesExpansionAndExitCollapse()
+    {
+        SpaceManager sm;
+        const HMONITOR mon = sm.monitors().first()->hmon;
+        OverviewWindow panel(&sm);
+        panel.openOnMonitor(mon);
+        QTRY_VERIFY(!panel.isAnimating());
+        auto *card = panel.findChild<SpaceCardWidget *>();
+        QVERIFY(card);
+        const int compact = card->height();
+        QTest::keyClick(&panel, Qt::Key_Right);
+        auto *animation = panel.findChild<QVariantAnimation *>(QStringLiteral("SpaceStripAnimation"));
+        QVERIFY(animation);
+        animation->setCurrentTime(110);
+        const int middle = card->height();
+        animation->setCurrentTime(220);
+        const int expanded = card->height();
+        QVERIFY(middle > compact && middle < expanded);
+        panel.prepareClose();
+        panel.startExit();
+        animation = panel.findChild<QVariantAnimation *>(QStringLiteral("SpaceStripAnimation"));
+        QVERIFY(animation);
+        animation->setCurrentTime(70);
+        QVERIFY(card->height() < expanded && card->height() > compact);
+        panel.forceHide();
+    }
+
     void draggingIntoCollapsedStripExpandsTargets()
     {
         SpaceManager sm;
         const HMONITOR mon = sm.monitors().first()->hmon;
         OverviewWindow panel(&sm);
         panel.openOnMonitor(mon);
+        QTRY_VERIFY(!panel.isAnimating());
         auto *strip = panel.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
         QVERIFY(strip);
         QMimeData unrelated;
@@ -122,6 +153,33 @@ class TestOverviewSpaces : public QObject {
         QVERIFY(enter.isAccepted());
         QVERIFY(panel.isSpaceStripExpanded());
         panel.forceHide();
+    }
+
+    void pointerOverStripExpandsOnlyAfterEntry()
+    {
+        SpaceManager sm;
+        const HMONITOR mon = sm.monitors().first()->hmon;
+        OverviewWindow panel(&sm);
+        const QPoint oldCursor = QCursor::pos();
+        panel.beginPanelOpen(mon);
+        panel.populateOpenContent();
+        auto *strip = panel.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(strip);
+        QCursor::setPos(strip->mapToGlobal(strip->rect().center()));
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(strip, &enter);
+        QVERIFY(!panel.isSpaceStripExpanded());
+        QVERIFY(panel.isAnimating());
+        QVERIFY(!panel.isSpaceStripExpanded());
+        if (!strip->rect().contains(strip->mapFromGlobal(QCursor::pos()))) {
+            panel.forceHide();
+            QCursor::setPos(oldCursor);
+            QSKIP("The desktop does not allow positioning the cursor over the strip");
+        }
+        QTRY_VERIFY(!panel.isAnimating());
+        QTRY_VERIFY(panel.isSpaceStripExpanded());
+        panel.forceHide();
+        QCursor::setPos(oldCursor);
     }
 };
 

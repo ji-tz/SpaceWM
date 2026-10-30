@@ -18,6 +18,11 @@ bool isCloaked(HWND hwnd);
 // True only if SpaceWM's ShowWindow backend currently hides this HWND.
 bool isHiddenByUs(HWND hwnd);
 
+// Drop the "we hid this" record WITHOUT touching the window. Call when the
+// owner app has re-taken visibility (it HIDE our ShowWindow-hidden window):
+// the saved placement is stale and must never be restored onto it again.
+void dropHiddenRecord(HWND hwnd);
+
 // True while WE force-disabled DWM show/hide transitions on this HWND
 // (set on cloak, restored on show — no animation during space switches).
 // Bookkeeping only: DWMWA_TRANSITIONS_FORCEDISABLED is [set]-only, the

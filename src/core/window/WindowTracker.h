@@ -43,6 +43,9 @@ class WindowTracker : public QObject {
     void windowMoved(quint64 hwnd);
     // Top-level window came to the foreground (taskbar click, Alt+Tab, …).
     void windowForeground(quint64 hwnd);
+    // The owning app hid a top-level window (SW_HIDE — how apps close their
+    // transient dialogs). Emitted even for windows we do not track.
+    void windowHidden(quint64 hwnd);
 
   private:
     HWINEVENTHOOK m_createHook = nullptr;
@@ -50,6 +53,7 @@ class WindowTracker : public QObject {
     HWINEVENTHOOK m_locationHook = nullptr;
     HWINEVENTHOOK m_showHook = nullptr;
     HWINEVENTHOOK m_foregroundHook = nullptr;
+    HWINEVENTHOOK m_hideHook = nullptr;
 
     WindowCallback m_onCreated;
     WindowCallback m_onDestroyed;

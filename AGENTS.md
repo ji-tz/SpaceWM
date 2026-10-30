@@ -52,7 +52,11 @@ cmd /c "`"$vcvars`" && cmake -S C:\Users\jtz18\workspace\SpaceWM -B C:\Users\jtz
 
 产物：`build/SpaceWM.exe`（POST_BUILD `windeployqt` → `lib/` → 拷回 `build/`）。
 
-**`build/` 不入库**；**`lib/` 入库**。重建前：`scripts\stop-spacewm.ps1` 或 `SpaceWM.exe --quit`（事件 `SpaceWM-quit` → `showAllHidden`）。
+**`build/` 不入库**；**`lib/` 入库**。重建前通过 `SpaceWM.exe --quit`（事件 `SpaceWM-quit` → `showAllHidden`）温和退出运行中的实例，并等待退出完成。
+
+- 构建 / 链接 / 复制时若无法写入 `SpaceWM.exe`（例如 `LNK1104`），先检查运行实例，通过 `SpaceWM.exe --quit` 或发送 `SpaceWM-quit` 事件温和退出，等待进程结束后再重试写入 / 构建。
+- 不因文件占用直接强杀进程；温和退出失败或超时时停止替换并报告原因，避免遗留被 cloak 的窗口。
+- `scripts\stop-spacewm.ps1` 当前包含超时强杀兜底，不能在要求仅温和退出的流程中直接调用；应使用上述退出命令或事件。
 
 ---
 
@@ -62,8 +66,8 @@ cmd /c "`"$vcvars`" && cmake -S C:\Users\jtz18\workspace\SpaceWM -B C:\Users\jtz
 
 1. **新增功能** → 必须新增 test，注册到 `tests/CMakeLists.txt` 的 `SPACEWM_TEST_NAMES`。
 2. **修改功能** → 已有 test 必须同步改；无 test 必须新增。
-3. **任意源码修改后** → 全量 `ctest`，**100% 通过**才允许 commit。
-4. 禁止只跑子集后声称完成；禁止无 test 覆盖的无行为变更合并。
+3. **每次 commit 前** → 运行仿真套件 `ctest --test-dir build -L simulation --output-on-failure`，通过后及时 commit。日常开发默认不运行实模式测试；用户明确要求时可提前运行。默认不带标签的 `ctest` 包含实模式测试，不能当作仿真套件。
+4. 禁止无 test 覆盖的行为变更合并；说明运行了哪些测试以及尚未验证的部分。推送前运行实模式测试，集中修复发现的问题并重新验证，见 §2.5 和 §4。
 5. **新增涉及 overview / space / 窗口管理的功能** → 必须在实模式集成流程
    `tests/test_integration_flow.cpp` 中**追加一个 `stepNN_` 插槽**（编号顺延，
    不改写既有 step）并在 §2.5 的步骤表登记；该流程默认跳过、显式运行（见 §2.5），
@@ -71,7 +75,7 @@ cmd /c "`"$vcvars`" && cmake -S C:\Users\jtz18\workspace\SpaceWM -B C:\Users\jtz
 
 ```powershell
 $vcvars = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
-cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --parallel && ctest --test-dir C:\Users\jtz18\workspace\SpaceWM\build --output-on-failure"
+cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --parallel && ctest --test-dir C:\Users\jtz18\workspace\SpaceWM\build -L simulation --output-on-failure"
 ```
 
 ### 2.2 功能 ↔ 测试（摘要）
@@ -98,6 +102,7 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 | **tile 标题在图上方 + 右侧 × 关闭窗口**（不触发 activated；strip 经 untrack 自愈） | `test_window_placement` · `test_integration_flow` | 有 |
 | **任务栏 / Alt+Tab 前台激活**：切换所属屏幕到窗口原 space，保留归属及其它屏幕状态 | `test_space_manager` · `test_integration_flow` (step19，模拟前台事件)；真实点击见 §5 | 有 |
 | **任务栏预激活防闪**：输入桥先覆盖、复用点击前首帧；主线程忙时超时放行，过期请求不补盖 | `test_taskbar_switch` · `test_integration_flow` (step25) | 有；原生任务栏点击 opt-in，需解锁桌面 |
+| **应用隐藏（SW_HIDE）的临时窗口自动 untrack**：preview tile / 空间合成图不再显示；重新 show 经 SHOW 路径重新追踪 | `test_window_tracker` · `test_space_manager` · `test_window_placement` · `test_integration_flow` (step30) | 有 |
 | **截图画带切换动画（缩小 / 平移 / 放大），Ctrl+Win+左右及任务栏前台激活触发** | `test_space_switch_animation` · `test_flash_overlay` · `test_hotkeys` · `test_integration_flow` (step20) | 有 |
 | **实模式 25 步集成流程**（真实应用 + 真实切换/ cloak） | `test_integration_flow` | 有（opt-in §2.5） |
 | **打包 zip 条目自校验 / 安装包构建**（Inno Setup，无 ISCC 则 skip） | `test_package` | 有 |
@@ -109,7 +114,9 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 
 ### 2.3 新增 test
 
-1. `tests/test_<name>.cpp`（`QTEST_MAIN` + `.moc`）→ `SPACEWM_TEST_NAMES` → 全量 ctest → commit 写明 test。
+1. `tests/test_<name>.cpp`（`QTEST_MAIN` + `.moc`）→ `SPACEWM_TEST_NAMES` → 运行仿真套件 → commit 写明 test。优先为可分离逻辑提供无需操纵真实桌面的仿真测试。
+
+CTest 的 `simulation` 和 `real` 标签及测试清单见 `tests/TEST_SUITES.md`。部分程序混合纯逻辑断言和真实 Windows API、窗口或热键操作；仿真套件只收录已确认无干扰的测试及函数，目前尚未覆盖全部可仿真逻辑。
 
 ### 2.4 质量
 
@@ -119,8 +126,10 @@ cmd /c "`"$vcvars`" && cmake --build C:\Users\jtz18\workspace\SpaceWM\build --pa
 
 `tests/test_integration_flow.cpp`：用**真实外部应用**（记事本 / 资源管理器 /
 浏览器）跑完整个 overview 生命周期——真实追踪、真实 cloak 切换、真实合成截图；
-UI 用 Qt Test 事件驱动。默认 `ctest` 因缺 `SPACEWM_IT` 直接 skip（CI 零成本），
-**不需要每次回归**；改动 overview/space 主链路时或发布前显式跑一次：
+UI 用 Qt Test 事件驱动。此流程调用本机系统 API，真实接管桌面，可能影响用户的其他工作；
+默认不自动运行（包括修改 overview/space 主链路后），默认 `ctest` 因缺 `SPACEWM_IT` 直接 skip。
+用户要求推送时，推送前必须显式运行全量实模式集成流程，修复发现的 bug 并重新验证，
+全部通过后才推送。用户也可以单独明确要求提前运行：
 
 ```powershell
 .\build\SpaceWM.exe --quit    # 必须先退出正在运行的实例（会 QSKIP）
@@ -140,7 +149,7 @@ $env:SPACEWM_IT = $null
 | 5 | 拖动记事本到第二个 space | `step05_dropNotepadOntoSecondSpace` |
 | 6 | 点击第二个 space 进入 | `step06_clickSecondSpaceCommitsSwitch` |
 | 7 | preview 自动退出（cloak 同步：目标空间可见、其余隐藏） | `step07_overviewAutoExited` |
-| 8 | 快捷键再次打开 preview（二次打开不闪关 + 遮罩后全量 uncloak） | `step08_reopenPreview` |
+| 8 | 快捷键再次打开 preview（二次打开不闪关，其他 space 窗口保持 cloak） | `step08_reopenPreview` |
 | 9 | 拖动第一个 space 到第二个 space（卡片排序） | `step09_dragFirstSpaceCardOntoSecond` |
 | 10 | 顺序交换为 [Space 2, Space 1]，归属/当前 space 跟随 | `step10_spaceOrderSwapped` |
 | 11 | 点击第二个 space | `step11_clickSecondSpaceCard` |
@@ -162,6 +171,15 @@ $env:SPACEWM_IT = $null
 | 27 | 每屏独立线程并行截取进入前桌面，全部完成后才显示总览；关闭恢复屏幕采样 | `step27_parallelMonitorCaptureBeforeOverview` |
 | 28 | 每屏任务在线程池并行准备桌面、窗口图和空间合成图；全部完成并布局后统一启动所有屏幕动画 | `step28_allMonitorsPreparedBeforeAnimations` |
 | 29 | 同屏窗口各自作为线程池任务截图，整批截图完成后合成并统一启动动画；工作线程不写共享缓存 | `step29_windowCaptureTasksFinishBeforeAnimation` |
+| 30 | 真实应用临时窗口（Notepad Open 对话框）被追踪后，应用关闭（hide）即自动 untrack、preview tile 消失 | `step30_appHiddenTransientWindowAutoUntracks` |
+| 32 | space 栏展开有过渡动画，退出 preview 时收起 | `step32_spaceStripExpandsAndCollapsesWithAnimation` |
+| 31 | 相邻 space 切换到边界时保持当前 space 并播放回弹提示 | `step31_adjacentSwitchStopsAtBoundary` |
+| 33 | 确认 space 后窗口缩放移动回桌面位置 | `step33_commitAnimatesWindowsBackToDesktop` |
+| 34 | Win 按住期间预截图；呼出预览复用，松开时丢弃未使用的准备结果 | `step34_winPreparationBeforePreview` |
+| 35 | 启动期间始终显示收起的 space 栏；启动完成后鼠标位于栏上时展开 | `step35_pointerOverStripExpandsAfterEntry` |
+| 36 | 呼出和取消预览时其他 space 窗口保持 cloak，选定其 space 后恢复 | `step36_previewKeepsInactiveWindowsCloaked` |
+| 37 | 按 Win 预准备壁纸并在呼出预览时复用 | `step37_winPreparationIncludesWallpaper` |
+| 38 | Win 下、Tab 下、Win 上按顺序排队，准备完成后呼出且清理预准备 | `step38_winTabEventsOpenAfterPreparation` |
 
 约束：
 - **热键注入不可用**（LL 钩子按设计忽略 `LLKHF_INJECTED`）——流程内 open 用与
@@ -206,7 +224,8 @@ spacelog       → spdlog → TR/trace.log + EH/error.log
 ## 4. Git
 
 - **`build/` 不提交**；**`lib/` 提交**；日志 **不提交**。
-- Commit 前：全量 test 通过。格式：`<type>: <summary>`。
+- 每次 commit 前运行仿真套件，通过后提交；格式：`<type>: <summary>`。
+- 不主动推送；用户要求推送时，运行实模式套件并显式启用全量实模式集成流程和原生任务栏回归，集中修复发现的 bug 并重新验证通过后再推送。
 
 ---
 

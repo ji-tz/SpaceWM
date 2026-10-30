@@ -62,6 +62,20 @@ class TestFlashOverlay : public QObject {
         QCOMPARE(tile(to, .75).center(), QPointF(500, 300));
         QCOMPARE(tile(to, 1), QRectF(0, 0, 1000, 600));
     }
+    void boundaryMovesOneFifthAndReturns()
+    {
+        const QSize view(1000, 600);
+        for (int direction : {-1, 1}) {
+            QCOMPARE(SwitchFlashOverlay::boundaryRect(view, direction, 0), QRectF(0, 0, 1000, 600));
+            const QRectF shrunk = SwitchFlashOverlay::boundaryRect(view, direction, .25);
+            QCOMPARE(shrunk.size(), QSizeF(880, 528));
+            QCOMPARE(shrunk.center(), QPointF(500, 300));
+            QCOMPARE(SwitchFlashOverlay::boundaryRect(view, direction, .5).center().x(),
+                     500.0 - direction * 200.0);
+            QCOMPARE(SwitchFlashOverlay::boundaryRect(view, direction, .75), shrunk);
+            QCOMPARE(SwitchFlashOverlay::boundaryRect(view, direction, 1), QRectF(0, 0, 1000, 600));
+        }
+    }
     void invalidAndReplay()
     {
         SwitchFlashOverlay overlay;

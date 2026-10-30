@@ -148,6 +148,24 @@ class TestSpaceSwitchAnimation : public QObject {
         QCOMPARE(covers.count(), 0);
         sm.setOverviewOpen(false);
     }
+    void edgeAnimationLeavesSpaceUnchanged()
+    {
+        SpaceManager sm;
+        QImage source(400, 300, QImage::Format_RGB32);
+        source.fill(Qt::red);
+        SpaceSwitchAnimator animation(&sm, nullptr, [source](const RECT &) { return source; });
+        auto *m = sm.primaryMonitor();
+        const HMONITOR mon = m->hmon;
+        QSignalSpy changed(&sm, &SpaceManager::spaceChanged);
+        QSignalSpy boundary(&sm, &SpaceManager::requestBoundaryAnimation);
+        QVERIFY(!sm.switchAdjacentSpace(mon, -1));
+        QCOMPARE(boundary.count(), 1);
+        QCOMPARE(changed.count(), 0);
+        QCOMPARE(sm.currentSpaceIndex(mon), 0);
+        QVERIFY(animation.isPlaying(mon));
+        QTRY_VERIFY_WITH_TIMEOUT(!animation.isPlaying(mon), 3000);
+        QVERIFY(thumbs::screenSamplingEnabled());
+    }
     void disabledAnimationDoesNotCreateOverlay()
     {
         SpaceManager sm;

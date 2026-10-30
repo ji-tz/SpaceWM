@@ -104,6 +104,10 @@ int main(int argc, char *argv[])
                      [&](quint64 h) { manager.trackWindow(reinterpret_cast<HWND>(h)); });
     QObject::connect(&tracker, &WindowTracker::windowDestroyed, &manager,
                      [&](quint64 h) { manager.untrackWindow(reinterpret_cast<HWND>(h)); });
+    // Apps close transient windows by hiding them — auto-untrack so they
+    // leave the preview (re-show re-tracks via the SHOW path).
+    QObject::connect(&tracker, &WindowTracker::windowHidden, &manager,
+                     [&](quint64 h) { manager.onWindowHidden(reinterpret_cast<HWND>(h)); });
     // When a window moves across monitors, re-home it to the new monitor's
     // current space (shared entry with the integration flow — see
     // SpaceManager::onWindowMoved).
@@ -200,6 +204,10 @@ int main(int argc, char *argv[])
     });
 
     // --- overview: every monitor at once (Mission Control style) ---
+    QObject::connect(&hotkeys, &HotkeyManager::winHoldChanged, &overview, [&](bool held) {
+        overview.postWinPreviewEvent(held ? WinPreviewEvents::Event::WinDown
+                                          : WinPreviewEvents::Event::WinUp);
+    });
     auto openOverview = [&]() {
         QElapsedTimer timer;
         timer.start();
@@ -224,6 +232,10 @@ int main(int argc, char *argv[])
             openOverview();
         }
     };
+    QObject::connect(&hotkeys, &HotkeyManager::tabPressed, &overview, [&]() {
+        overview.postWinPreviewEvent(WinPreviewEvents::Event::TabDown);
+    });
+    QObject::connect(&overview, &OverviewHost::previewRequested, &app, toggleOverview);
     // Any full close (cancel, commit, foreground/Alt+Tab) ends with allClosed.
     QObject::connect(&overview, &OverviewHost::allClosed, &hotkeys, [&]() {
         hotkeys.setConsumeEscape(false);
@@ -246,24 +258,12 @@ int main(int argc, char *argv[])
         HMONITOR h = monitors::fromCursor();
 
         switch (action) {
-        case A::SwitchPrevSpace: {
-            auto *m = manager.monitorOf(h);
-            if (!m || m->spaces.isEmpty())
-                return;
-            const int n = int(m->spaces.size());
-            const int next = (m->currentIndex - 1 + n) % n;
-            manager.switchSpace(h, next, true, -1);
+        case A::SwitchPrevSpace:
+            manager.switchAdjacentSpace(h, -1);
             break;
-        }
-        case A::SwitchNextSpace: {
-            auto *m = manager.monitorOf(h);
-            if (!m || m->spaces.isEmpty())
-                return;
-            const int n = int(m->spaces.size());
-            const int next = (m->currentIndex + 1) % n;
-            manager.switchSpace(h, next, true, 1);
+        case A::SwitchNextSpace:
+            manager.switchAdjacentSpace(h, 1);
             break;
-        }
         case A::ToggleOverview:
             toggleOverview();
             break;
@@ -295,19 +295,10 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&tray, &TrayIcon::overviewRequested, &app, openOverview);
     QObject::connect(&tray, &TrayIcon::nextSpaceRequested, &app, [&]() {
-        HMONITOR h = monitors::fromCursor();
-        auto *m = manager.monitorOf(h);
-        if (!m || m->spaces.isEmpty())
-            return;
-        manager.switchSpace(h, (m->currentIndex + 1) % int(m->spaces.size()), true, 1);
+        manager.switchAdjacentSpace(monitors::fromCursor(), 1);
     });
     QObject::connect(&tray, &TrayIcon::prevSpaceRequested, &app, [&]() {
-        HMONITOR h = monitors::fromCursor();
-        auto *m = manager.monitorOf(h);
-        if (!m || m->spaces.isEmpty())
-            return;
-        const int n = int(m->spaces.size());
-        manager.switchSpace(h, (m->currentIndex - 1 + n) % n, true, -1);
+        manager.switchAdjacentSpace(monitors::fromCursor(), -1);
     });
     QObject::connect(&tray, &TrayIcon::refreshMonitorsRequested, &manager,
                      &SpaceManager::refreshMonitors);
@@ -355,7 +346,8 @@ int main(int argc, char *argv[])
             tray.setSpaceLabel(m->deviceName, m->currentIndex, int(m->spaces.size()));
     }
 
-    // Periodic cleanup of dead HWNDs (cheap safety net).
+    // Periodic cleanup of dead HWNDs and app-hidden windows (cheap safety net
+    // in case a hide event was missed; onWindowHidden is the live path).
     QTimer cleanup;
     QObject::connect(&cleanup, &QTimer::timeout, &manager, [&]() {
         for (MonitorSpaces *m : manager.monitors()) {
@@ -364,6 +356,8 @@ int main(int argc, char *argv[])
                 for (HWND h : copy) {
                     if (!::IsWindow(h))
                         manager.untrackWindow(h);
+                    else
+                        manager.onWindowHidden(h);
                 }
             }
         }

@@ -117,6 +117,27 @@ class TestWindowTracker : public QObject {
         QVERIFY(true);
     }
 
+    // Apps close transient windows by HIDE (SW_HIDE), not destroy — the
+    // tracker must surface that so SpaceManager can auto-untrack.
+    void handleHideEmitsWindowHidden()
+    {
+        WindowTracker tracker;
+        QSignalSpy hidden(&tracker, &WindowTracker::windowHidden);
+
+        HWND hwnd = ::CreateWindowExW(0, L"STATIC", L"hide-target",
+                                       WS_OVERLAPPEDWINDOW | WS_VISIBLE, 30, 30, 150, 90,
+                                       nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(hwnd != nullptr);
+
+        tracker.handle(EVENT_OBJECT_HIDE, hwnd, OBJID_WINDOW);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+
+        QCOMPARE(hidden.count(), 1);
+        QCOMPARE(hidden.first().at(0).toULongLong(), quint64(reinterpret_cast<quintptr>(hwnd)));
+
+        ::DestroyWindow(hwnd);
+    }
+
     void foregroundEventEmitsWindowForeground()
     {
         WindowTracker tracker;

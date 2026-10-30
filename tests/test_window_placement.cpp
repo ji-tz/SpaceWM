@@ -17,6 +17,7 @@
 #include <QMimeData>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QVariantAnimation>
 
 #include <Windows.h>
 
@@ -24,6 +25,74 @@
 class TestWindowPlacement : public QObject {
     Q_OBJECT
   private slots:
+    void expandingSpaceStripResizesWindowViewport()
+    {
+        QWidget target;
+        target.resize(900, 650);
+        target.show();
+        const HWND hwnd = reinterpret_cast<HWND>(target.winId());
+        SpaceManager sm;
+        const HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, mon, 0));
+        OverviewWindow overview(&sm);
+        overview.openOnMonitor(mon);
+        QTRY_VERIFY(!overview.isAnimating());
+        QVERIFY(overview.previewSpace(0));
+        auto *scroll = overview.findChild<QScrollArea *>(QStringLiteral("WindowScroll"));
+        auto *strip = overview.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(scroll);
+        QVERIFY(strip);
+        auto findTile = [&]() -> WindowPreviewWidget * {
+            for (auto *tile : overview.findChildren<WindowPreviewWidget *>())
+                if (tile->windowHandle() == hwnd && tile->isVisible())
+                    return tile;
+            return nullptr;
+        };
+        QTRY_VERIFY(findTile());
+        const QRect viewportBefore(scroll->viewport()->mapTo(&overview, QPoint()),
+                                   scroll->viewport()->size());
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(strip, &enter);
+        QTRY_VERIFY(!overview.findChild<QVariantAnimation *>(QStringLiteral("SpaceStripAnimation")));
+        QTRY_VERIFY(findTile());
+        const QRect viewportAfter(scroll->viewport()->mapTo(&overview, QPoint()),
+                                  scroll->viewport()->size());
+        QVERIFY(viewportAfter.top() > viewportBefore.top());
+        QCOMPARE(viewportAfter.bottom(), viewportBefore.bottom());
+        QVERIFY(viewportAfter.contains(findTile()->mapTo(scroll->viewport(), QPoint()) +
+                                       viewportAfter.topLeft()));
+        overview.forceHide();
+        sm.untrackWindow(hwnd);
+    }
+
+    void expandedSpaceStripStaysOpenUntilOverviewReopens()
+    {
+        SpaceManager sm;
+        OverviewWindow overview(&sm);
+        const HMONITOR mon = sm.monitors().first()->hmon;
+        overview.openOnMonitor(mon);
+        QVERIFY(!overview.isSpaceStripExpanded());
+        QTRY_VERIFY(!overview.isAnimating());
+        auto *strip = overview.findChild<QWidget *>(QStringLiteral("SpaceStripHost"));
+        QVERIFY(strip);
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(strip, &enter);
+        QVERIFY(overview.isSpaceStripExpanded());
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(strip, &leave);
+        QApplication::sendEvent(&overview, &leave);
+        const QPoint bottom(overview.width() / 2, overview.height() - 40);
+        QMouseEvent move(QEvent::MouseMove, bottom, overview.mapToGlobal(bottom), Qt::NoButton,
+                         Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&overview, &move);
+        QTest::qWait(500);
+        QVERIFY(overview.isSpaceStripExpanded());
+        overview.forceHide();
+        overview.openOnMonitor(mon);
+        QVERIFY(!overview.isSpaceStripExpanded());
+        overview.closeOverview(false);
+    }
+
     void refreshWhileStartingWindowDragKeepsSourceAlive_data()
     {
         QTest::addColumn<bool>("drop");
@@ -99,6 +168,46 @@ class TestWindowPlacement : public QObject {
             QCOMPARE(sm.spaceOfWindow(hwnd), 1);
             QCOMPARE(overview.windowPreviewCount(), 0);
         }
+        overview.forceHide();
+        sm.untrackWindow(hwnd);
+    }
+
+    // A tracked window the app HIDEs (transient-window close) must drop out
+    // of the bottom preview strip and leave management — the preview never
+    // keeps a window that is no longer on the desktop.
+    void hiddenWindowDropsOutOfPreviewStrip()
+    {
+        QWidget target;
+        target.resize(300, 200);
+        target.show();
+        const HWND hwnd = reinterpret_cast<HWND>(target.winId());
+        SpaceManager sm;
+        const HMONITOR hmon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, hmon, 0));
+        QVERIFY(sm.addSpace(hmon)); // >1 spaces: strip rebuilds stay meaningful
+        OverviewWindow overview(&sm);
+        overview.openOnMonitor(hmon);
+        QTRY_VERIFY(!overview.isAnimating());
+        QTRY_VERIFY(overview.windowPreviewCount() >= 1);
+
+        // App hides its transient window (no untrack yet).
+        ::ShowWindow(hwnd, SW_HIDE);
+        QTRY_VERIFY_WITH_TIMEOUT(!::IsWindowVisible(hwnd), 1500);
+        // Any model re-render rebuilds the strip — the tile must be gone.
+        sm.rebuildSpaceScreenshot(hmon, 0);
+        QTRY_VERIFY(overview.windowPreviewCount() == 0);
+
+        // Live hide path: auto-untrack (the 5s timer in main is the net).
+        sm.onWindowHidden(hwnd);
+        QCOMPARE(sm.spaceOfWindow(hwnd), -1);
+
+        // Re-show re-tracks onto the current space (the SHOW path re-entry —
+        // assignWindow is the own-process seam for it).
+        ::ShowWindow(hwnd, SW_SHOWNORMAL);
+        QTRY_VERIFY_WITH_TIMEOUT(::IsWindowVisible(hwnd), 1500);
+        QVERIFY(sm.assignWindow(hwnd, hmon, sm.currentSpaceIndex(hmon)));
+        QTRY_VERIFY(overview.windowPreviewCount() >= 1);
+
         overview.forceHide();
         sm.untrackWindow(hwnd);
     }

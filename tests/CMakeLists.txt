@@ -1,6 +1,7 @@
 # SpaceWM automated tests — one binary per feature area, registered with CTest.
 
 set(SPACEWM_TEST_NAMES
+  test_win_preview_events
   test_cloak
   test_monitors
   test_space_manager
@@ -36,7 +37,7 @@ foreach(name IN LISTS SPACEWM_TEST_NAMES)
   # survive capture on Windows runners — the .txt is the reliable channel for
   # failure details (CI copies build/tests/*.out.txt into diagnostics/).
   add_test(NAME ${name} COMMAND ${name} -o ${name}.out.txt,txt)
-  if(name STREQUAL "test_log")
+  if(name STREQUAL "test_log" OR name STREQUAL "test_win_preview_events")
     set(test_group simulation)
   else()
     set(test_group real)
@@ -73,6 +74,27 @@ foreach(area IN ITEMS HOTKEYS SETTINGS)
             -o simulation_${area_lower}.out.txt,txt)
   set_tests_properties(simulation_${area_lower} PROPERTIES LABELS simulation TIMEOUT 60)
 endforeach()
+
+# Isolated functions in mixed UI/system binaries: no visible windows or input.
+function(spacewm_add_simulation name target)
+  add_test(NAME simulation_${name}
+    COMMAND ${target} ${ARGN} -o simulation_${name}.out.txt,txt)
+  set_tests_properties(simulation_${name} PROPERTIES LABELS simulation TIMEOUT 60)
+endfunction()
+spacewm_add_simulation(monitors test_monitors toLogicalSizeUsesPerMonitorDpi)
+spacewm_add_simulation(thumbnail test_thumbnail nullAndInvalidAreSafe)
+spacewm_add_simulation(window_tracker test_window_tracker rejectsNullOrGarbage bansLockScreenOcclusionClass)
+spacewm_add_simulation(flash_overlay test_flash_overlay stripShrinksSlidesAndExpands boundaryMovesOneFifthAndReturns)
+spacewm_add_simulation(space_card test_space_card
+  setSpaceUpdatesLabels highlightTogglesWithoutCrash emptyThumbnailsKeepLastImage
+  screenshotAcceptsImage populatedThumbnailsAcceptImages clickEmitsActivated
+  removeBadgeClickEmitsRemoveNotActivate removeBadgeRevealsAfterHoverDelay
+  nonRemovableNeverRevealsBadge leaveDoesNotCrash)
+spacewm_add_simulation(window_placement test_window_placement
+  mimeRoundTrip dragHotSpotFollowsPressPoint addSpaceButtonEmitsAddRequested
+  addSpaceButtonDropEmitsWindowDropped proportionalPreviewSizesPreserveAspect
+  windowPreviewClickEmitsActivated windowPreviewTitleAboveImageWithCloseButton
+  windowPreviewCloseButtonEmitsCloseRequested)
 
 # Real-mode flow launches real apps and drives the live desktop — opt-in via
 # SPACEWM_IT=1 (skips otherwise, see AGENTS.md §2.5) and much slower.

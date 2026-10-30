@@ -486,4 +486,10 @@ int showAllHidden()
     return restored;
 }
 
+void dropHiddenRecord(HWND hwnd)
+{
+    if (hwnd)
+        forget(hwnd);
+}
+
 } // namespace cloak

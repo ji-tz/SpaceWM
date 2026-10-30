@@ -112,12 +112,8 @@ QImage loadWallpaperImage()
     // hundreds of ms, and card/seed fallbacks used to pay it every call.
     // Process-lifetime cache is fine: wallpaper changes need an app restart
     // to show up in previews anyway (next open refreshes shots, not this).
-    static QImage cached;
-    static bool tried = false;
-    if (tried)
-        return cached;
-    tried = true;
-
+    static const QImage result = []() {
+    QImage cached;
     const auto t0 = std::chrono::steady_clock::now();
     // 1) SPI — may be HEIC (often unloadable without a Qt HEIC plugin).
     wchar_t path[MAX_PATH]{};
@@ -145,6 +141,8 @@ QImage loadWallpaperImage()
                            .arg(cached.width())
                            .arg(cached.height()));
     return cached;
+    }();
+    return result;
 }
 
 } // namespace

@@ -111,6 +111,9 @@ class HotkeyManager : public QObject, public QAbstractNativeEventFilter {
 
   signals:
     void actionTriggered(int action);
+    // Physical Win transitions, coalesced across the left and right keys.
+    void winHoldChanged(bool held);
+    void tabPressed();
     // User pressed Alt+Tab (window switcher) — queued like actionTriggered.
     void windowSwitchChord();
     // Esc pressed while consumeEscape() is set (overview open) — queued.

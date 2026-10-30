@@ -49,8 +49,7 @@ class TestOverviewStaging : public QObject {
         sm.rebuildSpaceScreenshot(mon, 1, QSize(640, 360), true);
         QVERIFY(thumbs::cachedWindowShot(inactive).isNull());
         sm.prepareOverviewSpace(mon, 1, false);
-        QVERIFY(!thumbs::cachedWindowShot(inactive).isNull());
-        QVERIFY(!cloak::isCloaked(inactive));
+        QVERIFY(cloak::isCloaked(inactive));
         sm.setOverviewOpen(false);
         sm.untrackWindow(current);
         sm.untrackWindow(inactive);
@@ -140,6 +139,70 @@ class TestOverviewStaging : public QObject {
         OverviewHost host(&sm);
         host.openAll();
         QVERIFY(host.isOpen());
+        QVERIFY(!thumbs::cachedWindowShot(hwnd).isNull());
+        host.forceHideAll();
+        sm.untrackWindow(hwnd);
+    }
+
+    void winPreparationIsDiscardedOrReused()
+    {
+        QWidget window;
+        window.resize(240, 160);
+        window.setStyleSheet(QStringLiteral("background: white;"));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        SpaceManager sm;
+        const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+        const HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, mon, 0));
+        OverviewHost host(&sm);
+        host.beginWinPreparation();
+        QCOMPARE(host.preparedWindowCount(), 1);
+        host.cancelWinPreparation();
+        QCOMPARE(host.preparedWindowCount(), 0);
+        QVERIFY(!host.winPreparationReady());
+        host.beginWinPreparation();
+        QTRY_VERIFY_WITH_TIMEOUT(host.winPreparationReady(), 10000);
+        spacelog::flush();
+        QFile trace(spacelog::tracePath());
+        QVERIFY(trace.open(QIODevice::ReadOnly | QIODevice::Text));
+        trace.seek(trace.size());
+        host.openAll();
+        QVERIFY(host.isOpen());
+        QCOMPARE(host.preparedWindowCount(), 0);
+        spacelog::flush();
+        const QString warmLog = QString::fromUtf8(trace.readAll());
+        QVERIFY(warmLog.contains(QStringLiteral("overview wallpaper phase=warmResult")));
+        QVERIFY(warmLog.contains(QStringLiteral("phase=warmResult")));
+        QVERIFY(!thumbs::cachedWindowShot(hwnd).isNull());
+        host.forceHideAll();
+        sm.untrackWindow(hwnd);
+    }
+
+    void movedWindowDoesNotReuseOldPreparation()
+    {
+        QWidget window;
+        window.resize(240, 160);
+        window.setStyleSheet(QStringLiteral("background: white;"));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        SpaceManager sm;
+        const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+        const HMONITOR mon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        QVERIFY(sm.assignWindow(hwnd, mon, 0));
+        OverviewHost host(&sm);
+        host.beginWinPreparation();
+        QTRY_VERIFY_WITH_TIMEOUT(host.winPreparationReady(), 10000);
+        window.resize(300, 200);
+        QCoreApplication::processEvents();
+        spacelog::flush();
+        QFile trace(spacelog::tracePath());
+        QVERIFY(trace.open(QIODevice::ReadOnly | QIODevice::Text));
+        trace.seek(trace.size());
+        host.openAll();
+        QVERIFY(host.isOpen());
+        spacelog::flush();
+        QVERIFY(!QString::fromUtf8(trace.readAll()).contains(QStringLiteral("phase=warmResult")));
         QVERIFY(!thumbs::cachedWindowShot(hwnd).isNull());
         host.forceHideAll();
         sm.untrackWindow(hwnd);

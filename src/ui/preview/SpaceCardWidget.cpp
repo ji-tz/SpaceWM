@@ -98,18 +98,18 @@ QSize SpaceCardWidget::previewSizeForAspect() const
 void SpaceCardWidget::applyAspectLayout()
 {
     const QSize s = previewSizeForAspect();
-    m_preview->setFixedSize(s);
+    m_preview->setFixedSize(s.width(), qRound(s.height() * m_previewProgress));
     setMinimumWidth(s.width() + 28);
     setMaximumWidth(s.width() + 40);
-    setMinimumHeight(m_previewVisible ? s.height() + (m_compact ? 56 : 72) : 44);
-    setMaximumHeight(m_previewVisible ? s.height() + (m_compact ? 64 : 88) : 44);
+    const int height = qRound(44 + (s.height() + (m_compact ? 60 : 80) - 44) * m_previewProgress);
+    setFixedHeight(height);
     updateGeometry();
 }
 
 QSize SpaceCardWidget::sizeHint() const
 {
     const QSize s = previewSizeForAspect();
-    return {s.width() + 28, m_previewVisible ? s.height() + (m_compact ? 60 : 80) : 44};
+    return {s.width() + 28, qRound(44 + (s.height() + (m_compact ? 60 : 80) - 44) * m_previewProgress)};
 }
 
 QSize SpaceCardWidget::minimumSizeHint() const
@@ -135,11 +135,17 @@ void SpaceCardWidget::setCompact(bool compact)
 
 void SpaceCardWidget::setPreviewVisible(bool visible)
 {
-    if (m_previewVisible == visible)
-        return;
     m_previewVisible = visible;
-    m_preview->setVisible(visible);
+    setPreviewProgress(visible ? 1.0 : 0.0);
+}
+
+void SpaceCardWidget::setPreviewProgress(qreal progress)
+{
+    m_previewProgress = qBound(0.0, progress, 1.0);
+    m_previewVisible = m_previewProgress > 0.0;
+    m_preview->setVisible(m_previewVisible);
     applyAspectLayout();
+    paintPixmap();
 }
 
 void SpaceCardWidget::setMonitorAspect(int physWidth, int physHeight)

@@ -33,8 +33,9 @@ class SpaceManager : public QObject {
     int currentSpaceIndex(HMONITOR hmon) const;
     QString spaceName(HMONITOR hmon, int index) const;
 
-    // directionHint preserves left/right travel across the circular strip seam.
+    // Switch to a specific space or move one step without wrapping.
     bool switchSpace(HMONITOR hmon, int index, bool animateHint = true, int directionHint = 0);
+    bool switchAdjacentSpace(HMONITOR hmon, int direction);
 
     // Live-preview a space while the overview overlay is open:
     // updates currentIndex + cloak immediately (no flash). Same index still
@@ -58,6 +59,12 @@ class SpaceManager : public QObject {
     // a cross-monitor move re-homes an OWNED window into the target
     // monitor's current space; unowned ones go through normal discovery.
     void onWindowMoved(HWND hwnd);
+
+    // WindowTracker::windowHidden entry (main + integration flow share it):
+    // the owning app hid a tracked window (SW_HIDE — how apps close their
+    // transient dialogs). Such windows are auto-untracked so they leave the
+    // preview; re-show re-tracks them through the SHOW (windowCreated) path.
+    void onWindowHidden(HWND hwnd);
 
     // Foreground activation follows the existing owner; never moves the window.
     // Returns true for a live, non-minimized managed window.
@@ -139,6 +146,7 @@ class SpaceManager : public QObject {
     // Synchronous: shots are ready, currentIndex/cloak still describe the source.
     // Listeners must paint an opaque first frame before returning.
     void requestSwitchAnimation(quint64 hmon, int fromIndex, int toIndex, int direction);
+    void requestBoundaryAnimation(quint64 hmon, int direction);
     // A space's screenshot was re-rendered — overview cards should reload it.
     void spacePreviewInvalidated(quint64 hmon, int spaceIndex);
 
